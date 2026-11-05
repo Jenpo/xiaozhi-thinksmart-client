@@ -101,6 +101,37 @@ def describe(option):
             'entry': option['entry'], 'model': option.get('model', ''), 'logo': logo, 'company': company}
 
 
+def normalize_devices(data):
+    """The hub's /kiosk/devices answer, shaped for the page.
+
+    Each device: {entity_id, name, room, domain, kind, state, on, readonly, unit, value}.
+    `kind` decides the card's control: switch / light / media / sensor / other.
+    Power sockets and relays are readonly on purpose (owner 2026-11-05: never switch real mains
+    from an assistant), so the page shows their state and no button.
+    """
+    if not isinstance(data, dict):
+        return {'homes': [], 'devices': [], 'error': '返回格式不对'}
+    out = []
+    for d in data.get('devices') or []:
+        entity_id = d.get('entity_id') or ''
+        domain = entity_id.split('.')[0] if '.' in entity_id else ''
+        kind = d.get('kind') or domain
+        state = d.get('state')
+        out.append({
+            'entity_id': entity_id,
+            'name': d.get('name') or d.get('friendly_name') or entity_id,
+            'room': d.get('room') or '',
+            'domain': domain,
+            'kind': kind,
+            'state': state,
+            'on': state in ('on', 'playing', 'idle', 'paused', 'heat', 'cool', 'open'),
+            'readonly': bool(d.get('readonly')) or domain == 'sensor' or domain == 'binary_sensor',
+            'unit': d.get('unit') or '',
+            'value': d.get('value'),
+        })
+    return {'homes': data.get('homes') or [], 'devices': out, 'error': data.get('error')}
+
+
 def marimba(notes, gap=0.1, peak=0.2):
     """Soft marimba notes as 48 kHz stereo: every prompt sound (wake, goodbye, didn't catch that,
     no hub, a new report) is from this one family. notes: Hz, one every `gap` seconds."""
@@ -194,6 +225,7 @@ class Client:
         self.history_loaded = False
         self.entry = None             # the model this connection talks to
         self.models = {'current': None, 'options': []}
+        self.devices = {'homes': [], 'devices': [], 'error': None}   # Home Assistant view (settings card)
         self.bot_msg = None
         self.decoder = None
         self._seq = 0
@@ -350,6 +382,7 @@ class Client:
 
     def snapshot(self):
         return {'status': self.status(), 'models': self.models, 'alarms': self.alarm_view(),
+                'devices': self.devices,
                 'thread': {'entry': self.view_entry(), 'messages': self.threads.get(self.view_entry(), [])}}
 
     def view_entry(self):
@@ -1350,6 +1383,36 @@ class Client:
             async with s.post(self.cfg['hub_http'] + path, json=body) as r:
                 return await r.json(content_type=None)
 
+    # ---- home assistant devices (the hub's local-only /kiosk/devices endpoints) ----
+
+    async def refresh_devices(self):
+        """Ask the hub for the HA devices; False when it didn't answer."""
+        try:
+            data = await self._hub_http('/kiosk/devices?' + urllib.parse.urlencode({'device': self.cfg['device_id']}))
+        except Exception:
+            data = {'error': 'hub 没有响应'}
+        devices = normalize_devices(data)
+        if devices != self.devices:
+            self.devices = devices
+            self.events.publish('devices', devices)
+        return not devices.get('error')
+
+    async def set_device(self, entity_id, action, value=None):
+        """Turn a device on/off (or set volume). Never touches power sockets: the hub refuses those."""
+        body = {'device': self.cfg['device_id'], 'entity_id': entity_id, 'action': action}
+        if value is not None:
+            body['value'] = value
+        try:
+            result = await self._hub_http('/kiosk/devices/set', body)
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+        if result.get('devices'):
+            devices = normalize_devices(result)
+            if devices != self.devices:
+                self.devices = devices
+                self.events.publish('devices', devices)
+        return result
+
     async def refresh_models(self):
         """Ask the hub for its models; False when it didn't answer (down, or still starting)."""
         try:
@@ -1396,6 +1459,7 @@ class Client:
             up = await self.refresh_models()
             if up and not self.history_loaded:
                 await self.load_history()   # at start, or once the hub is up
+            await self.refresh_devices()    # the HA card: devices changed outside, or the hub just came up
             await asyncio.sleep(MODEL_POLL if up else MODEL_RETRY)
 
     # ---- timers ----

@@ -61,6 +61,19 @@ def make_app(client: Client):
         body = await request.json()
         return web.json_response(await client.set_model(body.get('kind'), body.get('vendor'), body.get('entry')))
 
+    async def devices(_request):
+        # the settings card's first paint; later changes come on /events as 'devices'
+        return web.json_response(client.devices)
+
+    async def device_set(request):
+        body = await request.json()
+        entity_id = body.get('entity_id') or ''
+        action = body.get('action') or ''
+        if not entity_id or not action:
+            return web.json_response({'ok': False, 'error': '缺少 entity_id 或 action'}, status=400)
+        result = await client.set_device(entity_id, action, body.get('value'))
+        return web.json_response(result, status=200 if result.get('ok') else 409)
+
     async def sleep_setting(request):
         body = await request.json()
         try:
@@ -171,6 +184,8 @@ def make_app(client: Client):
     app.router.add_post('/api/ptt/start', action(client.ptt_start))
     app.router.add_post('/api/ptt/stop', action(client.ptt_stop))
     app.router.add_post('/api/model', model)
+    app.router.add_get('/api/devices', devices)
+    app.router.add_post('/api/device/set', device_set)
     app.router.add_post('/api/text', text)
     app.router.add_post('/api/sleep', sleep_setting)
     app.router.add_post('/api/brightness', brightness)

@@ -399,3 +399,22 @@ body[data-state="listening"] .mic-ring { opacity: .75; }
 
 /* ?demo=<scene>&still: freeze transitions so headless screenshots show the settled scene */
 .still *, .still *::before, .still *::after { transition: none !important; animation: none !important; }
+
+/* ---- 智能家居设备卡片 ---- */
+.device-list { display: flex; flex-direction: column; gap: 10px; }
+.dev-room { font-size: 16px; font-weight: 600; color: var(--ink3); letter-spacing: .06em; padding: 6px 4px 0; }
+.dev { display: flex; align-items: center; gap: 18px; min-height: 76px; padding: 10px 12px 10px 20px;
+       border-radius: 20px; background: var(--card2); border: 1px solid var(--line); }
+.dev.on { border-color: #ffffff3a; }
+.dev.ro { opacity: .82; }
+.dev-icon { flex: none; width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; font-style: normal;
+            color: var(--ink2); background: #ffffff12; border: 1px solid var(--line); }
+.dev.on .dev-icon { color: #081024; background: linear-gradient(135deg, #8ff0ff, #8fa6ff); border-color: transparent; }
+.dev-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.dev-text b { font-size: 24px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dev-text span { font-size: 16px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+.dev-ro { flex: none; min-width: 108px; height: 56px; padding: 0 18px; border-radius: 16px; display: grid; place-items: center;
+          font-size: 17px; color: var(--ink3); border: 1px solid var(--line); background: #ffffff08; }
+.dev-sw { width: 76px; height: 44px; border-radius: 22px; }
+.dev-sw i { width: 34px; height: 34px; }
+.dev-sw[aria-checked="true"] i { transform: translateX(32px); }

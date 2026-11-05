@@ -13,6 +13,7 @@ const ui = {
   thread: { entry: null, messages: [] },
   ptt: false,
   alarms: { synced: true, items: [], missed: [], ringing: null, volume: 70, tone: 'coffee', tones: {} },
+  devices: { homes: [], devices: [], error: null },
 };
 
 const SUGGEST = [
@@ -557,6 +558,79 @@ $('tones').addEventListener('click', e => {
   if (DEMO) { ui.alarms.tone = b.dataset.tone; return renderAlarms(); }
   postJson('/api/alarm-tone', { tone: b.dataset.tone }).then(() => postJson('/api/alarm-tone', { tone: b.dataset.tone, preview: true }));
 });
+
+/* ---- 智能家居（Home Assistant 设备卡片）
+   插座/电源类只读：卡片只显示状态、不给按钮（owner 2026-11-05 硬门）。
+   可写：media_player 开关与音量、light 开关、非电源类 switch。 ---- */
+function deviceIcon(kind) {
+  return {
+    media: '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
+    light: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
+    switch: '<path d="M6 5h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3z"/><circle cx="9" cy="12" r="2.5"/>',
+    sensor: '<path d="M12 3v2M12 19v2M3 12h2M19 12h2"/><circle cx="12" cy="12" r="4"/><path d="M12 12l3-3"/>',
+    climate: '<path d="M12 3v13M9 19a3 3 0 0 0 6 0c0-2-3-4-3-6"/><circle cx="12" cy="16" r="3"/>',
+  }[kind] || '<circle cx="12" cy="12" r="8"/>';
+}
+
+function deviceText(d) {
+  if (d.kind === 'sensor') return d.value === null || d.value === undefined ? '—' : `${d.value}${d.unit || ''}`;
+  if (d.state === 'unavailable') return '离线';
+  if (d.state === 'unknown') return '未知';
+  if (d.kind === 'media') return d.on ? '播放中' : '待机';
+  return d.on ? '开' : '关';
+}
+
+function renderDevices() {
+  const box = $('deviceList');
+  if (!box) return;
+  const list = (ui.devices && ui.devices.devices) || [];
+  const err = ui.devices && ui.devices.error;
+  $('deviceCount').textContent = err ? '' : (list.length ? `${list.length} 个` : '');
+  $('deviceWarn').hidden = !err;
+  $('deviceWarn').textContent = err || '';
+  if (!list.length) { box.innerHTML = err ? '' : '<div class="alarm-empty">还没有智能设备，先在家庭里接上米家或 Home Assistant</div>'; return; }
+  // 按房间分组，没房间的排最后
+  const groups = new Map();
+  for (const d of list) {
+    const k = d.room || '其他';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(d);
+  }
+  box.innerHTML = [...groups.entries()].map(([room, items]) =>
+    `<div class="dev-room">${esc(room)}</div>` + items.map(d => {
+      const ro = d.readonly || d.state === 'unavailable';
+      const cls = ['dev', d.on ? 'on' : '', ro ? 'ro' : ''].filter(Boolean).join(' ');
+      const btn = ro
+        ? `<span class="dev-ro">${d.readonly ? '只读' : '离线'}</span>`
+        : `<button class="switch dev-sw" role="switch" aria-checked="${d.on}" aria-label="${esc(d.name)}" data-entity="${esc(d.entity_id)}" data-action="${d.on ? 'turn_off' : 'turn_on'}"><i></i></button>`;
+      return `<div class="${cls}" data-entity="${esc(d.entity_id)}">` +
+        `<i class="dev-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${deviceIcon(d.kind)}</svg></i>` +
+        `<div class="dev-text"><b>${esc(d.name)}</b><span>${esc(deviceText(d))}</span></div>` + btn + '</div>';
+    }).join('')).join('');
+}
+
+$('deviceList').addEventListener('click', e => {
+  const b = e.target.closest('.dev-sw');
+  if (!b) return;
+  const entity = b.dataset.entity;
+  const action = b.dataset.action;
+  if (DEMO) {
+    const d = (ui.devices.devices || []).find(v => v.entity_id === entity);
+    if (d) { d.on = action === 'turn_on'; d.state = d.on ? 'on' : 'off'; }
+    return renderDevices();
+  }
+  // 乐观切换，失败回退
+  const d = (ui.devices.devices || []).find(v => v.entity_id === entity);
+  const was = d ? d.on : false;
+  if (d) { d.on = action === 'turn_on'; d.state = d.on ? 'on' : 'off'; }
+  renderDevices();
+  postJson('/api/device/set', { entity_id: entity, action }).then(r => {
+    if (!r.ok) {
+      if (d) { d.on = was; d.state = was ? 'on' : 'off'; }
+      renderDevices();
+    }
+  });
+});
 $('missedClear').addEventListener('click', () => (DEMO ? handlers.alarms(Object.assign({}, ui.alarms, { missed: [] }))
                                                        : postJson('/api/alarms/missed/clear')));
 $('ringStop').addEventListener('click', () => post('/api/alarms/stop'));
@@ -879,7 +953,8 @@ const handlers = {
     seenThreads[s.thread.entry] = s.thread.messages;
     if (s.update) { ui.version = s.version; ui.update = s.update; }   // the demo's snapshots have none
     if (s.alarms) ui.alarms = s.alarms;
-    renderModels(); renderThread(); renderStatus(); renderAlarms();
+    if (s.devices) ui.devices = s.devices;
+    renderModels(); renderThread(); renderStatus(); renderAlarms(); renderDevices();
     updateFinished((s.update || {}).job);
   },
   power(p) {
@@ -914,6 +989,9 @@ const handlers = {
   },
   alarms(a) {
     ui.alarms = a; renderAlarms();
+  },
+  devices(d) {
+    ui.devices = d; renderDevices();
   },
   level(l) {
     level.target = ui.status.state === 'speaking' ? Math.min(1, l.out * 6) : micLevel(l.mic);
@@ -1023,6 +1101,16 @@ const demo = DEMO === null ? null : (() => {
   }, 100);
 
   const tones = { coffee: '咖啡时光', morning: '晨曦', bright: '元气早晨', hop: '阳光小跳跃', marimba: '清晨木琴' };
+  const devicesDemo = () => ({
+    homes: ['家'], error: null,
+    devices: [
+      { entity_id: 'media_player.ht_z9f', name: 'SONY 音响', room: '客厅', kind: 'media', state: 'off', on: false, readonly: false, unit: '', value: null },
+      { entity_id: 'sensor.temp', name: '温湿度计', room: '客厅', kind: 'sensor', state: '30', on: false, readonly: true, unit: '°C', value: '30' },
+      { entity_id: 'sensor.hum', name: '湿度', room: '客厅', kind: 'sensor', state: '75.4', on: false, readonly: true, unit: '%', value: '75.4' },
+      { entity_id: 'switch.chuangmi_plug', name: 'NAS 插座', room: '客厅', kind: 'switch', state: 'on', on: true, readonly: true, unit: '', value: null },
+      { entity_id: 'light.desk', name: '书桌灯', room: '书房', kind: 'light', state: 'off', on: false, readonly: false, unit: '', value: null },
+    ],
+  });
   const alarmsDemo = () => ({
     synced: true, volume: 70, tone: 'coffee', tones, ringing: null,
     items: [
@@ -1036,6 +1124,7 @@ const demo = DEMO === null ? null : (() => {
   const steps = [
     ['idle', 4000, () => {
       handlers.snapshot({ status: { state: 'idle', connected: false, uploading: false, volume: 60 }, alarms: alarmsDemo(),
+                          devices: devicesDemo(),
                           models: { current: options[0], options }, thread: { entry: options[0].entry, messages: [] } });
     }],
     ['settings', 3000, () => $('settings').classList.add('on')],

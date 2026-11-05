@@ -164,6 +164,12 @@
       <p class="opt-note">设备音量是平时说话的音量，和音量键、语音调的是同一个。闹钟音量只管倒计时、闹钟和提醒：响铃时自动切过去，响完改回来；响铃时按音量键只调这一次。</p>
     </div>
     <div class="alarms-card">
+      <div class="bright-head"><b>智能家居</b><span class="bright-num" id="deviceCount"></span></div>
+      <p class="alarm-warn" id="deviceWarn" hidden></p>
+      <div class="device-list" id="deviceList"></div>
+      <p class="opt-note">插座和电源类设备只显示状态，不能在这里开关（安全限制）。也可以直接说：「小麦小麦，把客厅音响打开」「声音小一点」</p>
+    </div>
+    <div class="alarms-card">
       <div class="bright-head"><b>闹钟和提醒</b><span class="bright-num" id="alarmCount"></span></div>
       <p class="alarm-warn" id="alarmWarn">设备时间还没和网络同步，闹钟暂停，同步后自动恢复</p>
       <div class="alarm-list" id="alarmList"></div>
