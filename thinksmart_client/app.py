@@ -1034,9 +1034,17 @@ class Client:
 
     async def set_volume(self, volume, source='page'):
         """The device volume (page, voice, keys). While a ring or a preview has the speaker, it is what
-        comes back afterwards."""
+        comes back afterwards.
+
+        幂等：已经是这个音量就不再走 wpctl（面板每次滑杆松手都会发，重复设置不该反复改 sink），
+        也不重复广播。返回当前音量。
+        """
+        want = max(0, min(100, int(volume)))
         async with self.volume_lock:
-            volume = await self._apply_volume(volume)
+            unchanged = (self.held_volume is None and self.volume == want)
+            if unchanged:
+                return self.volume
+            volume = await self._apply_volume(want)
         self.events.publish('volume', {'volume': volume, 'source': source})
         return volume
 

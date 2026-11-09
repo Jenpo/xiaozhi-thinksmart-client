@@ -659,3 +659,26 @@ def test_json_round_trip_of_the_snapshot_is_stable():
     once = json.dumps(snap, ensure_ascii=False)
     twice = json.dumps(json.loads(once), ensure_ascii=False)
     assert once == twice
+
+
+@pytest.mark.asyncio
+async def test_setting_the_same_volume_again_does_not_touch_the_speaker(monkeypatch):
+    """The page sends the slider value on release; the same value must not run wpctl again."""
+    from thinksmart_client import app as app_mod, mcp
+    calls = []
+
+    async def fake_set(v):
+        calls.append(v)
+    monkeypatch.setattr(mcp, 'set_volume', fake_set)
+    c = app_mod.Client.__new__(app_mod.Client)
+    c.volume_lock = asyncio.Lock()
+    c.volume = None
+    c.held_volume = None
+    c.events = app_mod.Events()
+    assert await c.set_volume(40) == 40
+    assert await c.set_volume(40) == 40      # already there: no second wpctl
+    assert calls == [40]
+    assert await c.set_volume(55) == 55
+    assert calls == [40, 55]
+    assert await c.set_volume(300) == 100    # clamped
+    assert calls == [40, 55, 100]
