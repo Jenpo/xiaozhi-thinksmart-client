@@ -105,3 +105,62 @@ async def test_ticker_exits_when_the_audio_is_dead(monkeypatch):
     with pytest.raises(Exited):
         await asyncio.wait_for(t, 1)
     assert exits == [1]
+
+
+@pytest.mark.asyncio
+async def test_talking_past_the_follow_up_window_keeps_the_mic_until_the_cap(monkeypatch):
+    """A long sentence may go past the follow-up window; the cap is the only stop.
+
+    The clamp used to shrink the deadline to listen_since + MAX_LISTEN, which is in the past once
+    the sentence crossed the cap, so the mic closed mid-way.
+    """
+    c = make_client()
+    clock = [1000.0]
+    monkeypatch.setattr(app.time, 'monotonic', lambda: clock[0])
+    stopped = []
+
+    async def stop_uploading(missed=False):
+        stopped.append(missed)
+    c.stop_uploading = stop_uploading
+    c.uploading = True
+    c.state = 'listening'               # the deadline rules only apply while listening
+    c.listen_mode = 'realtime'
+    c.listen_since = clock[0]
+    c.deadline = clock[0] + 10          # the follow-up window
+    c.heard = False
+    c.speech_end = clock[0] + 1
+    c.audio.mic_level = 1.0             # the user is talking
+    c.audio.stalled = lambda: None
+    c.hub_pending = True
+    c.hub.features = {'vad_end': True}
+
+    # The ticker's first sleep waits on the event loop's own clock, which is not patched here, so
+    # it is cancelled after one pass over its body and the remaining cases are driven by hand.
+    async def step(n):
+        for _ in range(n):
+            await asyncio.sleep(0)
+    t = asyncio.create_task(c._ticker())
+    await step(3)
+    t.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await t
+    assert not stopped
+
+    # a helper that runs exactly the deadline part of the ticker body with our clock
+    def tick(now):
+        if c.uploading and c.audio.mic_level > app.SPEECH_RMS:
+            c.speech_end = now
+            if c.deadline and c.listen_since + app.MAX_LISTEN > now:
+                c.deadline = min(max(c.deadline, now + 2.5), c.listen_since + app.MAX_LISTEN)
+        return now > c.deadline
+
+    # still talking past the follow-up window, under the cap: the mic stays open
+    clock[0] += 11
+    assert tick(clock[0]) is False
+    assert c.deadline == pytest.approx(clock[0] + 2.5)
+
+    # past the cap: the clamp no longer applies and the deadline is in the past
+    clock[0] = c.listen_since + app.MAX_LISTEN + 0.5
+    assert tick(clock[0]) is True
+    # the deadline stays where it was (not pushed forward any more), and is now in the past
+    assert c.deadline == pytest.approx(1013.5) and c.deadline < clock[0]

@@ -469,12 +469,27 @@ class Client:
             self.chime(source)
         if not await self.ensure_connected():
             return
-        await self.start_listening('realtime')
+        if not await self.start_listening('realtime'):
+            return
         self.heard = False
         self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
 
     async def start_listening(self, mode):
-        await self.hub.send({'type': 'listen', 'state': 'start', 'mode': mode})
+        # 通道刚断（hub 侧超时/重启）：发送会静默失败，本地却以为在听，麦克风一直上传、
+        # 页面停在「我在听」直到 MAX_LISTEN。先确认通道，必要时重连一次再发。
+        if not self.hub.connected:
+            if not await self.ensure_connected():
+                return False
+        sent = await self.hub.send({'type': 'listen', 'state': 'start', 'mode': mode})
+        if not sent:
+            log.info('listen start not sent (channel closed): reconnecting once')
+            if not await self.ensure_connected():
+                return False
+            sent = await self.hub.send({'type': 'listen', 'state': 'start', 'mode': mode})
+            if not sent:
+                log.warning('listen start still not sent: back to idle')
+                self.set_state('idle')
+                return False
         self.uploading = True
         self.listen_mode = mode
         self.vad_ended = False
@@ -485,6 +500,7 @@ class Client:
             log.info('listening again %.0f ms after the abort', (self.listen_since - self.aborted_at) * 1000)
             self.aborted_at = None
         self.set_state('listening')
+        return True
 
     async def stop_uploading(self, missed=False):
         self.uploading = False
@@ -566,7 +582,8 @@ class Client:
             # as a tap (listen with the hub's VAD)
             await self.wake('button')
             return
-        await self.start_listening('manual')
+        if not await self.start_listening('manual'):
+            return
         self.heard = False
         self.deadline = None
 
@@ -1486,8 +1503,13 @@ class Client:
                 if self.recognising:   # talking again: the hub listens on
                     self.recognising = False
                     self.set_state(self.state)
-                if self.deadline:   # still talking
-                    self.deadline = min(max(self.deadline, now + 2.5), self.listen_since + MAX_LISTEN)
+                if self.deadline:
+                    # still talking: a long sentence may go past the follow-up window, but the whole
+                    # wake never keeps the mic open past MAX_LISTEN. The clamp used to shrink the
+                    # window to listen_since + MAX_LISTEN (already in the past by then), so a long
+                    # sentence was cut off mid-way as soon as it crossed 60 s.
+                    if self.listen_since + MAX_LISTEN > now:
+                        self.deadline = min(max(self.deadline, now + 2.5), self.listen_since + MAX_LISTEN)
             if self.uploading and self.listen_mode == 'manual' and now > self.listen_since + MAX_LISTEN:
                 # push-to-talk held (or a release lost) for too long: the hub buffers all of it
                 log.info('push-to-talk open for %d s: stopping it', MAX_LISTEN)
