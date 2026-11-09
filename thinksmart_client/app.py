@@ -381,7 +381,9 @@ class Client:
                 'hub': self.hub_seen > 0 and time.monotonic() - self.hub_seen < 30}
 
     def snapshot(self):
-        return {'status': self.status(), 'models': self.models, 'alarms': self.alarm_view(),
+        # hub: 网关是否答过（health 的同一判据）。页面用它区分「后台没连上」和「后台在、这次还没开始对话」
+        status = dict(self.status(), hub=self.health()['hub'])
+        return {'status': status, 'models': self.models, 'alarms': self.alarm_view(),
                 'devices': self.devices,
                 'thread': {'entry': self.view_entry(), 'messages': self.threads.get(self.view_entry(), [])}}
 
@@ -1379,9 +1381,13 @@ class Client:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
             if body is None:
                 async with s.get(self.cfg['hub_http'] + path) as r:
-                    return await r.json(content_type=None)
-            async with s.post(self.cfg['hub_http'] + path, json=body) as r:
-                return await r.json(content_type=None)
+                    data = await r.json(content_type=None)
+            else:
+                async with s.post(self.cfg['hub_http'] + path, json=body) as r:
+                    data = await r.json(content_type=None)
+        # 能答就是活着：health() 的 'hub' 用它，原来只有汇报轮询算，别处都通了也报 hub 断
+        self.hub_seen = time.monotonic()
+        return data
 
     # ---- home assistant devices (the hub's local-only /kiosk/devices endpoints) ----
 

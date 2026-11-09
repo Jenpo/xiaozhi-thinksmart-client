@@ -1,6 +1,13 @@
 // ThinkSmart voice client page v2: renders what the client streams on /events and sends the buttons back.
 // Same contract as v1. Open with ?demo (or ?demo=<scene>) to preview without a client.
 const $ = id => document.getElementById(id);
+
+// 曲名/歌手来自 NAS 与后台，直接拼 innerHTML 会把 & < > 吃掉或注入标签
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pad = n => String(n).padStart(2, '0');
 const WEEK = '日一二三四五六';
@@ -16,12 +23,63 @@ const ui = {
   devices: { homes: [], devices: [], error: null },
 };
 
-const SUGGEST = [
-  ['明天北京天气怎么样？', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>'],
-  ['帮我想个周末计划', '#5ee0ff24', '#8ff0ff', '<path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"/>'],
-  ['讲个冷笑话', '#ff7ac824', '#ff9bd6', '<circle cx="12" cy="12" r="9"/><path d="M8 14.5a5 5 0 0 0 8 0M9 9.5h.01M15 9.5h.01"/>'],
-  ['把音量调小一点', '#9b7bff2b', '#c8b4ff', '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 12h4"/>'],
+// 建议问题按场景分组：kiosk 在厨房/客厅，用户最常问的是音乐、家电、夜间、天气，
+// 而不是「帮我想个周末计划」。每组一个短名，页面上可以横向切。
+const SCENES = [
+  ['日常', [
+    ['明天北京天气怎么样？', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>'],
+    ['帮我定一个 20 分钟后的计时', '#5ee0ff24', '#8ff0ff', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
+    ['讲个冷笑话', '#ff7ac824', '#ff9bd6', '<circle cx="12" cy="12" r="9"/><path d="M8 14.5a5 5 0 0 0 8 0M9 9.5h.01M15 9.5h.01"/>'],
+  ]],
+  ['音乐', [
+    ['放点王菲', '#9b7bff2b', '#c8b4ff', '<path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>'],
+    ['在电视上放点音乐', '#5ee0ff24', '#8ff0ff', '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/>'],
+    ['在 HomePod 上放音乐', '#ffb54729', '#ffcf7a', '<rect x="6" y="3" width="12" height="18" rx="6"/><circle cx="12" cy="16" r="1.5"/>'],
+    ['把音量调小一点', '#9b7bff2b', '#c8b4ff', '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 12h4"/>'],
+  ]],
+  ['家电', [
+    ['客厅灯打开', '#ffb54729', '#ffcf7a', '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5V16h8v-2.5A6 6 0 0 0 12 3z"/>'],
+    ['现在家里有哪些设备', '#5ee0ff24', '#8ff0ff', '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'],
+    ['电视关掉', '#ff7ac824', '#ff9bd6', '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/>'],
+  ]],
+  ['夜间', [
+    ['晚安', '#5ee0ff24', '#8ff0ff', '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>'],
+    ['把屏幕亮度调到 20%', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>'],
+    ['明天早上 7 点叫我', '#9b7bff2b', '#c8b4ff', '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M5 3l-2 3M19 3l2 3"/>'],
+  ]],
 ];
+
+function renderChips() {
+  const box = $('chips');
+  if (!box) return;
+  const i = Math.max(0, Math.min(SCENES.length - 1, Number(ui.scene) || 0));
+  ui.scene = i;
+  document.querySelectorAll('.scene-tab').forEach((el, k) => {
+    el.classList.toggle('on', k === i);
+    el.setAttribute('aria-selected', k === i ? 'true' : 'false');
+  });
+  box.innerHTML = '';
+  for (const [q, bg, fg, icon] of SCENES[i][1]) {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.innerHTML = `<i style="background:${bg};color:${fg}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></i>${esc(q)}`;
+    b.addEventListener('click', async () => {
+      // 点了立即给反馈：卡片进 loading，避免用户以为没点中而重复点
+      b.classList.add('sending');
+      b.setAttribute('aria-busy', 'true');
+      try {
+        await post('/api/text', { text: q });
+      } catch (e) {
+        toast('这句话没发出去，再点一次', 'error');
+      } finally {
+        b.classList.remove('sending');
+        b.removeAttribute('aria-busy');
+      }
+    });
+    box.appendChild(b);
+  }
+}
 
 /* ---- clock ---- */
 function tick() {
@@ -187,6 +245,78 @@ function modelName() {
 }
 const shownState = () => (ui.ptt ? 'listening' : ui.status.state);
 
+/* ---- 事件流：同一条事件重复到达只处理一次 ---- */
+// 页面重连后服务端会把 snapshot 再发一遍，同一句回复、同一条汇报也可能重放。这里按事件
+// 的身份去重：只认「同一件事」的重复（同一条消息 id、同一个闹钟的同一状态），
+// 不认「同一类事件」，所以两句话内容相同也不会被吞掉。
+const seenEvents = new Map();
+function once(key, limit = 400) {
+  if (seenEvents.has(key)) return false;
+  seenEvents.set(key, 1);
+  if (seenEvents.size > limit) {
+    // 只丢最老的一半，够用又不让内存无限长
+    const keys = [...seenEvents.keys()];
+    for (const k of keys.slice(0, keys.length - Math.floor(limit / 2))) seenEvents.delete(k);
+  }
+  return true;
+}
+
+/* ---- 状态提示条：断连/麦克风关闭/夜间静音，用文字直接告知，不靠颜色猜 ---- */
+// 后台活着但这次还没建立对话通道时，snapshot 里的 connected 是 false。这不是「后台没连上」，
+// 点麦克风就会连（health 的 hub 字段说明网关是通的）。文案要区分这两种情况，否则用户会以为设备坏了。
+function backendUp() { return !!(ui.update && ui.update.enabled !== undefined) || ui.status.hub === true; }
+
+// 后台活着而这次还没连网关：每次快照后主动问一次 health 的 hub 字段（只读，不改状态），
+// 免得提示条一直停在「没连上」这种看起来像故障的文案上。
+let hubProbe = 0;
+function probeHub() {
+  if (DEMO || ui.status.connected || ui.status.hub === true) return;
+  if (Date.now() - hubProbe < 15000) return;   // 15 秒内只问一次
+  hubProbe = Date.now();
+  fetch('/api/health').then(r => (r.ok ? r.json() : null)).then(h => {
+    if (!h || typeof h.hub !== 'boolean') return;
+    ui.status.hub = h.hub;
+    renderStatus();
+  }).catch(() => { /* 后台不通：保持原样，下次快照再问 */ });
+}
+
+function renderBanner(connected, sleeping, micOff) {
+  const el = $('statusBanner');
+  if (!el) return;
+  // 夜间静音不能只靠服务端的 sleep.active：字段缺失或还没收到快照时，
+  // 前端用 22:00-07:00 的本地时钟兜底，保证夜里总能提示到
+  const now = new Date();
+  const hour = now.getHours();
+  const quiet = hour >= 22 || hour < 7;
+  const s = ui.status.sleep || {};
+  let serverQuiet = !!sleeping;
+  if (!('active' in (ui.status.sleep || {})) && s.start && s.end) {
+    const [sh, sm] = String(s.start).split(':').map(Number);
+    const [eh, em] = String(s.end).split(':').map(Number);
+    const cur = hour * 60 + now.getMinutes();
+    const a = (sh || 0) * 60 + (sm || 0);
+    const b = (eh || 0) * 60 + (em || 0);
+    serverQuiet = a < b ? (cur >= a && cur < b) : (cur >= a || cur < b);
+  }
+  let text = '', tone = 'info';
+  if (!connected && !micOff) {
+    text = backendUp() ? '后台在，点麦克风开始对话' : '还没连上后台，点麦克风会重新连';
+    tone = backendUp() ? 'info' : 'warn';
+  } else if (micOff) {
+    text = '麦克风已关，拨开机身侧面开关才能说话';
+    tone = 'warn';
+  } else if (quiet || serverQuiet) {
+    text = '夜间静音时段：只回文字，音乐和回答都不出声';
+    tone = 'info';
+  } else if (sleeping) {
+    text = '睡眠时段，汇报不会自动念';
+    tone = 'info';
+  }
+  el.textContent = text;
+  el.dataset.tone = tone;
+  el.classList.toggle('show', !!text);
+}
+
 function renderStatus() {
   const { state, connected } = ui.status;
   const shown = shownState();
@@ -217,6 +347,7 @@ function renderStatus() {
   const link = $('link');
   link.classList.toggle('on', connected);
   link.querySelector('span').textContent = connected ? '对话中' : '待机';
+  renderBanner(connected, sleeping, micOff);
   renderSide();
   renderPending();
   setCorona(shown);
@@ -580,6 +711,428 @@ function deviceText(d) {
   return d.on ? '开' : '关';
 }
 
+/* ---- music (top-bar pill + player sheet) ---- */
+const MUSIC = { homepod: 'media_player.office_office', tv: 'media_player.bravia_xr_55x90j' };
+// volumeByTarget：每个通路各存各的音量。原来 MP.volume 是单一全局值，切到电视拉到
+// 电视音量后再切回本机，滑杆显示的是上一个目标的值，一动就把错值写到新目标。
+const MP = { target: 'local', queue: [], idx: -1,
+             volumeByTarget: { local: 55, homepod: 55, tv: 30 },
+             playing: false, title: '', startedAt: 0, volTimer: null, pollFailed: false,
+             // 非本机通路的真实状态（从后台查 HA 实体得到）：{state, playing, title, artist}
+             remote: { state: '', playing: false, title: '', artist: '' } };
+Object.defineProperty(MP, 'volume', {
+  get() { return this.volumeByTarget[this.target]; },
+  set(v) { this.volumeByTarget[this.target] = Math.max(0, Math.min(100, Number(v) || 0)); },
+});
+
+function musicEntity(id) {
+  return ((ui.devices && ui.devices.devices) || []).find(d => d.entity_id === id) || null;
+}
+
+async function musicApi(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    // 404/500 也要把后台的话带出来，不然前端只能报「音乐接口 404」
+    let detail = '';
+    try { const j = await r.json(); detail = j.error || j.message || ''; } catch (e) {}
+    throw new Error(detail || ('音乐接口 ' + r.status));
+  }
+  const data = await r.json();
+  // 业务失败（HTTP 200 但 ok:false）不能当成功
+  return data;
+}
+
+function renderMusic() {
+  const hp = musicEntity(MUSIC.homepod);
+  const tv = musicEntity(MUSIC.tv);
+  const tvOn = !!(tv && tv.on);
+  const hpOn = !!(hp && hp.on);
+  const pill = $('musicPill');
+  if (!pill) return;
+
+  const localOn = MP.playing && MP.target === 'local';
+  pill.classList.toggle('playing', localOn || tvOn || hpOn);
+  $('musicTitle').textContent = MP.playing ? (MP.title || '在放') : '放点音乐';
+  $('musicSub').textContent = MP.playing ? ({ local: '本机', homepod: 'HomePod', tv: '电视' })[MP.target] : '随机播放';
+
+  // 音响选择状态
+  for (const t of ['local', 'homepod', 'tv']) {
+    const el = $('mt' + (t === 'local' ? 'Local' : t === 'homepod' ? 'HomePod' : 'Tv'));
+    if (el) {
+      el.classList.toggle('on', MP.target === t);
+      el.setAttribute('aria-checked', MP.target === t ? 'true' : 'false');
+    }
+  }
+  const ls = $('mtLocalState');
+  if (ls) ls.textContent = localOn ? '在放' : '扬声器';
+  const hs = $('mtHomePodState');
+  if (hs) {
+    // HomePod 分段推流时 HA 实体停在 off，所以「在放」以 MP.remote 为准：
+    // 面板上显示的必须和「现在在放」一致，否则用户看到「待机」却在出声。
+    const hpLive = hpOn || (MP.target === 'homepod' && MP.remote.playing);
+    hs.textContent = !hp ? '没接上' : (hp.state === 'unavailable' ? '连不上' : (hpLive ? '在放' : '待机'));
+  }
+  const ts = $('mtTvState');
+  if (ts) {
+    const tvLive = tvOn || (MP.target === 'tv' && MP.remote.playing);
+    ts.textContent = !tv ? '没接上' : (tv.state === 'unavailable' ? '连不上' : (tvLive ? '开着' : '关着'));
+  }
+
+  // 非本机通路：面板标题/副标以 MP.remote 为准。原来只看 MP.playing，
+  // 而 MP.playing 只在轮询回来时才更新，切到 HomePod 后要等 4 秒且第一次轮询
+  // 失败就永远停在「现在没在放」——设备已经在出声，面板却说没放。
+  const remoteLive = MP.target !== 'local' && MP.remote.playing;
+  const nowTitle = MP.target !== 'local' ? (MP.remote.title || (remoteLive ? '在放' : '')) : (MP.playing ? (MP.title || '在放') : '');
+  const nowPlaying = MP.target !== 'local' ? remoteLive : MP.playing;
+
+  $('musicNowTitle').textContent = nowPlaying ? (nowTitle || '在放') : '现在没在放';
+  $('musicNowSub').textContent = nowPlaying
+    ? ('在 ' + ({ local: 'SmartView 本机', homepod: 'HomePod', tv: 'SONY 电视' })[MP.target] + ' 播放' +
+       (MP.target !== 'local' ? '（这条通路不提供进度）' : ''))
+    : (MP.target === 'local' ? '点「随机播放」开始'
+       : ('点「随机播放」开始' + (MP.remote.state === 'off' ? '（设备现在是待机/关机）'
+          : MP.remote.state === 'unavailable' ? '（设备连不上）'
+          : MP.remote.state === 'unknown' ? '（还没读到设备状态）' : '')));
+
+  if ($('musicVolume')) $('musicVolume').value = String(MP.volume);
+  if ($('musicVolumeText')) $('musicVolumeText').textContent = String(MP.volume);
+
+  // 只有本机通路能拿到真实进度；HomePod/电视 的进度条要明确标注不可用，而不是留个空条骗人
+  const prog = document.querySelector('.music-progress');
+  if (prog) {
+    const unsupported = MP.target !== 'local';
+    prog.classList.toggle('unsupported', unsupported);
+    prog.setAttribute('aria-disabled', unsupported ? 'true' : 'false');
+  }
+}
+
+function renderQueue() {
+  const box = $('musicQueue');
+  if (!box) return;
+  if (!MP.queue.length) {
+    box.innerHTML = '<div class="mq-empty">曲库还没读出来，点「随机播放」会边读边放；也可以搜歌名、歌手或专辑</div>';
+    return;
+  }
+  box.innerHTML = MP.queue.map((t, i) =>
+    '<button class="mq-item' + (i === MP.idx ? ' on' : '') + '" data-i="' + i + '" aria-current="' + (i === MP.idx ? 'true' : 'false') + '">' +
+    '<b>' + escapeHtml(t.title || '未命名') + '</b><span>' + escapeHtml(t.artist || '') +
+    (t.album ? '<span class="mq-album">' + escapeHtml(t.album) + '</span>' : '') +
+    (t.genre_dir ? '<span class="mq-genre">' + escapeHtml(t.genre_dir) + '</span>' : '') + '</button>').join('');
+  box.querySelectorAll('.mq-item').forEach(el => {
+    el.addEventListener('click', () => playTrack(Number(el.dataset.i)));
+  });
+}
+
+// 曲库检索：/api/music/tracks 带 q 参数，服务端按歌名/歌手/专辑子串过滤。
+// 原来面板只能「随机播放」20 首，18368 首曲库等于没法用。
+//
+// 风格筛选不能靠歌名子串：索引里 genre_dir（Classical/PoP/试音/OST/...）真实存在，
+// 但 _public() 只返回 title/artist/album/ext/path，前端拿不到 genre_dir。
+// 所以用专辑/曲目路径里的目录词做筛选，并且只筛「随机抽到的可播曲目」——
+// 带 q 的查询不过 _playable，会混进 .cue/.log 这类不可播项。
+const FILTERS = {
+  classical: ['classical', 'bach', 'beethoven', 'mozart', 'chopin', 'sonata', 'symphony', 'adagio', 'piano', '古典'],
+  pop: ['pop', '梁静茹', '王菲', '周杰伦', '陈奕迅'],
+  ost: ['ost', 'soundtrack', 'hisaishi', '久石让', '原声'],
+  test: ['试音'],
+  chinese: ['王菲', '陈奕迅', '五月天', '周杰伦', '李宗盛', '张学友', '邓丽君', '梁静茹', 'beyond', '李健'],
+  jazz: ['jazz', '爵士', 'hisaishi', '久石让'],
+  rock: ['rock', 'beyond', '五月天', '摇滚'],
+};
+
+async function searchMusic(q) {
+  const box = $('musicQueue');
+  if (box) box.innerHTML = '<div class="mq-empty">正在找「' + escapeHtml(q) + '」…</div>';
+  try {
+    const d = await musicApi('/api/music/tracks?limit=40&q=' + encodeURIComponent(q));
+    MP.queue = d.tracks || [];
+    MP.idx = -1;
+    renderQueue();
+    if (!MP.queue.length) {
+      if (box) box.innerHTML = '<div class="mq-empty">没找到「' + escapeHtml(q) + '」，换个词试试</div>';
+    }
+  } catch (e) {
+    if (box) box.innerHTML = '<div class="mq-empty">曲库读不到：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+// 风格筛选：先拉一批可播样本（random 走 _playable），按路径/歌手/专辑本地匹配。
+// 样本里没命中就再拉一批，最多 6 批；仍然空就明说没筛到，不静默换队列。
+async function filterMusic(kind) {
+  const box = $('musicQueue');
+  const words = (FILTERS[kind] || []).map(w => w.toLowerCase());
+  if (!words.length) return shuffle();
+  if (box) box.innerHTML = '<div class="mq-empty">正在筛「' + escapeHtml(kind) + '」…</div>';
+  const seen = new Set();
+  const out = [];
+  try {
+    for (let round = 0; round < 6 && out.length < 40; round++) {
+      const d = await musicApi('/api/music/random?count=300');
+      const batch = d.tracks || [];
+      if (!batch.length) break;
+      for (const t of batch) {
+        const hay = ((t.path || '') + ' ' + (t.artist || '') + ' ' + (t.album || '') + ' ' + (t.title || '')).toLowerCase();
+        if (!words.some(w => hay.includes(w))) continue;
+        const k = t.path || (t.title + '|' + t.artist);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(t);
+        if (out.length >= 40) break;
+      }
+    }
+  } catch (e) {
+    if (box) box.innerHTML = '<div class="mq-empty">筛不到：' + escapeHtml(e.message) + '</div>';
+    return;
+  }
+  if (out.length) {
+    MP.queue = out;
+    MP.idx = -1;
+    renderQueue();
+  } else if (box) {
+    box.innerHTML = '<div class="mq-empty">这个风格没筛到，点「随机」试试</div>';
+  }
+}
+
+async function shuffle() {
+  try {
+    const d = await musicApi('/api/music/random?count=20');
+    MP.queue = d.tracks || [];
+    MP.idx = -1;
+    renderQueue();
+    if (MP.queue.length) await playTrack(0);
+  } catch (e) { toast('曲库读取失败'); }
+}
+
+async function playTrack(i) {
+  const t = MP.queue[i];
+  if (!t) return;
+  MP.idx = i;
+  MP.title = t.title + (t.artist ? ' — ' + t.artist : '');
+  renderQueue();
+  if (MP.target === 'local') {
+    try {
+      const r = await musicApi('/api/music/play', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'local', title: t.title, volume: MP.volume }),
+      });
+      if (r && r.ok === false) {
+        toast('本机没放成：' + (r.error || '后台没响应'), 'error');
+        MP.playing = false;
+        MP.startedAt = 0;
+      } else {
+        MP.playing = true;
+        MP.startedAt = Date.now();
+      }
+    } catch (e) {
+      toast('本机播放失败', 'error');
+      MP.playing = false;
+      MP.startedAt = 0;
+    }
+  } else {
+    // HomePod / 电视走结构化的 /api/music/play，不再把曲名拼成一句话丢给 LLM
+    // （原来 musicAsk 走 /api/text，曲名会被当成指令，而且要多跑一轮模型）
+    try {
+      const r = await musicApi('/api/music/play', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: MP.target, title: t.title }),
+      });
+      if (r && r.ok === false) {
+        toast('没放成：' + (r.error || r.message || '设备没响应'), 'error');
+        MP.playing = false;
+        MP.startedAt = 0;
+      } else {
+        MP.playing = true;
+        MP.startedAt = Date.now();
+      }
+    } catch (e) {
+      toast('没放成：连不上后台', 'error');
+      MP.playing = false;
+      MP.startedAt = 0;
+    }
+  }
+  renderMusic();
+}
+
+async function stopMusic() {
+  try {
+    const r = await musicApi('/api/music/stop', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: MP.target }),
+    });
+    if (r && r.ok === false) toast('没停成：' + (r.error || r.message || '设备没响应'), 'error');
+  } catch (e) {
+    toast('没停成：连不上后台', 'error');
+  }
+  MP.playing = false;
+  MP.startedAt = 0;
+  if ($('musicBar')) $('musicBar').style.width = '0%';
+  renderMusic();
+}
+
+async function pollMusic() {
+  if (document.hidden) return;   // 屏幕熄灭/页面在后台就别打后台了
+  try {
+    if (MP.target === 'local') {
+      const s = await musicApi('/api/music/status');
+      MP.playing = !!s.playing;
+      if (MP.playing) {
+        // 曲名以后台真实 path 为准：用户在语音里让小麦放歌、或队列已被筛/搜换掉时，
+        // MP.queue[MP.idx] 已经不指向在放的那首，界面会显示错的标题。
+        const base = String(s.path || '').split('/').pop().replace(/\.[^.]+$/, '');
+        if (base) MP.title = base;
+        const el = $('musicBar');
+        if (el) {
+          // 原来分母写死 240 秒，长曲永远到不了 100%；接口给了时长就用真实时长
+          const total = Number(s.duration) || 240;
+          el.style.width = Math.min(100, ((Number(s.elapsed) || 0) / total) * 100) + '%';
+        }
+      } else if ($('musicBar')) {
+        // 后台已停（自然播完或语音停掉）时，界面不能还挂着上一首
+        MP.title = '';
+        $('musicBar').style.width = '0%';
+      }
+    } else {
+      // 非本机通路：向后台查该通路的真实状态（HA 实体），不要只留一个空进度条
+      const s = await musicApi('/api/music/status?target=' + MP.target);
+      MP.remote = { state: s.state || '', playing: !!s.playing,
+                    title: s.title || '', artist: s.artist || '' };
+      // 面板显示的「在放」以设备实际状态为准，不以我们发过指令为准
+      MP.playing = MP.remote.playing;
+      if (MP.remote.playing) MP.title = MP.remote.title || MP.title;
+      if ($('musicBar')) $('musicBar').style.width = '0%';   // 这两条通路拿不到进度
+    }
+    renderMusic();
+  } catch (e) {
+    // 后台没起来时不要每 4 秒刷屏：只在状态变化时提示一次
+    if (!MP.pollFailed) {
+      MP.pollFailed = true;
+      toast('音乐状态读不到，后台可能没起来', 'warn');
+    }
+  }
+}
+
+function musicAsk(text) {
+  // 语音通路：把话说给小麦
+  if (DEMO) { toast('演示模式：' + text); return; }
+  postJson('/api/text', { text });
+}
+
+if ($('musicPill')) {
+  let pollTimer = null;
+  const startPoll = () => {
+    if (pollTimer) return;
+    pollMusic();
+    pollTimer = setInterval(pollMusic, 4000);
+  };
+  const stopPoll = () => {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
+  };
+
+  $('musicPill').addEventListener('click', async () => {
+    renderMusic();
+    $('musicSheet').classList.add('on');
+    startPoll();
+    try {
+      const d = await musicApi('/api/music/random?count=20');
+      MP.queue = d.tracks || [];
+      renderQueue();
+    } catch (e) {
+      toast('曲库没读出来：' + e.message, 'error');
+      renderQueue();
+    }
+  });
+  // 面板关了就停轮询，否则整页生命周期每 4 秒打一次后台
+  $('musicClose').addEventListener('click', () => {
+    $('musicSheet').classList.remove('on');
+    stopPoll();
+  });
+
+  document.querySelectorAll('.music-target').forEach(el => {
+    el.addEventListener('click', async () => {
+      const want = el.dataset.target;
+      MP.target = want;
+      // 请求序号：快速连点 homepod→tv 时，先发的响应后到会把音量写到错的目标上
+      const seq = (MP.targetSeq = (MP.targetSeq || 0) + 1);
+      renderMusic();
+      // 切到非本机通路时立刻拉一次真实状态：只靠 4 秒轮询会让用户以为没投上
+      if (want !== 'local') {
+        MP.remote = { state: 'unknown', playing: false, title: '', artist: '' };
+        try {
+          const s = await musicApi('/api/music/status?target=' + want);
+          if (seq !== MP.targetSeq) return;
+          MP.remote = { state: s.state || '', playing: !!s.playing,
+                        title: s.title || '', artist: s.artist || '' };
+        } catch (e) { /* 读不到就保持 unknown，界面会明说还没读到 */ }
+        renderMusic();
+      }
+      // 切目标时拉它当前音量做滑杆初值；读不到就用这个目标自己的默认值，
+      // 不要沿用上一个目标的音量（否则一动滑杆就把错值写出去）
+      try {
+        const v = await musicApi('/api/music/target_volume?target=' + want);
+        if (seq !== MP.targetSeq) return;   // 期间又切了，丢掉过期响应
+        if (typeof v.volume === 'number') {
+          MP.volume = v.volume;
+          renderMusic();
+        }
+      } catch (err) {
+        if (seq !== MP.targetSeq) return;
+        toast('读不到' + ({ local: '本机', homepod: 'HomePod', tv: '电视' })[want] +
+              '的当前音量，滑杆用默认值', 'warn');
+        renderMusic();
+      }
+    });
+  });
+
+  $('musicShuffle').addEventListener('click', shuffle);
+  // 曲库检索：回车或点搜索都走 /api/music/tracks?q=
+  if ($('musicQuery')) {
+    const go = () => {
+      const q = ($('musicQuery').value || '').trim();
+      if (!q) return shuffle();   // 空词等于随机
+      searchMusic(q);
+    };
+    $('musicSearchBtn').addEventListener('click', go);
+    $('musicQuery').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  }
+  document.querySelectorAll('.mq-chip').forEach(el => {
+    el.addEventListener('click', () => {
+      const k = el.dataset.filter;
+      document.querySelectorAll('.mq-chip').forEach(x => x.classList.toggle('on', x === el));
+      if (k === 'random') return shuffle();
+      filterMusic(k);
+    });
+  });
+  $('musicStopLocal').addEventListener('click', stopMusic);
+  // 暂停和停止必须分开：原来两个键都绑 stopMusic，点暂停实际是停止，无法续播
+  $('musicPauseLocal').addEventListener('click', async () => {
+    if (MP.target !== 'local') {
+      // 非本机通路没有独立的 pause 语义，明确告知而不是静默当暂停
+      toast('这条通路只能停止，暂停请用电视/HomePod 自己的遥控', 'info');
+    }
+    await stopMusic();
+  });
+  $('musicVolume').addEventListener('input', (e) => {
+    MP.volume = Number(e.target.value);
+    $('musicVolumeText').textContent = String(MP.volume);
+    // 电视音量是步进逼近（每次 volume_up/down 改 2 格），拖动时每像素都发会把电视打爆，
+    // 所以先只更新界面，停手 350ms 后才真下发
+    clearTimeout(MP.volTimer);
+    MP.volTimer = setTimeout(() => setVolume(MP.volume), 350);
+  });
+  $('musicVolume').addEventListener('change', (e) => {
+    clearTimeout(MP.volTimer);
+    setVolume(Number(e.target.value));
+  });
+
+  // 面板首次打开才启动轮询；页面隐藏时 pollMusic 自己会跳过
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if ($('musicSheet') && $('musicSheet').classList.contains('on')) startPoll();
+  });
+}
+
 function renderDevices() {
   const box = $('deviceList');
   if (!box) return;
@@ -923,6 +1476,41 @@ function renderPending() {
   scrollDown();
 }
 
+/* ---- 音量下发：失败要让人看得见，不能默默吞掉 ---- */
+// 同一个目标连着发同一个音量只算一次：电视是步进逼近，每多一次就多按几次遥控，
+// 手指在滑杆上抖动不该把电视打爆。进行中的那个请求也记下来，重复点直接复用它的结果。
+const volSending = {};
+async function setVolume(v) {
+  const want = Math.max(0, Math.min(100, Number(v) || 0));
+  const target = MP.target;
+  MP.volume = want;
+  $('musicVolumeText').textContent = String(want);
+  const key = target + ':' + want;
+  if (volSending[key]) return volSending[key];
+  const job = (async () => {
+    try {
+      const r = await musicApi('/api/music/volume', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, volume: want }),
+      });
+      if (r && r.ok === false) {
+        toast('音量没改成：' + (r.error || '设备没响应'), 'error');
+        return;
+      }
+      // 电视走步进逼近，界面用写入值乐观更新（固件回读不准，不能拿回读覆盖）
+      if (r && typeof r.steps === 'number' && r.steps > 0) {
+        showVolume(want);
+      }
+    } catch (err) {
+      toast('音量没改成：连不上后台', 'error');
+    } finally {
+      delete volSending[key];
+    }
+  })();
+  volSending[key] = job;
+  return job;
+}
+
 /* ---- overlays ---- */
 let toastTimer = null;
 function toast(text, kind) {
@@ -951,11 +1539,13 @@ const handlers = {
     switching = null;
     for (const k in seenThreads) delete seenThreads[k];
     seenThreads[s.thread.entry] = s.thread.messages;
+    seenEvents.clear();   // 新的一次连接：旧连接里记下的「已处理」不能再拦新事件
     if (s.update) { ui.version = s.version; ui.update = s.update; }   // the demo's snapshots have none
     if (s.alarms) ui.alarms = s.alarms;
     if (s.devices) ui.devices = s.devices;
     renderModels(); renderThread(); renderStatus(); renderAlarms(); renderDevices();
     updateFinished((s.update || {}).job);
+    probeHub();
   },
   power(p) {
     $('powerOff').classList.toggle('on', p.state === 'off');
@@ -975,7 +1565,7 @@ const handlers = {
   },
   thread(t) {
     server.thread = t;
-    if (t.reset) for (const k in seenThreads) delete seenThreads[k];   // cleared, or the hub's history loaded
+    if (t.reset) { for (const k in seenThreads) delete seenThreads[k]; seenEvents.clear(); }   // cleared, or the hub's history loaded
     seenThreads[t.entry] = t.messages;
     if (switching && t.entry !== switching) return;
     ui.thread = t; renderThread();
@@ -991,16 +1581,38 @@ const handlers = {
     ui.alarms = a; renderAlarms();
   },
   devices(d) {
-    ui.devices = d; renderDevices();
+    ui.devices = d; renderDevices(); renderMusic();
   },
   level(l) {
     level.target = ui.status.state === 'speaking' ? Math.min(1, l.out * 6) : micLevel(l.mic);
   },
 };
 
+// 每条事件的身份：能唯一指认「这件事」的字段才算。同一件事重放（重连、服务端重发）
+// 只处理一次；拿不到身份的事件一律照常处理，宁可多处理也不吞掉真的新事件。
+function eventKey(name, d) {
+  const j = o => JSON.stringify(o);
+  switch (name) {
+    case 'message': return d && d.id ? 'message:' + d.id + ':' + j(d) : null;
+    case 'thread': return d && d.reset ? 'thread:reset' : null;      // 只去重「清空」这种一次性事件
+    case 'alarms': return d && d.ringing ? 'ringing:' + j(d.ringing) : null;
+    case 'devices': case 'model': case 'volume': case 'update': case 'power': case 'snapshot':
+      return name + ':' + j(d);                                      // 整份状态：重复到达就是没变
+    case 'toast': return 'toast:' + j(d);
+    default: return null;                                            // state / level：每次都要刷新
+  }
+}
+
 function connectEvents() {
   const es = new EventSource('/events');
-  for (const [name, fn] of Object.entries(handlers)) es.addEventListener(name, e => fn(JSON.parse(e.data)));
+  for (const [name, fn] of Object.entries(handlers)) {
+    es.addEventListener(name, e => {
+      const d = JSON.parse(e.data);
+      const key = eventKey(name, d);
+      if (key && !once(key)) return;
+      fn(d);
+    });
+  }
 }
 
 /* ---- buttons ---- */
@@ -1040,24 +1652,45 @@ function release() {
     pttEnd();
     post('/api/ptt/stop');
   }
+  // 幂等：两个事件都会来，清干净后重复调用什么都不做
 }
 $('btnMic').addEventListener('pointerup', release);
 $('btnMic').addEventListener('pointercancel', release);
-$('btnMic').addEventListener('pointerleave', () => { if (ui.ptt) release(); });
+// 原来 pointerleave 只在 ui.ptt 为真时才 release：短按（<350ms）滑出按钮时 ui.ptt 还是 false，
+// holdTimer 不会被取消，350ms 后照样触发 pttStart，麦克风进录音且没有对应的 stop → 卡在 listening。
+// 所以滑出必须无条件 release，并补 pointerout（部分浏览器滑出只发这个）。
+$('btnMic').addEventListener('pointerleave', release);
+$('btnMic').addEventListener('pointerout', release);
+// 指针在按钮外抬起也要收尾（手指按下后移到别处松手）
+document.addEventListener('pointerup', () => { if (holdTimer || ui.ptt) release(); });
+// 键盘可达：kiosk 场景用不了触摸时，空格/回车也能说话
+$('btnMic').addEventListener('keydown', e => {
+  if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) {
+    e.preventDefault();
+    if (!holdTimer && !ui.ptt) {
+      holdTimer = setTimeout(() => { holdTimer = null; pttStart(); post('/api/ptt/start'); }, 350);
+    }
+  }
+});
+$('btnMic').addEventListener('keyup', e => {
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); release(); }
+});
 $('btnAbort').addEventListener('click', () => post('/api/abort'));
 $('btnEnd').addEventListener('click', () => { post('/api/end'); toast('对话已结束，聊天记录已保存'); });
 $('modelPill').addEventListener('click', () => openSheet(true));
 $('sheetClose').addEventListener('click', () => openSheet(false));
 document.addEventListener('contextmenu', e => e.preventDefault());
 
-for (const [q, bg, fg, icon] of SUGGEST) {
-  const b = document.createElement('button');
-  b.className = 'chip';
-  b.innerHTML = `<i style="background:${bg};color:${fg}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></i>${esc(q)}`;
-  b.addEventListener('click', () => post('/api/text', { text: q }));
-  $('chips').appendChild(b);
+for (const [name] of SCENES) {
+  const t = document.createElement('button');
+  t.className = 'scene-tab';
+  t.type = 'button';
+  t.textContent = name;
+  t.setAttribute('role', 'tab');
+  t.addEventListener('click', () => { ui.scene = SCENES.findIndex(s => s[0] === name); renderChips(); });
+  $('sceneTabs').appendChild(t);
 }
+renderChips();
 
 /* ---- demo: fake client for previewing the page on a desktop browser ---- */
 const demo = DEMO === null ? null : (() => {

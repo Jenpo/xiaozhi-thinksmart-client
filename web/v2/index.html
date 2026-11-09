@@ -21,7 +21,14 @@
       <span class="pill-text"><b id="pillLabel">选择模型</b><small id="pillModel"></small></span>
       <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
     </button>
+      <div class="clock" id="clock"><span id="time">--:--</span></div>
     <div class="right">
+      <button class="music-pill" id="musicPill" aria-label="音乐">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>
+        <span class="mp-text"><b id="musicTitle">放点音乐</b><small id="musicSub">HomePod</small></span>
+        <span class="mp-eq" id="musicEq" aria-hidden="true"><i></i><i></i><i></i></span>
+      </button>
       <button class="report-pill" id="reportPill" aria-label="收听待汇报">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
         <span id="reportText">有一条待汇报</span>
@@ -37,7 +44,6 @@
         <span>睡眠中</span>
       </div>
       <div class="link" id="link"><i></i><span>待机</span></div>
-      <div class="clock" id="clock"><span id="time">--:--</span></div>
       <button class="gear" id="btnSettings" aria-label="设置"><i class="gear-dot" id="gearDot"></i>
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
@@ -47,6 +53,7 @@
 
   <main class="main">
     <section class="stage">
+      <div class="status-banner" id="statusBanner" role="status" aria-live="polite"></div>
       <div class="orb" id="orb">
         <!-- static pre-rendered glows, one per state; only opacity changes (cross-fade) -->
         <div class="glows" aria-hidden="true">
@@ -92,6 +99,7 @@
           <div class="mh-list" id="missedList"></div>
         </div>
         <div class="try">试试这样问我</div>
+        <div class="scene-tabs" id="sceneTabs" role="tablist" aria-label="场景"></div>
         <div class="chips" id="chips"></div>
       </div>
 
@@ -105,6 +113,64 @@
       </div>
     </section>
   </main>
+</div>
+
+<div class="sheet" id="musicSheet">
+  <div class="sheet-bar">
+    <div><h2>音乐</h2><p>选一个出声的地方，随机播 NAS 曲库，或直接说「小麦小麦，放点音乐」</p></div>
+    <button class="close" id="musicClose" aria-label="关闭">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="panel">
+    <div class="music-targets" id="musicTargets">
+      <button class="music-target" data-target="local" id="mtLocal">
+        <i class="dot"></i>
+        <div><b>SmartView 本机</b><span id="mtLocalState">扬声器</span></div>
+      </button>
+      <button class="music-target" data-target="homepod" id="mtHomePod">
+        <i class="dot"></i>
+        <div><b>HomePod</b><span id="mtHomePodState">办公室</span></div>
+      </button>
+      <button class="music-target" data-target="tv" id="mtTv">
+        <i class="dot"></i>
+        <div><b>SONY 电视</b><span id="mtTvState">客厅</span></div>
+      </button>
+    </div>
+    <div class="music-player">
+      <div class="music-now-playing">
+        <b id="musicNowTitle">现在没在放</b>
+        <span id="musicNowSub">点「随机播放」开始</span>
+      </div>
+      <div class="music-progress"><i id="musicBar"></i></div>
+      <div class="music-controls">
+        <button class="pri" id="musicShuffle">随机播放</button>
+        <button id="musicPauseLocal">暂停</button>
+        <button id="musicStopLocal">停止</button>
+      </div>
+      <div class="music-volume">
+        <span>音量</span>
+        <input type="range" id="musicVolume" min="0" max="100" value="55">
+        <b id="musicVolumeText">55</b>
+      </div>
+    </div>
+    <div class="music-search">
+      <input type="search" id="musicQuery" placeholder="搜歌名 / 歌手 / 专辑" autocomplete="off" enterkeyhint="search">
+      <button id="musicSearchBtn">搜索</button>
+    </div>
+    <div class="music-filters" id="musicFilters">
+      <button class="mq-chip" data-filter="random">随机</button>
+      <button class="mq-chip" data-filter="classical">古典</button>
+      <button class="mq-chip" data-filter="pop">流行</button>
+      <button class="mq-chip" data-filter="ost">原声</button>
+      <button class="mq-chip" data-filter="test">试音</button>
+      <button class="mq-chip" data-filter="chinese">华语</button>
+      <button class="mq-chip" data-filter="jazz">爵士/久石让</button>
+      <button class="mq-chip" data-filter="rock">摇滚</button>
+    </div>
+    <div class="music-queue" id="musicQueue"></div>
+    <p class="opt-note">本机走 NAS 直读（ffplay）；HomePod 走 AirPlay 分段推流；电视走 Chromecast + YouTube。电视/HomePod 这两条通路拿不到播放进度，进度条只在本机有效。</p>
+  </div>
 </div>
 
 <div class="sheet" id="sheet">
