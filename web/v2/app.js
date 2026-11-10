@@ -1087,6 +1087,10 @@ if ($('musicPill')) {
     };
     $('musicSearchBtn').addEventListener('click', go);
     $('musicQuery').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    // 触屏上点输入框必须真的把焦点给进去并弹键盘：kiosk 里 body 关了 user-select，
+    // 加上面板是覆盖层，默认点按只会「看着像点了」而没聚焦。
+    $('musicQuery').addEventListener('click', () => $('musicQuery').focus());
+    $('musicQuery').addEventListener('touchstart', () => { setTimeout(() => $('musicQuery').focus(), 0); }, { passive: true });
   }
   document.querySelectorAll('.mq-chip').forEach(el => {
     el.addEventListener('click', () => {

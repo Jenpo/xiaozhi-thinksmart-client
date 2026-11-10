@@ -118,6 +118,11 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 .music-search input { flex: 1; min-width: 0; height: 52px; padding: 0 16px; border-radius: 14px; font-size: 16px;
                       background: var(--card); border: 1px solid var(--line); color: var(--ink); }
 .music-search input::placeholder { color: var(--ink3); }
+/* 全局 body 关了 user-select，输入框里连光标都点不出来，手指点上去也不聚焦：
+   输入框必须单独把选择/光标打开，否则「点搜索框没反应、输不进关键词」 */
+.music-search input { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
+                      touch-action: manipulation; cursor: text; }
+.music-search input:focus { outline: none; border-color: var(--accent); }
 .music-search button { height: 52px; padding: 0 20px; border-radius: 14px; font-size: 16px; font-weight: 600;
                        background: var(--card2); border: 1px solid var(--line); }
 .music-filters { display: flex; gap: 10px; flex-wrap: wrap; }
