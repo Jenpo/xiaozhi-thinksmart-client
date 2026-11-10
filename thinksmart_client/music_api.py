@@ -147,8 +147,20 @@ def find_track(title=""):
         _exist_cache.clear()
     q = (title or "").strip().lower()
     if not q:
-        pool = [t for t in items if _playable(t)]
-        return _public(random.choice(pool)) if pool else None
+        # 18368 首逐个判目录要 9-10 s（NFS stat 慢），而随机播放只要一首：
+        # 打乱后按目录去重，同一目录只 stat 一次，通常几十次就够。
+        # 原来这里一次扫全库，面板点「随机播放」要等近 10 s，用户以为没反应。
+        order = list(items)
+        random.shuffle(order)
+        seen = set()
+        for t in order:
+            root = os.path.dirname(t.get("path") or "")
+            if root in seen:
+                continue
+            seen.add(root)
+            if _playable(t):
+                return _public(t)
+        return None
     exact, title_hit, artist_hit = [], [], []
     for t in items:
         name = (t.get("title") or "").lower()
