@@ -154,7 +154,7 @@ async def test_talking_past_the_follow_up_window_keeps_the_mic_until_the_cap(mon
                 c.speech_start = now
             c.speech_end = now
             if c.deadline and c.listen_since + app.MAX_LISTEN > now:
-                wait = 2.5 if now - c.speech_start < app.QUICK_END else 0.6
+                wait = app.SHORT_END_WAIT if now - c.speech_start < app.QUICK_END else 0.6
                 c.deadline = min(max(c.deadline, now + wait), c.listen_since + app.MAX_LISTEN)
         return now > c.deadline
 
@@ -162,16 +162,17 @@ async def test_talking_past_the_follow_up_window_keeps_the_mic_until_the_cap(mon
     clock[0] += 11
     c.speech_start = clock[0]                            # the turn's first sound comes now
     assert tick(clock[0]) is False
-    assert c.deadline == pytest.approx(clock[0] + 2.5)   # the first sound of the turn: the full wait
+    assert c.deadline == pytest.approx(clock[0] + app.SHORT_END_WAIT)   # the first sound: the short wait
 
     # talking on: the hub has had time to see the sentence, so the mic closes 0.6 s after the last sound
     for _ in range(20):
         clock[0] += 0.1
         assert tick(clock[0]) is False
-        wait = 2.5 if clock[0] - c.speech_start < app.QUICK_END else 0.6
+        wait = app.SHORT_END_WAIT if clock[0] - c.speech_start < app.QUICK_END else 0.6
         assert c.deadline == pytest.approx(min(max(c.deadline, clock[0] + wait), c.listen_since + app.MAX_LISTEN))
     # past the cap: the clamp no longer applies and the deadline is in the past
     clock[0] = c.listen_since + app.MAX_LISTEN + 0.5
     assert tick(clock[0]) is True
-    # the deadline stays where it was (not pushed forward any more), and is now in the past
-    assert c.deadline == pytest.approx(1014.6) and c.deadline < clock[0]
+    # the deadline stays where it was (not pushed forward any more), and is now in the past:
+    # the loop above ended at 1013.2 s, so 1013.2 + 0.6 (the last sound was 1.2 s in)
+    assert c.deadline == pytest.approx(1013.6) and c.deadline < clock[0]
