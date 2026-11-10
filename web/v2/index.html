@@ -26,7 +26,7 @@
       <button class="music-pill" id="musicPill" aria-label="音乐">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>
-        <span class="mp-text"><b id="musicTitle">放点音乐</b><small id="musicSub">HomePod</small></span>
+        <span class="mp-text"><b id="musicTitle">放点音乐</b><small id="musicSub">随机播放</small></span>
         <span class="mp-eq" id="musicEq" aria-hidden="true"><i></i><i></i><i></i></span>
       </button>
       <button class="report-pill" id="reportPill" aria-label="收听待汇报">
@@ -128,10 +128,6 @@
         <i class="dot"></i>
         <div><b>SmartView 本机</b><span id="mtLocalState">扬声器</span></div>
       </button>
-      <button class="music-target" data-target="homepod" id="mtHomePod">
-        <i class="dot"></i>
-        <div><b>HomePod</b><span id="mtHomePodState">办公室</span></div>
-      </button>
       <button class="music-target" data-target="tv" id="mtTv">
         <i class="dot"></i>
         <div><b>SONY 电视</b><span id="mtTvState">客厅</span></div>
@@ -169,7 +165,7 @@
       <button class="mq-chip" data-filter="rock">摇滚</button>
     </div>
     <div class="music-queue" id="musicQueue"></div>
-    <p class="opt-note">本机走 NAS 直读（ffplay）；HomePod 走 AirPlay 分段推流；电视走 Chromecast + YouTube。电视/HomePod 这两条通路拿不到播放进度，进度条只在本机有效。</p>
+    <p class="opt-note">本机走 NAS 直读（ffplay）；电视走 Chromecast + YouTube。电视这条通路拿不到播放进度，进度条只在本机有效。</p>
   </div>
 </div>
 

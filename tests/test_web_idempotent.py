@@ -447,7 +447,7 @@ async def test_a_hub_that_is_down_reports_unknown_instead_of_failing(client, mon
     async def hub_http(path, body=None):
         raise OSError('refused')
     monkeypatch.setattr(fake, '_hub_http', hub_http)
-    resp = await c.get('/api/music/status?target=homepod')
+    resp = await c.get('/api/music/status?target=tv')
     assert resp.status == 200
     body = await resp.json()
     assert body['playing'] is False and body['state'] == 'unknown'

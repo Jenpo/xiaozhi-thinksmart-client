@@ -712,11 +712,12 @@ function deviceText(d) {
 }
 
 /* ---- music (top-bar pill + player sheet) ---- */
-const MUSIC = { homepod: 'media_player.office_office', tv: 'media_player.bravia_xr_55x90j' };
+// [2026-11-10] HomePod 通路已下线（面板不再有按钮）：只保留本机与电视
+const MUSIC = { tv: 'media_player.bravia_xr_55x90j' };
 // volumeByTarget：每个通路各存各的音量。原来 MP.volume 是单一全局值，切到电视拉到
 // 电视音量后再切回本机，滑杆显示的是上一个目标的值，一动就把错值写到新目标。
 const MP = { target: 'local', queue: [], idx: -1,
-             volumeByTarget: { local: 55, homepod: 55, tv: 30 },
+             volumeByTarget: { local: 55, tv: 30 },
              playing: false, title: '', startedAt: 0, volTimer: null, pollFailed: false,
              // 非本机通路的真实状态（从后台查 HA 实体得到）：{state, playing, title, artist}
              remote: { state: '', playing: false, title: '', artist: '' } };
@@ -743,21 +744,19 @@ async function musicApi(path, opts) {
 }
 
 function renderMusic() {
-  const hp = musicEntity(MUSIC.homepod);
   const tv = musicEntity(MUSIC.tv);
   const tvOn = !!(tv && tv.on);
-  const hpOn = !!(hp && hp.on);
   const pill = $('musicPill');
   if (!pill) return;
 
   const localOn = MP.playing && MP.target === 'local';
-  pill.classList.toggle('playing', localOn || tvOn || hpOn);
+  pill.classList.toggle('playing', localOn || tvOn);
   $('musicTitle').textContent = MP.playing ? (MP.title || '在放') : '放点音乐';
-  $('musicSub').textContent = MP.playing ? ({ local: '本机', homepod: 'HomePod', tv: '电视' })[MP.target] : '随机播放';
+  $('musicSub').textContent = MP.playing ? ({ local: '本机', tv: '电视' })[MP.target] : '随机播放';
 
   // 音响选择状态
-  for (const t of ['local', 'homepod', 'tv']) {
-    const el = $('mt' + (t === 'local' ? 'Local' : t === 'homepod' ? 'HomePod' : 'Tv'));
+  for (const t of ['local', 'tv']) {
+    const el = $('mt' + (t === 'local' ? 'Local' : 'Tv'));
     if (el) {
       el.classList.toggle('on', MP.target === t);
       el.setAttribute('aria-checked', MP.target === t ? 'true' : 'false');
@@ -765,13 +764,6 @@ function renderMusic() {
   }
   const ls = $('mtLocalState');
   if (ls) ls.textContent = localOn ? '在放' : '扬声器';
-  const hs = $('mtHomePodState');
-  if (hs) {
-    // HomePod 分段推流时 HA 实体停在 off，所以「在放」以 MP.remote 为准：
-    // 面板上显示的必须和「现在在放」一致，否则用户看到「待机」却在出声。
-    const hpLive = hpOn || (MP.target === 'homepod' && MP.remote.playing);
-    hs.textContent = !hp ? '没接上' : (hp.state === 'unavailable' ? '连不上' : (hpLive ? '在放' : '待机'));
-  }
   const ts = $('mtTvState');
   if (ts) {
     const tvLive = tvOn || (MP.target === 'tv' && MP.remote.playing);
@@ -787,7 +779,7 @@ function renderMusic() {
 
   $('musicNowTitle').textContent = nowPlaying ? (nowTitle || '在放') : '现在没在放';
   $('musicNowSub').textContent = nowPlaying
-    ? ('在 ' + ({ local: 'SmartView 本机', homepod: 'HomePod', tv: 'SONY 电视' })[MP.target] + ' 播放' +
+    ? ('在 ' + ({ local: 'SmartView 本机', tv: 'SONY 电视' })[MP.target] + ' 播放' +
        (MP.target !== 'local' ? '（这条通路不提供进度）' : ''))
     : (MP.target === 'local' ? '点「随机播放」开始'
        : ('点「随机播放」开始' + (MP.remote.state === 'off' ? '（设备现在是待机/关机）'
@@ -1053,7 +1045,7 @@ if ($('musicPill')) {
     el.addEventListener('click', async () => {
       const want = el.dataset.target;
       MP.target = want;
-      // 请求序号：快速连点 homepod→tv 时，先发的响应后到会把音量写到错的目标上
+      // 请求序号：快速连点不同通路时，先发的响应后到会把音量写到错的目标上
       const seq = (MP.targetSeq = (MP.targetSeq || 0) + 1);
       renderMusic();
       // 切到非本机通路时立刻拉一次真实状态：只靠 4 秒轮询会让用户以为没投上
@@ -1078,7 +1070,7 @@ if ($('musicPill')) {
         }
       } catch (err) {
         if (seq !== MP.targetSeq) return;
-        toast('读不到' + ({ local: '本机', homepod: 'HomePod', tv: '电视' })[want] +
+        toast('读不到' + ({ local: '本机', tv: '电视' })[want] +
               '的当前音量，滑杆用默认值', 'warn');
         renderMusic();
       }

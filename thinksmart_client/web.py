@@ -171,7 +171,7 @@ def make_app(client: Client):
         body = await request.json()
         target = (body.get('target') or 'local').strip().lower()
         title = body.get('title') or ''
-        if target not in ('local', 'homepod', 'tv'):
+        if target not in ('local', 'tv'):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
         track = music_api.find_track(title)
         if track is None:
@@ -182,7 +182,7 @@ def make_app(client: Client):
             if vol is None:
                 vol = (music_api.local_status().get('volume') or 70)
             return web.json_response(music_api.local_play(track['path'], vol))
-        # homepod / tv 交给 hub 的 cast_youtube 插件真正播放（不是只回个 echo）
+        # tv 交给 hub 的 cast_youtube 插件真正播放（不是只回个 echo）
         query = track.get('title') or title
         try:
             result = await client._hub_http('/kiosk/music/play',
@@ -203,7 +203,7 @@ def make_app(client: Client):
         except Exception:
             pass
         target = (body.get('target') or 'local').strip().lower()
-        if target not in ('local', 'homepod', 'tv'):
+        if target not in ('local', 'tv'):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
         if target == 'local':
             return web.json_response(music_api.local_stop())     # nothing playing is still ok
@@ -238,8 +238,8 @@ def make_app(client: Client):
         if target == 'local':
             return web.json_response(music_api.local_set_volume(vol))
         # 电视走 ARC 到 HT-Z9F soundbar，HA 的 volume_level 就是实际出声音量
-        entity = {'tv': 'media_player.bravia_xr_55x90j',
-                  'homepod': 'media_player.office_office'}.get(target)
+        # [2026-11-10] HomePod 通路下线，面板只留本机与电视
+        entity = {'tv': 'media_player.bravia_xr_55x90j'}.get(target)
         if not entity:
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
 
@@ -284,8 +284,7 @@ def make_app(client: Client):
         target = (request.query.get('target') or 'local').strip().lower()
         if target == 'local':
             return web.json_response({'target': 'local', 'volume': 55})
-        entity = {'tv': 'media_player.bravia_xr_55x90j',
-                  'homepod': 'media_player.office_office'}.get(target)
+        entity = {'tv': 'media_player.bravia_xr_55x90j'}.get(target)
         if not entity:
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
         return web.json_response({'target': target, 'volume': _device_volume(entity)})
@@ -299,7 +298,7 @@ def make_app(client: Client):
         target = (request.query.get('target') or 'local').strip().lower()
         if target == 'local':
             return web.json_response(music_api.local_status())
-        if target not in ('tv', 'homepod'):
+        if target not in ('tv',):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
         try:
             r = await client._hub_http('/kiosk/music/status?target=' + target)
