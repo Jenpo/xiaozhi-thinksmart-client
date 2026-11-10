@@ -247,6 +247,8 @@ def local_status():
     playing = _local_proc is not None and _local_proc.poll() is None
     return {
         "playing": playing,
+        # 面板标题要靠它显示「在放什么」：以前只回 path，前端只能猜
+        "title": os.path.basename(_local_track) if playing and _local_track else None,
         "path": _local_track if playing else None,
         "elapsed": round(time.time() - _local_started, 1) if playing else 0,
         "volume": _local_volume if playing else None,

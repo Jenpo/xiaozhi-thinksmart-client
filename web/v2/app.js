@@ -718,7 +718,7 @@ const MUSIC = { tv: 'media_player.bravia_xr_55x90j' };
 // 电视音量后再切回本机，滑杆显示的是上一个目标的值，一动就把错值写到新目标。
 const MP = { target: 'local', queue: [], idx: -1,
              volumeByTarget: { local: 55, tv: 30 },
-             playing: false, title: '', startedAt: 0, volTimer: null, pollFailed: false,
+             playing: false, title: '', nowTitle: '', startedAt: 0, volTimer: null, pollFailed: false,
              // 非本机通路的真实状态（从后台查 HA 实体得到）：{state, playing, title, artist}
              remote: { state: '', playing: false, title: '', artist: '' } };
 Object.defineProperty(MP, 'volume', {
@@ -774,7 +774,8 @@ function renderMusic() {
   // 而 MP.playing 只在轮询回来时才更新，切到 HomePod 后要等 4 秒且第一次轮询
   // 失败就永远停在「现在没在放」——设备已经在出声，面板却说没放。
   const remoteLive = MP.target !== 'local' && MP.remote.playing;
-  const nowTitle = MP.target !== 'local' ? (MP.remote.title || (remoteLive ? '在放' : '')) : (MP.playing ? (MP.title || '在放') : '');
+  const nowTitle = MP.target !== 'local' ? (MP.remote.title || (remoteLive ? '在放' : ''))
+                                        : (MP.playing ? (MP.nowTitle || MP.title || '在放') : '');
   const nowPlaying = MP.target !== 'local' ? remoteLive : MP.playing;
 
   $('musicNowTitle').textContent = nowPlaying ? (nowTitle || '在放') : '现在没在放';
@@ -912,8 +913,12 @@ async function playTrack(i) {
         MP.playing = false;
         MP.startedAt = 0;
       } else {
+        // 点下去要有回音：曲目名/歌手先写进面板，再让轮询去对真实状态
         MP.playing = true;
         MP.startedAt = Date.now();
+        MP.nowTitle = t.title + (t.artist ? ' — ' + t.artist : '');
+        renderMusic();
+        toast('本机在放：' + t.title, 'info');
       }
     } catch (e) {
       toast('本机播放失败', 'error');
