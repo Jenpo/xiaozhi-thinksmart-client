@@ -55,6 +55,7 @@ def _load_index():
 
 
 _exist_cache = {}
+_EXIST_TTL = 600.0       # 目录存在性缓存 10 分钟：NFS 断一下不能让它一直判「不可播」
 
 
 def _playable(track):
@@ -72,13 +73,14 @@ def _playable(track):
         return False
     root = os.path.dirname(path)
     hit = _exist_cache.get(root)
-    if hit is None:
+    now = time.monotonic()
+    if hit is None or now - hit[1] > _EXIST_TTL:
         try:
-            hit = os.path.isdir(root)
+            hit = (os.path.isdir(root), now)
         except OSError:
-            hit = False
+            hit = (False, now)
         _exist_cache[root] = hit
-    return hit
+    return hit[0]
 
 
 def _file_exists(path):
@@ -139,6 +141,10 @@ def find_track(title=""):
     先出现「勇气（伴奏）」而放到伴奏版。找到的必须真有这个文件。
     """
     items = _load_index()
+    # 索引全不可播时（NFS 没挂上/目录暂时不在）重判一次：缓存是按目录记的，
+    # 一次 NFS 抖动会把整库判成「没有这个文件」，之后随机播放就永远是空的。
+    if items and not any(_playable(t) for t in items[:200]):
+        _exist_cache.clear()
     q = (title or "").strip().lower()
     if not q:
         pool = [t for t in items if _playable(t)]
