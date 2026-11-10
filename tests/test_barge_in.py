@@ -378,3 +378,31 @@ async def test_push_to_talk_stops_the_stream_a_moment_after_the_release(monkeypa
     assert ('listen', 'stop') not in c.hub.kinds()          # still uploading the tail
     await asyncio.sleep(0.1)
     assert c.hub.kinds()[-1] == ('listen', 'stop')
+
+
+@pytest.mark.asyncio
+async def test_the_tail_keeps_uploading_while_the_page_says_thinking(monkeypatch):
+    """The packets after "vad end" must still reach the hub: uploading=False alone made the sender
+    drop them, so the tail never went out."""
+    from thinksmart_client import app as app_mod
+    monkeypatch.setattr(app_mod, 'VAD_TAIL', 0.05)
+    c = make_client()
+    sent = []
+
+    async def send_audio(packet):
+        sent.append(packet)
+    c.hub.send_audio = send_audio
+    await c.start_listening('realtime')
+    await c._on_json({'type': 'vad', 'state': 'end'})
+    c.uploading = False                    # what the "stt" handler does
+    assert c.stream_tail()
+    c._send_q = asyncio.Queue()
+    c._send_q.put_nowait(b'a')
+    t = asyncio.create_task(c._sender())
+    await asyncio.sleep(0.02)
+    assert sent == [b'a']
+    await asyncio.sleep(0.06)
+    c._send_q.put_nowait(b'b')
+    await asyncio.sleep(0.02)
+    t.cancel()
+    assert sent == [b'a']                  # past the tail: dropped

@@ -331,7 +331,7 @@ class Client:
         elif backlog is not None and not self.uploading:
             backlog.append(block)
             del backlog[:-200]   # 4 s, what the send queue takes at once
-        elif self.uploading:
+        elif self.uploading or self.stream_tail():
             self.backlog = None
             # the backlog may hold the 4 s that accumulated while the wake word was checked: encoding
             # all of it here would stall the mic worker. Only the newest 1.5 s goes first; the rest
@@ -348,10 +348,15 @@ class Client:
         if not self._send_q.full():
             self._send_q.put_nowait(packet)
 
+    def stream_tail(self):
+        """Uploading is off (the page says "thinking") but the tail of what was said is still going
+        out: the hub's "vad end" / the PTT release is an estimate, VAD_TAIL covers the last syllables."""
+        return not self.uploading and time.monotonic() < self.vad_tail_until
+
     async def _sender(self):
         while True:
             packet = await self._send_q.get()
-            if self.uploading:
+            if self.uploading or self.stream_tail():
                 await self.hub.send_audio(packet)
 
     # ---- state ----
@@ -522,8 +527,8 @@ class Client:
 
     async def _ptt_stop_upload(self):
         """The end of a push-to-talk turn: the stream stops VAD_TAIL later, so the last syllables
-        reach the hub. Uploading is switched off first, so the page says "thinking" meanwhile."""
-        self.uploading = False
+        reach the hub. Uploading is switched off first, so the page says "thinking" meanwhile;
+        stream_tail() keeps the packets going out until then."""
         self.vad_tail_until = time.monotonic() + VAD_TAIL
         await asyncio.sleep(VAD_TAIL)
         if self.hub.connected and not self.uploading:
