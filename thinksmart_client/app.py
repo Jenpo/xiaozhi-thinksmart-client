@@ -63,7 +63,14 @@ UPDATE_BUSY = ('preparing', 'downloading', 'installing', 'testing', 'rolling_bac
 # installing for a page request, or finishing an interrupted one at boot (self-test, rollback)
 UPDATE_UNITS = ('thinksmart-update-run.service', 'thinksmart-update-boot.service')
 MAX_LISTEN = 60          # seconds: one wake never keeps the mic open longer (a TV could otherwise)
+# seconds to keep uploading after the hub's VAD said the user stopped. Its "vad end" is an estimate:
+# cutting the stream the moment it arrives drops the last syllables (the ASR then gets "你几岁， 你几岁"
+# for one question). The hub ignores what comes after its own end, so this costs nothing.
+VAD_TAIL = 1.0
 RECOGNITION_WAIT = 15    # seconds to wait for the hub's text after the user stops (long sentences)
+# seconds of speech before the follow-up window may close the mic at once (it used to wait 2.5 s after
+# every sound, so a one-word question took that much longer to reach the hub)
+QUICK_END = 1.2
 NORMAL_STOP_TAIL = 0.6   # a normal "tts stop" leaves less than this queued; more means aborted
 PUNCT = set('，。！？；：、,.!?;:…')
 REPORT_POLL = 10         # seconds between asking the hub for pending reports (local HTTP)
@@ -248,6 +255,8 @@ class Client:
             # the whole chime it came ~0.4 s later
             self.sounds['wake'] = overlay(self.sounds['wake'], load_wav(sounds / 'zai.wav'), ZAI_AT)
         self.speech_end = 0.0         # monotonic: last time the user was heard talking
+        self.speech_start = 0.0       # monotonic: when the talking of this turn began (QUICK_END)
+        self.vad_tail_until = 0.0     # monotonic: keep uploading until then after the hub's "vad end"
         self.tools_listed = asyncio.Event()   # the hub asked for our device tools on this connection
         self.connecting = asyncio.Lock()      # one connection: a second wake while connecting waits for it
         self.screen = Screen()
@@ -324,6 +333,13 @@ class Client:
             del backlog[:-200]   # 4 s, what the send queue takes at once
         elif self.uploading:
             self.backlog = None
+            # the backlog may hold the 4 s that accumulated while the wake word was checked: encoding
+            # all of it here would stall the mic worker. Only the newest 1.5 s goes first; the rest
+            # is spread over the next blocks (what came before is still sent, in order)
+            keep = int(1.5 * 16000 / len(block)) or 1
+            if backlog and len(backlog) > keep:
+                self.backlog = backlog[:-keep]
+                backlog = backlog[-keep:]
             for b in (backlog or []) + [block]:
                 packet = self.encoder.encode(np.clip(b * 32768, -32768, 32767).astype(np.int16))
                 self.loop.call_soon_threadsafe(self._queue_packet, packet)
@@ -493,7 +509,9 @@ class Client:
         self.uploading = True
         self.listen_mode = mode
         self.vad_ended = False
+        self.vad_tail_until = 0.0
         self.listen_since = time.monotonic()
+        self.speech_start = self.speech_end = 0.0
         self.awaiting_text = False
         self.hub_pending = False
         if self.aborted_at is not None:
@@ -502,9 +520,19 @@ class Client:
         self.set_state('listening')
         return True
 
+    async def _ptt_stop_upload(self):
+        """The end of a push-to-talk turn: the stream stops VAD_TAIL later, so the last syllables
+        reach the hub. Uploading is switched off first, so the page says "thinking" meanwhile."""
+        self.uploading = False
+        self.vad_tail_until = time.monotonic() + VAD_TAIL
+        await asyncio.sleep(VAD_TAIL)
+        if self.hub.connected and not self.uploading:
+            await self.hub.send({'type': 'listen', 'state': 'stop'})
+
     async def stop_uploading(self, missed=False):
         self.uploading = False
         self.deadline = None
+        self.vad_tail_until = 0.0
         if missed:
             self.play('miss')
             self.events.publish('toast', {'kind': 'info', 'text': '没听清，可以再说一次「小麦小麦」'})
@@ -525,6 +553,7 @@ class Client:
             # what was just said is dropped (the hub drops it too): stop sending the rest of it
             self.uploading = False
         self.vad_ended = self.recognising = self.awaiting_text = self.hub_pending = False
+        self.vad_tail_until = 0.0
         self.aborted_at = self.abort_pending = now
         log.info('abort while %s (%s)', phase, reason or 'button')
         await self.hub.send(msg)
@@ -590,8 +619,10 @@ class Client:
     async def ptt_stop(self):
         self.ptt_held = False
         if self.uploading:
-            await self.hub.send({'type': 'listen', 'state': 'stop'})
-            self.uploading = False
+            # hold the stream open for VAD_TAIL: "listen stop" is an estimate too, and the last
+            # syllables are what got lost (the hub takes what arrived before the stop)
+            self.uploading = False       # the page says "thinking"; the packets still go out (VAD_TAIL)
+            asyncio.create_task(self._ptt_stop_upload())
             self.awaiting_text = True   # the hub's "nothing recognised" ends it at once
             self.set_state('thinking')
             self.deadline = time.monotonic() + 8   # back to idle if nothing comes back
@@ -636,6 +667,7 @@ class Client:
                 self.heard = True
                 self.awaiting_text = False
                 self.recognising = self.vad_ended = False
+                self.vad_tail_until = 0.0
                 self.hub_pending = False
                 self.deadline = None
                 self.recognised += 1
@@ -656,6 +688,9 @@ class Client:
                 self.hub_pending = True
                 if self.uploading and not self.recognising:
                     self.recognising = self.vad_ended = True
+                    # the hub's estimate of where the sentence ended: keep streaming a moment longer
+                    # so its last syllables arrive (it ignores audio after its own end)
+                    self.vad_tail_until = time.monotonic() + VAD_TAIL
                     self.set_state(self.state)
             elif state == 'empty':
                 self.hub_pending = self.vad_ended = False
@@ -1507,6 +1542,8 @@ class Client:
                 log.error('audio is dead (%s): exiting to be restarted', stalled)
                 os._exit(1)
             if self.uploading and self.audio.mic_level > SPEECH_RMS:
+                if not self.speech_end or self.speech_end < self.listen_since:
+                    self.speech_start = now   # first sound of this turn
                 self.speech_end = now
                 if self.recognising:   # talking again: the hub listens on
                     self.recognising = False
@@ -1516,8 +1553,12 @@ class Client:
                     # wake never keeps the mic open past MAX_LISTEN. The clamp used to shrink the
                     # window to listen_since + MAX_LISTEN (already in the past by then), so a long
                     # sentence was cut off mid-way as soon as it crossed 60 s.
+                    # The wait after sound is the time the hub needs to see the end of a sentence
+                    # (its VAD) before it recognises: 2.5 s on top of every question, even "几点".
+                    # Once the user has been talking for QUICK_END that is enough.
+                    wait = 2.5 if now - self.speech_start < QUICK_END else 0.6
                     if self.listen_since + MAX_LISTEN > now:
-                        self.deadline = min(max(self.deadline, now + 2.5), self.listen_since + MAX_LISTEN)
+                        self.deadline = min(max(self.deadline, now + wait), self.listen_since + MAX_LISTEN)
             if self.uploading and self.listen_mode == 'manual' and now > self.listen_since + MAX_LISTEN:
                 # push-to-talk held (or a release lost) for too long: the hub buffers all of it
                 log.info('push-to-talk open for %d s: stopping it', MAX_LISTEN)

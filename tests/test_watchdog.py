@@ -129,6 +129,7 @@ async def test_talking_past_the_follow_up_window_keeps_the_mic_until_the_cap(mon
     c.deadline = clock[0] + 10          # the follow-up window
     c.heard = False
     c.speech_end = clock[0] + 1
+    c.speech_start = clock[0]
     c.audio.mic_level = 1.0             # the user is talking
     c.audio.stalled = lambda: None
     c.hub_pending = True
@@ -149,18 +150,28 @@ async def test_talking_past_the_follow_up_window_keeps_the_mic_until_the_cap(mon
     # a helper that runs exactly the deadline part of the ticker body with our clock
     def tick(now):
         if c.uploading and c.audio.mic_level > app.SPEECH_RMS:
+            if not c.speech_end or c.speech_end < c.listen_since:
+                c.speech_start = now
             c.speech_end = now
             if c.deadline and c.listen_since + app.MAX_LISTEN > now:
-                c.deadline = min(max(c.deadline, now + 2.5), c.listen_since + app.MAX_LISTEN)
+                wait = 2.5 if now - c.speech_start < app.QUICK_END else 0.6
+                c.deadline = min(max(c.deadline, now + wait), c.listen_since + app.MAX_LISTEN)
         return now > c.deadline
 
     # still talking past the follow-up window, under the cap: the mic stays open
     clock[0] += 11
+    c.speech_start = clock[0]                            # the turn's first sound comes now
     assert tick(clock[0]) is False
-    assert c.deadline == pytest.approx(clock[0] + 2.5)
+    assert c.deadline == pytest.approx(clock[0] + 2.5)   # the first sound of the turn: the full wait
 
+    # talking on: the hub has had time to see the sentence, so the mic closes 0.6 s after the last sound
+    for _ in range(20):
+        clock[0] += 0.1
+        assert tick(clock[0]) is False
+        wait = 2.5 if clock[0] - c.speech_start < app.QUICK_END else 0.6
+        assert c.deadline == pytest.approx(min(max(c.deadline, clock[0] + wait), c.listen_since + app.MAX_LISTEN))
     # past the cap: the clamp no longer applies and the deadline is in the past
     clock[0] = c.listen_since + app.MAX_LISTEN + 0.5
     assert tick(clock[0]) is True
     # the deadline stays where it was (not pushed forward any more), and is now in the past
-    assert c.deadline == pytest.approx(1013.5) and c.deadline < clock[0]
+    assert c.deadline == pytest.approx(1014.6) and c.deadline < clock[0]

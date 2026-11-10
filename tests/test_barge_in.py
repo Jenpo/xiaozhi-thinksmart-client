@@ -331,3 +331,50 @@ async def test_push_to_talk_with_nothing_recognised_ends_at_once():
     assert c.state == 'thinking' and c.status()['recognising']
     await c._on_json({'type': 'vad', 'state': 'empty'})
     assert c.state == 'idle' and shown == ['没听清，可以再说一次「小麦小麦」']
+
+
+@pytest.mark.asyncio
+async def test_the_mic_stays_open_a_moment_after_the_hubs_vad_end():
+    """The hub's "vad end" is an estimate. Closing the stream the moment it arrived dropped the last
+    syllables (one question came back as "你几岁， 你几岁"). The hub ignores audio after its own end."""
+    c = make_client()
+    await c.start_listening('realtime')
+    await c._on_json({'type': 'vad', 'state': 'end'})
+    assert c.uploading and c.vad_ended                      # still sending
+    assert c.vad_tail_until > time.monotonic()              # for VAD_TAIL more seconds
+    await c._on_json({'type': 'stt', 'text': '你几岁'})
+    assert c.vad_tail_until == 0.0                          # the text ends it
+
+
+@pytest.mark.asyncio
+async def test_the_mic_worker_does_not_encode_a_long_backlog_at_once():
+    """A wake word after 4 s of silence leaves that backlog; encoding it all in one block stalled the
+    worker (the mic fell behind, and the wake word stopped being heard)."""
+    c = make_client()
+    c.kws = types.SimpleNamespace(feed=lambda b: None)
+    c.backlog = [np.zeros(320, np.float32)] * 200           # 4 s, the most kept
+    c.uploading = True
+    c.vad_ended = False
+    encoded = []
+    c.encoder = types.SimpleNamespace(encode=lambda pcm: encoded.append(1) or b'')
+    queued = []
+    c.loop = types.SimpleNamespace(call_soon_threadsafe=lambda fn, *a: fn(*a))
+    c._queue_packet = lambda *args: queued.append(args[-1])
+    c._on_block(np.zeros(320, np.float32), np.zeros(320, np.float32))
+    assert len(encoded) == 76                               # 1.5 s now, not 201 blocks
+    assert c.backlog is not None and len(c.backlog) == 125  # the rest goes with the next blocks
+
+
+@pytest.mark.asyncio
+async def test_push_to_talk_stops_the_stream_a_moment_after_the_release(monkeypatch):
+    """The release is the end of the sentence: "listen stop" goes out VAD_TAIL later so the last
+    syllables are uploaded, not cut off."""
+    from thinksmart_client import app as app_mod
+    monkeypatch.setattr(app_mod, 'VAD_TAIL', 0.05)
+    c = make_client()
+    await c.ptt_start()
+    await c.ptt_stop()
+    assert c.state == 'thinking' and not c.uploading
+    assert ('listen', 'stop') not in c.hub.kinds()          # still uploading the tail
+    await asyncio.sleep(0.1)
+    assert c.hub.kinds()[-1] == ('listen', 'stop')
