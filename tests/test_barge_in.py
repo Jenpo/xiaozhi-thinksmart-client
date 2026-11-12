@@ -71,7 +71,6 @@ def make_client():
     c.reply_samples = c.reply_packets = c.muted_packets = 0
     c.recognised = 0
     c.threads, c.entry, c.models = {}, None, {'current': None, 'options': []}
-    c.devices = {'homes': [], 'devices': [], 'error': None}   # the HA card's poller reads this
     c.bot_msg = None
     c.decoder = None
     c._seq = 0
@@ -200,8 +199,6 @@ async def test_newer_question_while_reopening_keeps_the_mic_closed():
 
 def test_linear_canceller_removes_echo_and_keeps_the_voice():
     from thinksmart_client.speex_aec import LinearAec
-    if getattr(LinearAec, 'STUBBED', False):
-        pytest.skip('libspeexdsp not installed here (conftest stub)')
     rng = np.random.default_rng(1)
     rate, n = 16000, 16000 * 12
     far = rng.normal(0, 0.1, n).astype(np.float32)
@@ -331,78 +328,3 @@ async def test_push_to_talk_with_nothing_recognised_ends_at_once():
     assert c.state == 'thinking' and c.status()['recognising']
     await c._on_json({'type': 'vad', 'state': 'empty'})
     assert c.state == 'idle' and shown == ['没听清，可以再说一次「小麦小麦」']
-
-
-@pytest.mark.asyncio
-async def test_the_mic_stays_open_a_moment_after_the_hubs_vad_end():
-    """The hub's "vad end" is an estimate. Closing the stream the moment it arrived dropped the last
-    syllables (one question came back as "你几岁， 你几岁"). The hub ignores audio after its own end."""
-    c = make_client()
-    await c.start_listening('realtime')
-    await c._on_json({'type': 'vad', 'state': 'end'})
-    assert c.uploading and c.vad_ended                      # still sending
-    assert c.vad_tail_until > time.monotonic()              # for VAD_TAIL more seconds
-    await c._on_json({'type': 'stt', 'text': '你几岁'})
-    assert c.vad_tail_until == 0.0                          # the text ends it
-
-
-@pytest.mark.asyncio
-async def test_the_mic_worker_does_not_encode_a_long_backlog_at_once():
-    """A wake word after 4 s of silence leaves that backlog; encoding it all in one block stalled the
-    worker (the mic fell behind, and the wake word stopped being heard)."""
-    c = make_client()
-    c.kws = types.SimpleNamespace(feed=lambda b: None)
-    c.backlog = [np.zeros(320, np.float32)] * 200           # 4 s, the most kept
-    c.uploading = True
-    c.vad_ended = False
-    encoded = []
-    c.encoder = types.SimpleNamespace(encode=lambda pcm: encoded.append(1) or b'')
-    queued = []
-    c.loop = types.SimpleNamespace(call_soon_threadsafe=lambda fn, *a: fn(*a))
-    c._queue_packet = lambda *args: queued.append(args[-1])
-    c._on_block(np.zeros(320, np.float32), np.zeros(320, np.float32))
-    assert len(encoded) == 76                               # 1.5 s now, not 201 blocks
-    assert c.backlog is not None and len(c.backlog) == 125  # the rest goes with the next blocks
-
-
-@pytest.mark.asyncio
-async def test_push_to_talk_stops_the_stream_a_moment_after_the_release(monkeypatch):
-    """The release is the end of the sentence: "listen stop" goes out VAD_TAIL later so the last
-    syllables are uploaded, not cut off."""
-    from thinksmart_client import app as app_mod
-    monkeypatch.setattr(app_mod, 'VAD_TAIL', 0.05)
-    c = make_client()
-    await c.ptt_start()
-    await c.ptt_stop()
-    assert c.state == 'thinking' and not c.uploading
-    assert ('listen', 'stop') not in c.hub.kinds()          # still uploading the tail
-    await asyncio.sleep(0.1)
-    assert c.hub.kinds()[-1] == ('listen', 'stop')
-
-
-@pytest.mark.asyncio
-async def test_the_tail_keeps_uploading_while_the_page_says_thinking(monkeypatch):
-    """The packets after "vad end" must still reach the hub: uploading=False alone made the sender
-    drop them, so the tail never went out."""
-    from thinksmart_client import app as app_mod
-    monkeypatch.setattr(app_mod, 'VAD_TAIL', 0.05)
-    c = make_client()
-    sent = []
-
-    async def send_audio(packet):
-        sent.append(packet)
-    c.hub.send_audio = send_audio
-    await c.start_listening('realtime')
-    await c._on_json({'type': 'vad', 'state': 'end'})
-    c.uploading = False                    # what the "stt" handler does
-    assert c.stream_tail()
-    c._send_q = asyncio.Queue()
-    c._send_q.put_nowait(b'a')
-    t = asyncio.create_task(c._sender())
-    await asyncio.sleep(0.02)
-    assert sent == [b'a']
-    await asyncio.sleep(0.06)
-    c._send_q.put_nowait(b'b')
-    await asyncio.sleep(0.02)
-    t.cancel()
-    assert sent == [b'a']                  # past the tail: dropped

@@ -47,17 +47,13 @@ async def test_ptt_released_before_connected_listens_like_a_tap():
 async def test_ptt_held_too_long_is_stopped(monkeypatch):
     from thinksmart_client import app as app_mod
     monkeypatch.setattr(app_mod, 'MAX_LISTEN', 0.2)
-    monkeypatch.setattr(app_mod, 'VAD_TAIL', 0.05)
     c = make_client()
     await c.ptt_start()
     assert c.uploading and c.listen_mode == 'manual' and c.deadline is None
     ticker = asyncio.create_task(c._ticker())
     await asyncio.sleep(0.45)
     ticker.cancel()
-    # the stream stays open VAD_TAIL longer, then the stop goes out (a task of its own)
-    assert not c.uploading and c.state == 'thinking'
-    await asyncio.sleep(0.1)
-    assert {'type': 'listen', 'state': 'stop'} in c.hub.sent
+    assert not c.uploading and {'type': 'listen', 'state': 'stop'} in c.hub.sent
 
 
 @pytest.mark.asyncio
