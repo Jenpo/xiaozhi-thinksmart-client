@@ -27,14 +27,16 @@ const ui = {
 // 而不是「帮我想个周末计划」。每组一个短名，页面上可以横向切。
 const SCENES = [
   ['日常', [
-    ['明天北京天气怎么样？', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>'],
+    // 不带城市：hub 的上下文里已有本地 7 天预报，模型直接答，不用多走一轮 get_weather 工具
+    ['明天天气怎么样？', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>'],
     ['帮我定一个 20 分钟后的计时', '#5ee0ff24', '#8ff0ff', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
     ['讲个冷笑话', '#ff7ac824', '#ff9bd6', '<circle cx="12" cy="12" r="9"/><path d="M8 14.5a5 5 0 0 0 8 0M9 9.5h.01M15 9.5h.01"/>'],
   ]],
   ['音乐', [
     ['放点王菲', '#9b7bff2b', '#c8b4ff', '<path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>'],
     ['在电视上放点音乐', '#5ee0ff24', '#8ff0ff', '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/>'],
-    ['在 HomePod 上放音乐', '#ffb54729', '#ffcf7a', '<rect x="6" y="3" width="12" height="18" rx="6"/><circle cx="12" cy="16" r="1.5"/>'],
+    // HomePod 通路 11-10 已从面板下线，这里不再推荐它
+    ['来点古典音乐，连着放', '#ffb54729', '#ffcf7a', '<path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>'],
     ['把音量调小一点', '#9b7bff2b', '#c8b4ff', '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 12h4"/>'],
   ]],
   ['家电', [
@@ -1110,7 +1112,7 @@ if ($('musicPill')) {
   $('musicPauseLocal').addEventListener('click', async () => {
     if (MP.target !== 'local') {
       // 非本机通路没有独立的 pause 语义，明确告知而不是静默当暂停
-      toast('这条通路只能停止，暂停请用电视/HomePod 自己的遥控', 'info');
+      toast('这条通路只能停止，暂停请用电视自己的遥控', 'info');
     }
     await stopMusic();
   });
@@ -1688,10 +1690,30 @@ for (const [name] of SCENES) {
   t.type = 'button';
   t.textContent = name;
   t.setAttribute('role', 'tab');
-  t.addEventListener('click', () => { ui.scene = SCENES.findIndex(s => s[0] === name); renderChips(); });
+  t.addEventListener('click', () => {
+    ui.scene = SCENES.findIndex(s => s[0] === name);
+    ui.scenePicked = Date.now();
+    renderChips();
+  });
   $('sceneTabs').appendChild(t);
 }
+
+// 按时段默认场景：21:00-06:00 是「夜间」（晚安/调暗/定闹钟），其余「日常」。
+// 用户自己点过标签的 10 分钟内不跟着时间改，免得刚选的组被换走。
+const SCENE_NIGHT = SCENES.findIndex(s => s[0] === '夜间');
+function sceneForNow(d = new Date()) {
+  const h = d.getHours();
+  return (h >= 21 || h < 6) && SCENE_NIGHT >= 0 ? SCENE_NIGHT : 0;
+}
+function followClock() {
+  if (DEMO !== null) return;                       // ?demo=<scene> 预览由 demo 自己切
+  if (ui.scenePicked && Date.now() - ui.scenePicked < 10 * 60e3) return;
+  const want = sceneForNow();
+  if (want !== ui.scene) { ui.scene = want; renderChips(); }
+}
+ui.scene = DEMO === null ? sceneForNow() : 0;
 renderChips();
+setInterval(followClock, 60e3);
 
 /* ---- demo: fake client for previewing the page on a desktop browser ---- */
 const demo = DEMO === null ? null : (() => {

@@ -71,6 +71,7 @@ def make_client():
     c.reply_samples = c.reply_packets = c.muted_packets = 0
     c.recognised = 0
     c.threads, c.entry, c.models = {}, None, {'current': None, 'options': []}
+    c.devices = {'homes': [], 'devices': [], 'error': None}
     c.bot_msg = None
     c.decoder = None
     c._seq = 0
@@ -199,6 +200,8 @@ async def test_newer_question_while_reopening_keeps_the_mic_closed():
 
 def test_linear_canceller_removes_echo_and_keeps_the_voice():
     from thinksmart_client.speex_aec import LinearAec
+    if getattr(LinearAec, 'STUBBED', False):
+        pytest.skip('libspeexdsp not installed here (tests/conftest.py stand-in)')
     rng = np.random.default_rng(1)
     rate, n = 16000, 16000 * 12
     far = rng.normal(0, 0.1, n).astype(np.float32)

@@ -72,7 +72,8 @@ RECOGNITION_WAIT = 15    # seconds to wait for the hub's text after the user sto
 # every sound, so a one-word question took that much longer to reach the hub)
 QUICK_END = 1.2
 SHORT_END_WAIT = 1.0   # a short question: enough for the hub's 0.5 s silence threshold
-NORMAL_STOP_TAIL = 0.6   # a normal "tts stop" leaves less than this queued; more means aborted
+THINK_CUE_AFTER = 2.5    # config think_cue_seconds: no reply this long after the question -> "嗯，我看看"
+NORMAL_STOP_TAIL = 0.6  # a normal "tts stop" leaves less than this queued; more means aborted
 PUNCT = set('，。！？；：、,.!?;:…')
 REPORT_POLL = 10         # seconds between asking the hub for pending reports (local HTTP)
 HISTORY_LIMIT = 50       # messages per model shown from the hub's saved conversations
@@ -255,6 +256,10 @@ class Client:
             # the one-character "在" comes in as the second note rings, over its tail: played after
             # the whole chime it came ~0.4 s later
             self.sounds['wake'] = overlay(self.sounds['wake'], load_wav(sounds / 'zai.wav'), ZAI_AT)
+        # fillers for a slow reply (_think_cue), taken in turn so the same words don't repeat
+        self.think_cues = [load_wav(p) for p in sorted(sounds.glob('think-*.wav'))]
+        self.think_cue_n = 0
+        self.think_task = None
         self.speech_end = 0.0         # monotonic: last time the user was heard talking
         self.speech_start = 0.0       # monotonic: when the talking of this turn began (QUICK_END)
         self.vad_tail_until = 0.0     # monotonic: keep uploading until then after the hub's "vad end"
@@ -686,6 +691,7 @@ class Client:
                 m = self.question = self.add_message('user', text)
                 self.set_state('thinking')
                 asyncio.create_task(self._refresh_after_question(m))
+                self._arm_think_cue(m)
         elif kind == 'vad':
             # VAD events, a feature asked for in our hello. end: the hub decided the user finished and
             # is recognising; empty: it recognised nothing (a cough, too short, only echo)
@@ -810,6 +816,30 @@ class Client:
             x['entry'] = self.entry
         self.threads.setdefault(self.entry, []).extend(moved)
         self.events.publish('thread', {'entry': self.entry, 'messages': self.threads[self.entry]})
+
+    def _arm_think_cue(self, m):
+        """Question `m` was recognised: if no reply has started THINK_CUE_AFTER later, fill the
+        silence. Tool turns (a song, the TV, Home Assistant) run the model twice and stay silent
+        6-12 s; the relay used to fill that, the direct model endpoint doesn't."""
+        after = self.cfg.get('think_cue_seconds', THINK_CUE_AFTER)
+        if not after or not getattr(self, 'think_cues', None):
+            return
+        if self.think_task:
+            self.think_task.cancel()
+        self.think_task = asyncio.create_task(self._think_cue(m, after))
+
+    async def _think_cue(self, m, after):
+        await asyncio.sleep(after)
+        # still this question, nothing of the reply yet, nothing else playing, not interrupted
+        if (self.question is not m or self.bot_msg is not None or self.state != 'thinking'
+                or self.mute_audio or self.abort_pending is not None or self.reply_packets
+                or self.audio.player.buffered() > 0.05 or not self.hub.connected):
+            return
+        cue = self.think_cues[self.think_cue_n % len(self.think_cues)]
+        self.think_cue_n += 1
+        log.info('no reply %.1f s after the question: a short filler', after)
+        # queued ahead of the reply, which simply follows it; an abort trims it with the rest
+        self.audio.player.push(cue)
 
     async def _listen_after_reply(self):
         """Reopen the mic for a follow-up once the last of the reply has been played (uploading
