@@ -118,20 +118,58 @@ def list_tracks(limit=50, query=""):
     q = (query or "").strip().lower()
     if q:
         items = _match(items, q)
-    items = [t for t in items if _playable(t)]
-    return [_public(t) for t in items[:limit]]
+    # [2026-11-11] 只判到 limit 条为止，不再扫全库
+    out = []
+    checked_dirs = {}
+    for t in items:
+        root = os.path.dirname(t.get("path") or "")
+        if root not in checked_dirs:
+            checked_dirs[root] = _playable(t)
+        if checked_dirs[root]:
+            out.append(_public(t))
+            if len(out) >= limit:
+                break
+    return out
 
 
 def random_tracks(count=20, query=""):
+    """随机取 count 首。
+
+    [2026-11-11] 原来对 18368 首逐个 _playable（=按目录 NFS stat），1734 个目录在
+    设备上一次 80ms，实测 /api/music/random?count=20 要 144s，面板一直黑着。
+    现在按目录去重后抽样：先打乱目录，只 stat 到凑够 count 首为止，正常几个目录就够。
+    """
     items = _load_index()
     q = (query or "").strip().lower()
     if q:
         items = _match(items, q)
-    items = [t for t in items if _playable(t)]
     if not items:
         return []
-    picked = random.sample(items, min(count, len(items)))
-    return [_public(t) for t in picked]
+    by_dir = {}
+    for t in items:
+        by_dir.setdefault(os.path.dirname(t.get("path") or ""), []).append(t)
+    roots = list(by_dir)
+    random.shuffle(roots)
+    picked = []
+    for root in roots:
+        if len(picked) >= count:
+            break
+        cand = by_dir[root]
+        random.shuffle(cand)
+        probe = cand[0]
+        if not _playable(probe):
+            continue
+        picked.extend(cand[:count - len(picked)])
+    if not picked:
+        # 缓存可能整库判死（NFS 抖动）：清一次重试一个目录
+        _exist_cache.clear()
+        for root in roots[:5]:
+            cand = by_dir[root]
+            if cand and _playable(cand[0]):
+                picked.extend(cand[:count])
+                break
+    random.shuffle(picked)
+    return [_public(t) for t in picked[:count]]
 
 
 def find_track(title=""):
