@@ -59,12 +59,15 @@ def make_client():
     c.uploading = False
     c.deadline = None
     c.listen_since = 0.0
+    c.listen_mode = 'realtime'
+    c.ptt_held = False
     c.awaiting_text = False
     c.recognising = False
     c.hub_pending = False
     c.vad_ended = False
     c.aborted_at = c.abort_pending = c.question = None
     c.heard = False
+    c.hold_open = False
     c.mute_audio = False
     c.listen_after_reply = False
     c.powering_off = False

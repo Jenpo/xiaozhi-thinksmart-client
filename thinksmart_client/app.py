@@ -224,6 +224,7 @@ class Client:
         self.abort_pending = None     # monotonic: abort sent, the hub hasn't confirmed it yet (its "tts stop")
         self.question = None          # the user's message of this turn, until its reply starts
         self.heard = False            # anything recognised since this wake
+        self.hold_open = False        # a tool call is running: don't let the idle timer close the mic
         self.mute_audio = False       # after an abort, drop the old reply's frames
         self.listen_after_reply = False   # the mic was closed for this reply: reopen it when played
         self.reply_samples = 0        # reply audio received since "tts start" (to tell what was heard)
@@ -667,6 +668,11 @@ class Client:
             if text.startswith('% '):
                 # not speech: the hub's note that the model calls a tool (for the screens of ESP32 boards)
                 log.info('the model calls %s', text[2:])
+                if self.uploading and self.state in ('listening', 'thinking'):
+                    # the tool runs before the model's first sentence. Holding the mic open keeps the
+                    # hub from closing the connection as idle while a slow tool runs, and anything the
+                    # user says meanwhile still reaches it (the hub ignores it once the reply starts).
+                    self.hold_open = True
             elif text:
                 if self.speech_end > self.listen_since:
                     log.info('recognised %.1f s after the user stopped talking: %s',
@@ -690,6 +696,7 @@ class Client:
                 # on the page right away: asking the hub for its models first took 0.7-2 s
                 m = self.question = self.add_message('user', text)
                 self.set_state('thinking')
+                self.hold_open = False
                 asyncio.create_task(self._refresh_after_question(m))
                 self._arm_think_cue(m)
         elif kind == 'vad':
@@ -735,6 +742,7 @@ class Client:
                 self.decoder = None
                 self.bot_msg = None
                 self.reply_samples = self.reply_packets = self.muted_packets = 0
+                self.hold_open = False
                 self.audio.player.ran_out.clear()
                 self.audio.player.late.clear()
                 self.deadline = None
@@ -779,6 +787,7 @@ class Client:
                     self.events.publish('toast', {'kind': 'error', 'text': '网络还没连上，稍后再试' if not has_default_route()
                                                   else '没收到回答，可能是网络或模型服务连不上，稍后再试'})
                 self.bot_msg = self.question = None
+                self.hold_open = False
                 if self.listen_after_reply:
                     asyncio.create_task(self._listen_after_reply())
                 elif self.uploading:
@@ -1601,7 +1610,12 @@ class Client:
                 log.info('push-to-talk open for %d s: stopping it', MAX_LISTEN)
                 await self.ptt_stop()
             if self.deadline and now > self.deadline:
-                if self.state == 'listening' and self.uploading:
+                if self.hold_open and self.heard and self.state in ('listening', 'thinking') and self.uploading:
+                    # the model called a tool (a pause on the TV, the volume) and is waiting for it: no
+                    # reply yet, so the follow-up window would close the mic mid-turn. Keep it open;
+                    # "tts start" or the hub's idle close ends it as usual.
+                    self.deadline = now + SHORT_END_WAIT
+                elif self.state == 'listening' and self.uploading:
                     # a hub that sends VAD events has answered everything it heard unless one is pending
                     waiting = self.hub_pending or not self.hub.features.get('vad_end')
                     if not self.heard and self.speech_end > self.listen_since and waiting:
