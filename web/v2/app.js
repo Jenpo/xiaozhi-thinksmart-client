@@ -27,7 +27,7 @@ const ui = {
 // 而不是「帮我想个周末计划」。每组一个短名，页面上可以横向切。
 const SCENES = [
   ['日常', [
-    // 不带城市：hub 的上下文里已有本地 7 天预报，模型直接答，不用多走一轮 get_weather 工具
+    // 不带城市：hub 提示词要求直接调 get_weather 不传 location，用设备所在城市（默认广州，见 hub 配置）
     ['明天天气怎么样？', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>'],
     ['帮我定一个 20 分钟后的计时', '#5ee0ff24', '#8ff0ff', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
     ['讲个冷笑话', '#ff7ac824', '#ff9bd6', '<circle cx="12" cy="12" r="9"/><path d="M8 14.5a5 5 0 0 0 8 0M9 9.5h.01M15 9.5h.01"/>'],
@@ -103,6 +103,38 @@ function tick() {
   $('greet').textContent = h < 5 ? '夜深了' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : h < 23 ? '晚上好' : '夜深了';
   $('ringTime').textContent = hm;
   tickAlarms();
+}
+
+/* ---- 首页天气：今天 / 明天，30 分钟刷新一次（客户端缓存 Open-Meteo，断网就整行隐藏） ---- */
+const WX_ICON = {
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>',
+  'cloud-sun': '<path d="M8 3.5v1.2M3.6 8H2.4M4.8 4.8l.9.9M11.2 4.8l-.9.9"/><path d="M5.6 10.4A3 3 0 1 1 10.5 7"/><path d="M17.5 19H9a4 4 0 1 1 .9-7.9A5 5 0 0 1 19.5 13a3 3 0 0 1-2 6z"/>',
+  cloud: '<path d="M17.5 19H9a5 5 0 1 1 1.2-9.9A6 6 0 0 1 21 12.5 3.5 3.5 0 0 1 17.5 19z"/>',
+  rain: '<path d="M17.5 15H9a5 5 0 1 1 1.2-9.9A6 6 0 0 1 21 8.5 3.5 3.5 0 0 1 17.5 15z"/><path d="M9 18l-1 2.5M13 18l-1 2.5M17 18l-1 2.5"/>',
+  snow: '<path d="M17.5 15H9a5 5 0 1 1 1.2-9.9A6 6 0 0 1 21 8.5 3.5 3.5 0 0 1 17.5 15z"/><path d="M9 19h.01M13 20h.01M17 19h.01"/>',
+  storm: '<path d="M17.5 15H9a5 5 0 1 1 1.2-9.9A6 6 0 0 1 21 8.5 3.5 3.5 0 0 1 17.5 15z"/><path d="M13 14l-2 4h3l-2 4"/>',
+  fog: '<path d="M4 9h16M3 13h18M5 17h14"/>',
+};
+function renderWeather(w) {
+  const box = $('homeWeather');
+  if (!box) return;
+  if (!w || !w.days || !w.days.length) { box.hidden = true; return; }
+  const svg = k => `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round">${WX_ICON[k] || WX_ICON.cloud}</svg>`;
+  const day = d => `<div class="wx-day">${svg(d.icon)}<span class="wx-label">${esc(d.label)}</span>` +
+    `<b>${esc(d.text)}</b><span class="wx-t">${d.lo ?? '–'}–${d.hi ?? '–'}°</span>` +
+    (d.rain != null && d.rain >= 30 ? `<span class="wx-rain">降水 ${d.rain}%</span>` : '') + '</div>';
+  const now = w.now && w.now.temp != null ? `<div class="wx-now">${esc(w.city || '')} <b>${w.now.temp}°</b></div>` : '';
+  box.innerHTML = now + w.days.map(day).join('');
+  box.hidden = false;
+}
+async function loadWeather() {
+  if (DEMO !== null) {
+    return renderWeather({ city: '广州', now: { temp: 21, icon: 'cloud' }, days: [
+      { label: '今天', text: '阴', icon: 'cloud', lo: 18, hi: 27, rain: 10 },
+      { label: '明天', text: '小雨', icon: 'rain', lo: 17, hi: 24, rain: 60 }] });
+  }
+  try { renderWeather(await (await fetch('/api/weather')).json()); } catch (e) { /* 没网就不显示 */ }
 }
 
 /* ---- the orb's corona: 48 bars around the orb, one shape per state ----
@@ -311,7 +343,7 @@ function renderBanner(connected, sleeping, micOff) {
   }
   let text = '', tone = 'info';
   if (!connected && !micOff) {
-    text = backendUp() ? '后台在，点麦克风开始对话' : '还没连上后台，点麦克风会重新连';
+    text = backendUp() ? '准备好了，叫我或点麦克风' : '还没连上后台，点麦克风会重新连';
     tone = backendUp() ? 'info' : 'warn';
   } else if (micOff) {
     text = '麦克风已关，拨开机身侧面开关才能说话';
@@ -1865,6 +1897,8 @@ const demo = DEMO === null ? null : (() => {
 
 tick();
 setInterval(tick, 1000);
+loadWeather();
+setInterval(loadWeather, 30 * 60 * 1000);
 renderStatus();
 renderThread();
 if (demo) demo.start();

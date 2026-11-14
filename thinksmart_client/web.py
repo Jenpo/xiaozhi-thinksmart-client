@@ -6,7 +6,7 @@ import time
 
 from aiohttp import web
 
-from . import __version__, music_api, update
+from . import __version__, music_api, update, weather
 from .app import ROOT, Client, local_ip
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,12 @@ def make_app(client: Client):
         body = await request.json()
         asyncio.create_task(client.say(body.get('text', '')))
         return web.json_response({'ok': True})
+
+    forecast = weather.Weather((getattr(client, 'cfg', None) or {}).get('weather_city', '广州'))
+
+    async def weather_now(_request):
+        # the home screen line; empty when the network or the service is down (never an error page)
+        return web.json_response(await forecast.get() or {})
 
     async def model(request):
         body = await request.json()
@@ -370,6 +376,7 @@ def make_app(client: Client):
     app.router.add_post('/api/music/stop', music_stop)
     app.router.add_post('/api/music/volume', music_volume)
     app.router.add_get('/api/health', health)
+    app.router.add_get('/api/weather', weather_now)
     app.router.add_get('/api/network', network)
     app.router.add_post('/api/power-off', power_off)
     app.router.add_post('/api/update/check', update_check)
