@@ -51,6 +51,8 @@ const SCENES = [
   ]],
 ];
 
+let chipLock = false;
+const CHIP_COOLDOWN_MS = 1500;
 function renderChips() {
   const box = $('chips');
   if (!box) return;
@@ -67,6 +69,10 @@ function renderChips() {
     b.innerHTML = `<i style="background:${bg};color:${fg}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></i>${esc(q)}`;
     b.addEventListener('click', async () => {
+      // 触屏偶尔一次点按报 6-15 次 click（11-14 日志），还会连带点到相邻卡片：
+      // 一张卡在发送/冷却期间，所有卡片都不再响应
+      if (chipLock) return;
+      chipLock = true;
       // 点了立即给反馈：卡片进 loading，避免用户以为没点中而重复点
       b.classList.add('sending');
       b.setAttribute('aria-busy', 'true');
@@ -75,8 +81,11 @@ function renderChips() {
       } catch (e) {
         toast('这句话没发出去，再点一次', 'error');
       } finally {
-        b.classList.remove('sending');
-        b.removeAttribute('aria-busy');
+        setTimeout(() => {
+          chipLock = false;
+          b.classList.remove('sending');
+          b.removeAttribute('aria-busy');
+        }, CHIP_COOLDOWN_MS);
       }
     });
     box.appendChild(b);

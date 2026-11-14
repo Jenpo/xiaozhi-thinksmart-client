@@ -74,6 +74,10 @@ QUICK_END = 1.2
 SHORT_END_WAIT = 1.6   # a short question: the hub's silence threshold is 900 ms now (one breath)
 # seconds of silence the hub needs to see the end of a longer sentence before it recognises
 LONG_END_WAIT = 0.9
+# Text questions (suggestion cards) closer together than this are one tap. The kiosk's touch screen
+# sometimes reports a tap 6-15 times in the same second (2026-11-14 09:16:26 / 12:31:54): each copy
+# aborted the turn before it, and a ghost tap on the neighbouring card replaced the real question.
+SAY_DEBOUNCE = 1.5
 THINK_CUE_AFTER = 2.5    # config think_cue_seconds: no reply this long after the question -> "嗯，我看看"
 NORMAL_STOP_TAIL = 0.6  # a normal "tts stop" leaves less than this queued; more means aborted
 PUNCT = set('，。！？；：、,.!?;:…')
@@ -267,6 +271,7 @@ class Client:
         self.speech_start = 0.0       # monotonic: when the talking of this turn began (QUICK_END)
         self.vad_tail_until = 0.0     # monotonic: keep uploading until then after the hub's "vad end"
         self.tools_listed = asyncio.Event()   # the hub asked for our device tools on this connection
+        self.last_say = 0.0           # monotonic: last text question accepted (see SAY_DEBOUNCE)
         self.connecting = asyncio.Lock()      # one connection: a second wake while connecting waits for it
         self.screen = Screen()
         try:
@@ -597,6 +602,12 @@ class Client:
         text = (text or '').strip()
         if not text:
             return
+        now = time.monotonic()
+        last = getattr(self, 'last_say', 0.0)
+        if last and now - last < SAY_DEBOUNCE:
+            log.info('text question %.2f s after the last one, taken as the same tap: %s', now - last, text)
+            return
+        self.last_say = now
         if self.in_turn():
             await self.abort()
         if not await self.ensure_connected():
