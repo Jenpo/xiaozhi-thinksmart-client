@@ -71,7 +71,9 @@ RECOGNITION_WAIT = 15    # seconds to wait for the hub's text after the user sto
 # seconds of speech before the follow-up window may close the mic at once (it used to wait 2.5 s after
 # every sound, so a one-word question took that much longer to reach the hub)
 QUICK_END = 1.2
-SHORT_END_WAIT = 1.0   # a short question: enough for the hub's 0.5 s silence threshold
+SHORT_END_WAIT = 1.6   # a short question: the hub's silence threshold is 900 ms now (one breath)
+# seconds of silence the hub needs to see the end of a longer sentence before it recognises
+LONG_END_WAIT = 0.9
 THINK_CUE_AFTER = 2.5    # config think_cue_seconds: no reply this long after the question -> "嗯，我看看"
 NORMAL_STOP_TAIL = 0.6  # a normal "tts stop" leaves less than this queued; more means aborted
 PUNCT = set('，。！？；：、,.!?;:…')
@@ -1602,7 +1604,7 @@ class Client:
                     # (its VAD) before it recognises. A short "几点" used to wait the full 2.5 s;
                     # the hub's silence threshold is 0.5 s now, so 1.0 s is enough for it, and the
                     # tail (VAD_TAIL) keeps the last syllables going anyway.
-                    wait = SHORT_END_WAIT if now - self.speech_start < QUICK_END else 0.6
+                    wait = SHORT_END_WAIT if now - self.speech_start < QUICK_END else LONG_END_WAIT
                     if self.listen_since + MAX_LISTEN > now:
                         self.deadline = min(max(self.deadline, now + wait), self.listen_since + MAX_LISTEN)
             if self.uploading and self.listen_mode == 'manual' and now > self.listen_since + MAX_LISTEN:
