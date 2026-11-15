@@ -4,16 +4,23 @@
 thinksmart-camera 包里（2026-11-15 装上并验证：S5KC505A 3-0037 识别、30fps 出图）。
 
 接口（只在本机 127.0.0.1 的 kiosk 页面上用）：
-  POST /api/hw/capture           拍照并交给网关分析，返回网关的 JSON
+  POST /api/hw/capture           {language, countdown?, source?} 倒数→拍照→交给网关分析，返回网关的 JSON
+                                 同一时间只拍一张（第二个请求回 409 busy）；镜头盖关着回 409 lens_closed
   GET  /api/hw/latest            网关最近一次的结果（页面重连/切场景时恢复）
   POST /api/hw/clear             清掉网关的最近一次
-  GET  /api/hw/photo?which=thumb|full  拿最近一次的照片（缩略图默认）
+  GET  /api/hw/photo             拿最近一次的缩略图
+  GET  /api/hw/diag              服务进程自己的设备权限 + 镜头盖状态
 分析本身在网关（/kiosk/hw/analyze），这里只负责拍和转。
+拍照各阶段经 /events 推 'homework' 事件给页面（countdown → shooting → analyzing → done/error），
+语音触发（hub 的 homework_check）时屏幕也会自动打开面板、显示倒数和结果。
 """
+import array
+import asyncio
 import base64
+import fcntl
+import glob
 import logging
 import os
-
 import shutil
 import subprocess
 import time
@@ -28,6 +35,37 @@ CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 960
 CAPTURE_TIMEOUT = 60
 PHOTO_DIR = os.path.expanduser('~/.local/share/thinksmart/photo')
+MAX_COUNTDOWN = 5
+
+# 镜头盖：内核把侧面拨片报成 EV_SW / SW_CAMERA_LENS_COVER（1 = 盖着）
+EV_SW = 0x05
+SW_CAMERA_LENS_COVER = 0x09
+SW_MAX = 0x10
+
+def _ioc_read(nr, size):
+    return (2 << 30) | (size << 16) | (ord('E') << 8) | nr
+
+def _lens_state():
+    """读镜头盖：True=盖着，False=开着，None=找不到这个开关（不拦拍照）。"""
+    nbytes = SW_MAX // 8 + 1
+    for path in sorted(glob.glob('/dev/input/event*')):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            bits = array.array('B', [0] * nbytes)
+            fcntl.ioctl(fd, _ioc_read(0x20 + EV_SW, nbytes), bits, True)       # EVIOCGBIT(EV_SW)
+            if not bits[SW_CAMERA_LENS_COVER // 8] & (1 << (SW_CAMERA_LENS_COVER % 8)):
+                continue
+            state = array.array('B', [0] * nbytes)
+            fcntl.ioctl(fd, _ioc_read(0x1b, nbytes), state, True)              # EVIOCGSW
+            return bool(state[SW_CAMERA_LENS_COVER // 8] & (1 << (SW_CAMERA_LENS_COVER % 8)))
+        except OSError:
+            continue
+        finally:
+            os.close(fd)
+    return None
 
 def _gst_available():
     return shutil.which('gst-launch-1.0') is not None
@@ -62,7 +100,7 @@ def _capture_sync(width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT, timeout=CAPTURE_TI
     best = None
     files = []
     try:
-        # 等第二张：第一张常常还在等 AE/AWB 收敛。单张出图实测约 8-12 秒。
+        # 等第二张：第一张常常还在等 AE/AWB 收敛。单张出图实测约 1-2 秒（2026-11-15 回执）。
         while time.monotonic() - started < timeout:
             files = sorted(f for f in os.listdir(tmp) if f.endswith('.jpg'))
             if len(files) >= 2:
@@ -114,6 +152,11 @@ def _capture_sync(width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT, timeout=CAPTURE_TI
 def install(client):
     """把这些接口挂到客户端（和 web.py 里的路由同一份 app）。"""
 
+    lock = asyncio.Lock()
+
+    def push(phase, **data):
+        client.events.publish('homework', {'phase': phase, **data})
+
     async def diag(request):
         """诊断：在服务进程自己身上报告设备权限，排查「同 ns 能开、服务里打不开」。"""
         info = {'pid': os.getpid(), 'groups': os.getgroups(), 'devs': {}}
@@ -125,33 +168,62 @@ def install(client):
                 info['devs'][p] = 'OK major=%d' % os.major(st.st_rdev)
             except OSError as e:
                 info['devs'][p] = 'FAIL %s' % e
+        info['lens_covered'] = await asyncio_to_thread(_lens_state)
+        info['lens_check'] = bool(client.cfg.get('homework_lens_check', True))
+        info['busy'] = lock.locked()
         return web.json_response(info)
 
     async def capture(request):
-        try:
+        body = {}
+        if request.can_read_body:
+            try:
+                body = await request.json()
+            except ValueError:
+                body = {}
+        if not isinstance(body, dict):
             body = {}
-            if request.can_read_body:
-                try:
-                    body = await request.json()
-                except ValueError:
-                    body = {}
-            language = (body.get('language') or 'yue').strip()
-            if not _gst_available():
-                return web.json_response({'ok': False, 'error': '这台设备没有 gst-launch'}, status=501)
-            jpeg = await asyncio_to_thread(_capture_sync)
-        except RuntimeError as e:
-            log.warning('拍照失败: %s', e)
-            return web.json_response({'ok': False, 'error': str(e)}, status=503)
-        except Exception as e:
-            log.exception('拍照失败')
-            return web.json_response({'ok': False, 'error': '拍照失败: %s' % e}, status=500)
-        payload = {'image': base64.b64encode(jpeg).decode(), 'language': language,
-                   'source': 'camera'}
+        language = (body.get('language') or 'yue').strip()
+        source = (body.get('source') or 'page').strip()
         try:
-            data = await client._hub_http('/kiosk/hw/analyze', payload, total=150)
-        except Exception as e:
-            return web.json_response({'ok': False, 'error': '网关没答: %s' % e}, status=502)
-        return web.json_response(data, status=200 if data.get('ok') else 502)
+            countdown = max(0, min(MAX_COUNTDOWN, int(body.get('countdown') or 0)))
+        except (TypeError, ValueError):
+            countdown = 0
+        if lock.locked():
+            # 语音和点按同时来：两次拍照会互删 hw-current 里的帧、抢 /dev/media0
+            return web.json_response({'ok': False, 'code': 'busy', 'error': '正在拍，等一下'}, status=409)
+        async with lock:
+            def fail(code, msg, status):
+                push('error', error=msg, code=code, source=source)
+                return web.json_response({'ok': False, 'code': code, 'error': msg}, status=status)
+
+            if not _gst_available():
+                return fail('no_gst', '这台设备没有 gst-launch', 501)
+            if client.cfg.get('homework_lens_check', True):
+                if await asyncio_to_thread(_lens_state) is True:
+                    return fail('lens_closed', '镜头盖没打开', 409)
+            if countdown:
+                push('countdown', seconds=countdown, language=language, source=source)
+                await asyncio.sleep(countdown)
+            push('shooting', source=source)
+            try:
+                jpeg = await asyncio_to_thread(_capture_sync)
+            except RuntimeError as e:
+                log.warning('拍照失败: %s', e)
+                return fail('capture', str(e), 503)
+            except Exception as e:
+                log.exception('拍照失败')
+                return fail('capture', '拍照失败: %s' % e, 500)
+            push('analyzing', source=source)
+            payload = {'image': base64.b64encode(jpeg).decode(), 'language': language,
+                       'source': 'camera'}
+            try:
+                data = await client._hub_http('/kiosk/hw/analyze', payload, total=150)
+            except Exception as e:
+                return fail('hub', '网关没答: %s' % e, 502)
+            if not data.get('ok'):
+                return fail('analyze', data.get('error') or '没看成', 502)
+            push('done', data=data, source=source)
+            return web.json_response(data)
 
     async def latest(_request):
         try:
@@ -167,18 +239,15 @@ def install(client):
             return web.json_response({'ok': False, 'error': '网关没答: %s' % e}, status=502)
         return web.json_response(data)
 
-    async def photo(request):
-        """最近一次的原图（网关只留缩略图；原图在客户端的拍照目录里没留，所以走网关存的那份）。
-        网关的 /kiosk/hw/latest 带 thumb（data URI），这里解出来当图片回。"""
-        which = request.query.get('which') or 'thumb'
+    async def photo(_request):
+        """最近一次的缩略图：网关 /kiosk/hw/latest 带 thumb（data URI），这里解出来当图片回。
+        （以前的 which=full 实际也回缩略图，已去掉；原图只在网关盘上，按需再开接口。）"""
         try:
             data = await client._hub_http('/kiosk/hw/latest')
         except Exception:
             return web.Response(status=502)
         hw = (data or {}).get('homework') or {}
         uri = hw.get('thumb') or ''
-        if which == 'full':
-            uri = hw.get('thumb') or uri
         if ',' not in uri:
             return web.Response(status=404)
         try:
@@ -212,6 +281,5 @@ def install(client):
             ('/api/hw/diag', diag)]
 
 async def asyncio_to_thread(func, *args, **kwargs):
-    import asyncio
     import functools
     return await asyncio.get_running_loop().run_in_executor(None, functools.partial(func, *args, **kwargs))

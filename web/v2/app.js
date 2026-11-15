@@ -99,11 +99,13 @@ function renderChips() {
 }
 
 /* ---- 看作业：内置摄像头拍照 → 网关看图 → 逐题卡片 + 粤语/英文朗读 ---- */
-const HW = { lang: 'yue', data: null, busy: false, audio: null };
+const HW = { lang: 'yue', data: null, busy: false, audio: null, tick: null };
+const HW_COUNTDOWN = 3;   // 点「拍」或说「睇作业」后先倒数，给孩子把作业纸摆到镜头前
 
 function hwEl(id) { return document.getElementById(id); }
 
 function hwSetBusy(on, text) {
+  if (HW.tick) { clearInterval(HW.tick); HW.tick = null; }
   HW.busy = on;
   const b = hwEl('hwBusy');
   if (b) { b.hidden = !on; hwEl('hwBusyText').textContent = text || '在看…'; }
@@ -213,16 +215,45 @@ function hwSpeakItem(it) {
   if (parts.length) hwSpeakText(parts.join('。'));
 }
 
+function hwCountdown(n) {
+  hwSetBusy(true, '把作业放到镜头前… ' + n);
+  let left = n;
+  HW.tick = setInterval(() => {
+    left -= 1;
+    if (left <= 0) { clearInterval(HW.tick); HW.tick = null; return; }
+    const t = hwEl('hwBusyText');
+    if (t) t.textContent = '把作业放到镜头前… ' + left;
+  }, 1000);
+}
+
+// 客户端拍照各阶段的推送（点按和语音触发都会来）。语音触发时面板自动打开；
+// 点按那条路的结果和朗读仍由 hwCapture 自己处理，这里只管进度和语音那条的结果。
+function hwEvent(e) {
+  const voice = e.source === 'voice';
+  if (voice) {
+    const sheet = hwEl('hwSheet');
+    if (sheet && !sheet.classList.contains('on')) hwOpen(true, false);
+    if (e.language && e.language !== HW.lang) hwSetLang(e.language);
+  }
+  switch (e.phase) {
+    case 'countdown': hwCountdown(e.seconds || HW_COUNTDOWN); break;
+    case 'shooting': hwSetBusy(true, '在拍照…'); break;
+    case 'analyzing': hwSetBusy(true, '在看作业…'); break;
+    case 'done': if (voice) { hwSetBusy(false); hwRender(e.data); } break;   // 语音那条由网关念，这里不再朗读
+    case 'error': if (voice) { hwSetBusy(false); toast(e.error || '没拍成', 'error'); } break;
+  }
+}
+
 async function hwCapture() {
   if (HW.busy) return;
-  hwSetBusy(true, '在拍照…');
+  hwSetBusy(true, '准备拍照…');
   try {
     const r = await fetch('/api/hw/capture', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ language: HW.lang }),
+      body: JSON.stringify({ language: HW.lang, countdown: HW_COUNTDOWN, source: 'page' }),
     });
     const d = await r.json().catch(() => ({ ok: false, error: '网关没有回话' }));
-    if (!d.ok) { toast(d.error || '没拍成，再试一次', 'error'); return; }
+    if (!d.ok) { toast(d.code === 'busy' ? '正在拍，等一下' : (d.error || '没拍成，再试一次'), 'error'); return; }
     hwRender(d);
     const text = hwSpeechText(d);
     if (text) hwSpeakText(text);
@@ -233,13 +264,13 @@ async function hwCapture() {
   }
 }
 
-function hwOpen(on) {
+function hwOpen(on, shoot = true) {
   const sheet = hwEl('hwSheet');
   if (!sheet) return;
   sheet.classList.toggle('on', !!on);
   if (on) {
     if (!HW.data) hwLoadLatest();
-    hwCapture();
+    if (shoot) hwCapture();
   } else if (HW.audio) {
     HW.audio.pause(); HW.audio = null;
   }
@@ -1870,6 +1901,7 @@ const handlers = {
     ui.thread = t; renderThread();
   },
   message: m => upsertMessage(m),
+  homework: e => hwEvent(e),
   music: m => { if (MP.target === 'local') applyMusicStatus(m); },
   toast: t => toast(t.text, t.kind),
   volume(v) {
