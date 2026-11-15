@@ -22,6 +22,7 @@
 | `thinksmart_client/sleep.py` | 睡眠时段（可跨午夜）：回复音量减半、屏幕调暗、补报不主动念；设置存在用户配置里（`config.save`），页面设置页和语音工具都能改 |
 | `thinksmart_client/opus.py` | 系统 libopus 的 ctypes 封装 |
 | `thinksmart_client/web.py` | 页面、事件流（SSE）、按钮接口 |
+| `thinksmart_client/zh_t2s.py` | 搜索用的繁体→简体对照（曲库里出现的 377 个字，和网关 plugins_func/functions/zh_t2s.py 同一份） |
 | `thinksmart_client/music_api.py` | 面板播放器（本机喇叭）：读网关生成的 NAS 曲库索引（18368 首）、搜索/随机、ffplay 播放；有队列（放完自动接下一首，`web.py` 每秒 `tick()`）、真暂停（SIGSTOP/SIGCONT）、调音量从当前位置重开 |
 | `web/` | 界面：正式版是 `v2/`（带表情的光球，首页 `/` 和 `/v2`），第一版 `index.html`、`app.css`、`app.js` 留在 `/v1`；`test/` 是 GPU 排查用的测试页；另有提示音、厂商图标 |
 | `models/kws-zh/` | 唤醒词模型 |
@@ -45,6 +46,9 @@
   - `POST /api/music/play {"target": "local|tv", "title": "...", "queue": [...], "index": n, "volume": 0-100}`：`queue` 是面板当前列表（路径须在 NAS 曲库里），放完一首接下一首；`tv` 交给网关的 `/kiosk/music/play`
   - `POST /api/music/stop {"target": ...}`、`POST /api/music/volume {"target", "volume"}`（语音点的歌在放时本机音量 = 设备音量）、`GET /api/music/tracks?q=`、`GET /api/music/random?count=`、`GET /api/music/target_volume?target=`
   - 事件流 `music`：同 `/api/music/status`，网关每开始/打断/放完一首都会推一次
+  - `GET /api/music/random?count=&genre=classical|pop|ost|euro|mainland|light|beyond|test`：按曲库目录筛（不抽整张 CD 镜像）；`GET /api/music/tracks?q=` 多个词（空格隔开）同时命中、繁简不计较、歌名完全一样的排前面、同一首只留一个版本
+  - `GET /api/music/ytm?q=`：网关的 YouTube Music 搜索（面板在曲库结果后面接这一栏）；列表里 `path` 为 `ytm:<videoId>` 的曲目，面板播放器向网关要流地址再放；状态里 `origin` 为 `nas` / `youtube`
+  - `POST /api/music/kids {"channel": "alphablocks|numberblocks"}`：电视上放少儿频道（网关挑最近没看过的一集，自动接下一集）
   - 网关发来的 `{"type": "music", "state": "start|paused|stop|idle", "title", "artist", "index", "total", "desc", "elapsed"}` 由 `app.py` 收下
 - `POST /api/history/clear {}` 或 `{"memory_only": true}`：清除聊天记录（转给服务端的 `/kiosk/chat/clear`，只清服务端本机存的所有模型的记录和总结记忆，Claude Code、Grok Bot 自己的会话不动；`memory_only` 只清记忆）。聊天页的记录来自服务端存的 `GET /kiosk/chat/history`（每个模型最近 50 条），没连着时载入，断开、重启后还在；说「清除聊天记录」确认后服务端发 `{"type": "chat_history", "state": "cleared"}`，页面清空
 

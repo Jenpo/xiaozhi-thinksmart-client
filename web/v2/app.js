@@ -812,6 +812,7 @@ function applyMusicStatus(s) {
   MP.index = s.index || null;
   MP.total = s.total || null;
   MP.desc = s.desc || '';
+  MP.origin = s.origin || '';
   MP.elapsed = Number(s.elapsed) || 0;
   MP.elapsedAt = Date.now();
   if (MP.playing || MP.paused) {
@@ -877,6 +878,7 @@ function renderMusic() {
   $('musicNowSub').textContent = nowPlaying && MP.target === 'local'
     ? [MP.paused ? '已暂停' : '在本机播放',
        MP.source === 'voice' ? '语音点的' + (MP.desc && MP.desc !== '随机' ? MP.desc : '') + (MP.total > 1 ? '歌单' : '歌') : '',
+       MP.origin === 'youtube' ? 'YouTube Music' : MP.origin === 'nas' ? 'NAS 曲库' : '',
        MP.total > 1 ? '第 ' + MP.index + '/' + MP.total + ' 首' : '',
        fmtSec(elapsed)].filter(Boolean).join(' · ')
     : nowPlaying
@@ -909,9 +911,12 @@ function renderQueue() {
     box.innerHTML = '<div class="mq-empty">曲库还没读出来，点「随机播放」会边读边放；也可以搜歌名、歌手或专辑</div>';
     return;
   }
+  const firstYt = MP.queue.findIndex(t => t.source === 'youtube');
   box.innerHTML = MP.queue.map((t, i) =>
+    (i === firstYt ? '<div class="mq-divider">' + (firstYt ? '曲库之外 · YouTube Music' : '曲库里没有 · YouTube Music 上找到') + '</div>' : '') +
     '<button class="mq-item' + (i === MP.idx ? ' on' : '') + '" data-i="' + i + '" aria-current="' + (i === MP.idx ? 'true' : 'false') + '">' +
-    '<b>' + escapeHtml(t.title || '未命名') + '</b><span>' + escapeHtml(t.artist || '') +
+    '<b>' + escapeHtml(t.title || '未命名') + (t.source === 'youtube' ? '<span class="mq-src">YouTube</span>' : '') +
+    '</b><span>' + escapeHtml(t.artist || '') +
     (t.album ? '<span class="mq-album">' + escapeHtml(t.album) + '</span>' : '') +
     (t.genre_dir ? '<span class="mq-genre">' + escapeHtml(t.genre_dir) + '</span>' : '') + '</button>').join('');
   box.querySelectorAll('.mq-item').forEach(el => {
@@ -922,70 +927,45 @@ function renderQueue() {
 // 曲库检索：/api/music/tracks 带 q 参数，服务端按歌名/歌手/专辑子串过滤。
 // 原来面板只能「随机播放」20 首，18368 首曲库等于没法用。
 //
-// 风格筛选不能靠歌名子串：索引里 genre_dir（Classical/PoP/试音/OST/...）真实存在，
-// 但 _public() 只返回 title/artist/album/ext/path，前端拿不到 genre_dir。
-// 所以用专辑/曲目路径里的目录词做筛选，并且只筛「随机抽到的可播曲目」——
-// 带 q 的查询不过 _playable，会混进 .cue/.log 这类不可播项。
-const FILTERS = {
-  classical: ['classical', 'bach', 'beethoven', 'mozart', 'chopin', 'sonata', 'symphony', 'adagio', 'piano', '古典'],
-  pop: ['pop', '梁静茹', '王菲', '周杰伦', '陈奕迅'],
-  ost: ['ost', 'soundtrack', 'hisaishi', '久石让', '原声'],
-  test: ['试音'],
-  chinese: ['王菲', '陈奕迅', '五月天', '周杰伦', '李宗盛', '张学友', '邓丽君', '梁静茹', 'beyond', '李健'],
-  jazz: ['jazz', '爵士', 'hisaishi', '久石让'],
-  rock: ['rock', 'beyond', '五月天', '摇滚'],
-};
 
 async function searchMusic(q) {
   const box = $('musicQueue');
   if (box) box.innerHTML = '<div class="mq-empty">正在找「' + escapeHtml(q) + '」…</div>';
   try {
-    const d = await musicApi('/api/music/tracks?limit=40&q=' + encodeURIComponent(q));
+    const d = await musicApi('/api/music/tracks?limit=30&q=' + encodeURIComponent(q));
     MP.queue = d.tracks || [];
     MP.idx = -1;
     renderQueue();
-    if (!MP.queue.length) {
-      if (box) box.innerHTML = '<div class="mq-empty">没找到「' + escapeHtml(q) + '」，换个词试试</div>';
+    // 曲库之外再查 YouTube Music（网关的助手，搜一次 0.5-1 s，结果缓存一天），接在曲库结果后面
+    const seq = (MP.searchSeq = (MP.searchSeq || 0) + 1);
+    if (box && !MP.queue.length) box.innerHTML = '<div class="mq-empty">曲库里没有「' + escapeHtml(q) + '」，在 YouTube Music 上找…</div>';
+    let yt = [];
+    try { yt = (await musicApi('/api/music/ytm?q=' + encodeURIComponent(q))).tracks || []; } catch (e) { yt = []; }
+    if (seq !== MP.searchSeq) return;          // 又搜了别的
+    if (yt.length) {
+      MP.queue = MP.queue.concat(yt.slice(0, 10));
+      renderQueue();
+    } else if (!MP.queue.length && box) {
+      box.innerHTML = '<div class="mq-empty">曲库和 YouTube Music 都没找到「' + escapeHtml(q) + '」，换个词试试</div>';
     }
   } catch (e) {
     if (box) box.innerHTML = '<div class="mq-empty">曲库读不到：' + escapeHtml(e.message) + '</div>';
   }
 }
 
-// 风格筛选：先拉一批可播样本（random 走 _playable），按路径/歌手/专辑本地匹配。
-// 样本里没命中就再拉一批，最多 6 批；仍然空就明说没筛到，不静默换队列。
+// 风格筛选：按曲库索引里真实的顶层目录（genre_dir）在后台筛。原来是拉几批随机样本、按歌名关键词猜
+// （「华语」=几个歌手名、「爵士」=久石让），筛出来常常不对、也常常是空的。
 async function filterMusic(kind) {
   const box = $('musicQueue');
-  const words = (FILTERS[kind] || []).map(w => w.toLowerCase());
-  if (!words.length) return shuffle();
-  if (box) box.innerHTML = '<div class="mq-empty">正在筛「' + escapeHtml(kind) + '」…</div>';
-  const seen = new Set();
-  const out = [];
+  if (box) box.innerHTML = '<div class="mq-empty">正在筛…</div>';
   try {
-    for (let round = 0; round < 6 && out.length < 40; round++) {
-      const d = await musicApi('/api/music/random?count=300');
-      const batch = d.tracks || [];
-      if (!batch.length) break;
-      for (const t of batch) {
-        const hay = ((t.path || '') + ' ' + (t.artist || '') + ' ' + (t.album || '') + ' ' + (t.title || '')).toLowerCase();
-        if (!words.some(w => hay.includes(w))) continue;
-        const k = t.path || (t.title + '|' + t.artist);
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push(t);
-        if (out.length >= 40) break;
-      }
-    }
+    const d = await musicApi('/api/music/random?count=40&genre=' + encodeURIComponent(kind));
+    MP.queue = d.tracks || [];
+    MP.idx = -1;
+    if (MP.queue.length) renderQueue();
+    else if (box) box.innerHTML = '<div class="mq-empty">这个风格没筛到，点「随机」试试</div>';
   } catch (e) {
     if (box) box.innerHTML = '<div class="mq-empty">筛不到：' + escapeHtml(e.message) + '</div>';
-    return;
-  }
-  if (out.length) {
-    MP.queue = out;
-    MP.idx = -1;
-    renderQueue();
-  } else if (box) {
-    box.innerHTML = '<div class="mq-empty">这个风格没筛到，点「随机」试试</div>';
   }
 }
 
@@ -1011,7 +991,7 @@ async function playTrack(i) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         // 整张列表一起给后台：放完一首自动接下一首（原来只放点的那一首就停）
         body: JSON.stringify({ target: 'local', title: t.title, volume: MP.volume, index: i,
-                               queue: MP.queue.map(x => ({ title: x.title, artist: x.artist, album: x.album, path: x.path })) }),
+                               queue: MP.queue.map(x => ({ title: x.title, artist: x.artist, album: x.album, path: x.path, source: x.source })) }),
       });
       if (r && r.ok === false) {
         toast('本机没放成：' + (r.error || '后台没响应'), 'error');
@@ -1202,6 +1182,27 @@ if ($('musicPill')) {
     });
   });
   $('musicStopLocal').addEventListener('click', stopMusic);
+  // 少儿：电视上放 Alphablocks / Numberblocks（网关挑最近没放过的一集，放完自动接下一集）
+  document.querySelectorAll('.kid-btn').forEach(el => {
+    el.addEventListener('click', async () => {
+      if (el.classList.contains('busy')) return;
+      if (DEMO) { toast('演示模式：电视上放 ' + el.dataset.channel); return; }
+      el.classList.add('busy');
+      toast('正在打开电视…', 'info');
+      try {
+        const r = await musicApi('/api/music/kids', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel: el.dataset.channel }),
+        });
+        toast(r && r.ok ? (r.message || '电视上开始放了') : '没放成：' + ((r && (r.error || r.message)) || '电视没响应'),
+              r && r.ok ? 'info' : 'error');
+      } catch (e) {
+        toast('没放成：' + (e.message || '连不上后台'), 'error');
+      } finally {
+        el.classList.remove('busy');
+      }
+    });
+  });
   // 本机喇叭上的控制（语音点的歌和面板自己的列表都走 /api/music/control，后台分给 hub 或本机播放器）
   async function musicControl(action) {
     if (DEMO) { toast('演示模式：' + action); return; }

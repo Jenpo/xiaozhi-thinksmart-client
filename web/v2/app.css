@@ -136,6 +136,15 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 .mq-chip:active { transform: scale(.95); }
 .mq-chip.on { color: #08122c; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-color: transparent; }
 .mq-album { font-size: 11px; color: var(--ink3); }
+.mq-src { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 10px;
+          background: #ff4e4e22; color: #ff8a8a; vertical-align: 1px; }
+.mq-divider { grid-column: 1 / -1; margin-top: 6px; font-size: 13px; color: var(--ink3); }
+.music-kids { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; font-size: 14px; color: var(--ink2); }
+.kid-btn { height: 48px; padding: 0 18px; border-radius: 14px; font-size: 15px; font-weight: 600;
+           background: linear-gradient(135deg, #ffb84d33, #ff6fa833); border: 1px solid #ffb84d55; transition: transform .12s; }
+.kid-btn small { display: block; font-size: 11px; font-weight: 400; color: var(--ink2); }
+.kid-btn:active { transform: scale(.95); }
+.kid-btn.busy { opacity: .5; }
 .music-progress.unsupported { opacity: .35; }
 .music-progress.unsupported::after { content: "这条通路没有进度"; display: block; margin-top: 8px; font-size: 12px; color: var(--ink3); }
 .fresh .clock { display: none; }

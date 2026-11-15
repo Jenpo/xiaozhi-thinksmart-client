@@ -2,7 +2,9 @@
 import asyncio
 import json
 import logging
+import re
 import time
+import urllib.parse
 
 from aiohttp import web
 
@@ -18,6 +20,20 @@ BUILD = str(int(time.time()))
 
 def make_app(client: Client):
     app = web.Application()
+
+    def _resolve_ytm(video_id):
+        """面板播放器放 YouTube Music：向网关要流地址（网关的助手缓存到签名快过期）。在线程里调。"""
+        import urllib.parse
+        import urllib.request
+        url = (client.cfg.get('hub_http') or '') + '/kiosk/music/ytm/resolve?id=' + urllib.parse.quote(video_id)
+        with urllib.request.urlopen(url, timeout=40) as r:
+            data = json.loads(r.read().decode('utf-8'))
+        if not data.get('url'):
+            raise RuntimeError(data.get('error') or data.get('message') or '网关没给流地址')
+        return data['url']
+
+    if getattr(client, 'cfg', None) and client.cfg.get('hub_http'):
+        music_api.resolver = _resolve_ytm
 
     async def index(_request):
         # the second design (orb with a face) is the UI since 2026-10-31; /v1 keeps the first one
@@ -171,7 +187,33 @@ def make_app(client: Client):
     async def music_random(request):
         q = request.query.get('q', '')
         count = int(request.query.get('count', 20))
-        return web.json_response({'tracks': music_api.random_tracks(count, q)})
+        genre = request.query.get('genre', '')
+        return web.json_response({'tracks': music_api.random_tracks(count, q, genre)})
+
+    async def music_ytm(request):
+        """曲库之外的结果：网关 YouTube Music 搜索（面板搜索框下面那一栏）。"""
+        q = (request.query.get('q') or '').strip()
+        if not q:
+            return web.json_response({'tracks': []})
+        try:
+            r = await client._hub_http('/kiosk/music/ytm/search?q=' + urllib.parse.quote(q))
+        except Exception as e:
+            return web.json_response({'tracks': [], 'error': str(e)}, status=502)
+        return web.json_response({'tracks': (r or {}).get('tracks') or [], 'error': (r or {}).get('message')})
+
+    async def music_kids(request):
+        """「少儿」卡片：电视上放 Alphablocks / Numberblocks（网关挑没放过的一集，开电视、投屏要 10 来秒）。"""
+        body = await request.json()
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as s:
+                async with s.post(client.cfg['hub_http'] + '/kiosk/tv/kids',
+                                  json={'channel': body.get('channel') or ''}) as r:
+                    data = await r.json(content_type=None)
+        except Exception as e:
+            return web.json_response({'ok': False, 'error': '连不上网关: %s' % e}, status=502)
+        return web.json_response({'ok': bool(data.get('ok')), 'message': data.get('message') or data.get('error')},
+                                 status=200 if data.get('ok') else 409)
 
     async def music_play(request):
         body = await request.json()
@@ -183,7 +225,8 @@ def make_app(client: Client):
         if target == 'local' and isinstance(queue, list) and queue:
             # 面板的整张列表：放完一首自动接下一首（原来只放点的那一首）。路径必须在 NAS 曲库里。
             tracks = [t for t in queue if isinstance(t, dict)
-                      and str(t.get('path') or '').startswith(music_api.NAS_ROOTS)]
+                      and (str(t.get('path') or '').startswith(music_api.NAS_ROOTS)
+                           or re.fullmatch(r'ytm:[A-Za-z0-9_-]{11}', str(t.get('path') or '')))]
             if tracks:
                 if (client.music_status() or {}).get('source') == 'voice':
                     await client.music_control('stop')     # 喇叭同一时刻只放一样
@@ -191,7 +234,7 @@ def make_app(client: Client):
                 vol = body.get('volume')
                 if vol is None:
                     vol = (music_api.local_status().get('volume') or 55)
-                r = music_api.play_index(int(body.get('index') or 0), vol)
+                r = await asyncio.to_thread(music_api.play_index, int(body.get('index') or 0), vol)
                 client.events.publish('music', client.music_status())
                 return web.json_response(r, status=200 if r.get('ok') else 404)
         track = music_api.find_track(title)
@@ -258,9 +301,9 @@ def make_app(client: Client):
             return web.json_response({'ok': bool(ok), 'source': 'voice',
                                       **({} if ok else {'error': '现在没有在放语音点的歌'})},
                                      status=200 if ok else 409)
-        r = {'next': lambda: music_api.local_next(1), 'prev': lambda: music_api.local_next(-1),
-             'pause': music_api.local_pause, 'resume': music_api.local_resume,
-             'stop': music_api.local_stop}[action]()
+        r = await asyncio.to_thread({'next': lambda: music_api.local_next(1), 'prev': lambda: music_api.local_next(-1),
+                                     'pause': music_api.local_pause, 'resume': music_api.local_resume,
+                                     'stop': music_api.local_stop}[action])
         client.events.publish('music', client.music_status())
         return web.json_response(dict(r, source='local'), status=200 if r.get('ok') else 409)
 
@@ -289,7 +332,7 @@ def make_app(client: Client):
                 # 语音点的歌从 hub 推流到本机喇叭：滑杆就是喇叭音量
                 await client.set_volume(vol, 'page')
                 return web.json_response({'ok': True, 'target': 'local', 'volume': vol, 'source': 'voice'})
-            return web.json_response(music_api.local_set_volume(vol))
+            return web.json_response(await asyncio.to_thread(music_api.local_set_volume, vol))
         # 电视走 ARC 到 HT-Z9F soundbar，HA 的 volume_level 就是实际出声音量
         # [2026-11-10] HomePod 通路下线，面板只留本机与电视
         entity = {'tv': 'media_player.bravia_xr_55x90j'}.get(target)
@@ -391,11 +434,15 @@ def make_app(client: Client):
         watchers.append(asyncio.create_task(update.watch(client.events.publish)))
 
     async def watch_local_music(_app):
+        # 曲库索引（几 MB JSON + 每首算搜索键）启动时就在后台读好：第一次搜歌原来要多等 8 s
+        if hasattr(music_api, '_load_index'):
+            watchers.append(asyncio.create_task(asyncio.to_thread(music_api._load_index)))
+
         async def loop():
             while True:
                 await asyncio.sleep(1)
                 try:
-                    if music_api.tick():                  # a track ended: the next one is already on
+                    if await asyncio.to_thread(music_api.tick):   # a track ended: the next one is on
                         client.events.publish('music', client.music_status())
                 except Exception:
                     pass
@@ -436,6 +483,8 @@ def make_app(client: Client):
     app.router.add_post('/api/music/stop', music_stop)
     app.router.add_post('/api/music/volume', music_volume)
     app.router.add_post('/api/music/control', music_control)
+    app.router.add_get('/api/music/ytm', music_ytm)
+    app.router.add_post('/api/music/kids', music_kids)
     app.router.add_get('/api/health', health)
     app.router.add_get('/api/weather', weather_now)
     app.router.add_get('/api/network', network)

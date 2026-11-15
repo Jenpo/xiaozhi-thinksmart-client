@@ -835,6 +835,7 @@ class Client:
         if state in ('start', 'paused'):
             self.hub_music = {k: msg.get(k) for k in ('state', 'title', 'artist', 'album', 'index', 'total',
                                                       'desc', 'elapsed', 'mode')}
+            self.hub_music['origin'] = msg.get('source') or 'nas'      # nas / youtube
             self.hub_music['since'] = time.time() - (msg.get('elapsed') or 0)
             if state == 'start':
                 log.info('the hub plays %s/%s: %s', msg.get('index'), msg.get('total'), msg.get('title'))
@@ -854,6 +855,7 @@ class Client:
             return {'source': 'voice', 'playing': playing, 'paused': not playing,
                     'title': hm.get('title'), 'artist': hm.get('artist') or '', 'album': hm.get('album') or '',
                     'index': hm.get('index'), 'total': hm.get('total'), 'desc': hm.get('desc') or '',
+                    'origin': hm.get('origin') or 'nas',
                     'elapsed': round(time.time() - hm['since']) if playing else (hm.get('elapsed') or 0),
                     'path': None, 'volume': None}
         return music_api.local_status()

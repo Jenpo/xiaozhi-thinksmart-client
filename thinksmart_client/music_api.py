@@ -16,9 +16,12 @@ import asyncio
 import json
 import os
 import random
+import re
 import shlex
 import subprocess
 import time
+
+from .zh_t2s import t2s
 
 MUSIC_INDEX_CANDIDATES = (
     os.path.expanduser("~/.local/share/thinksmart/music-index.json"),
@@ -32,6 +35,8 @@ NAS_ROOTS = (
 HOMEPOD_ENTITY = "media_player.office_office"
 TV_ENTITY = "media_player.bravia_xr_55x90j"
 PLAYER_BIN = "ffplay"
+YTM_PREFIX = "ytm:"       # YouTube Music 曲目：放之前向网关要流地址（resolver，由 web.py 设置）
+resolver = None           # callable(video_id) -> url；阻塞调用，web.py 在线程里调 play_index/tick
 
 # 本机播放器进程（全局单例）
 _local_proc = None
@@ -40,18 +45,64 @@ _local_volume = None
 _local_started = 0.0
 
 
+_INDEX_CACHE = {"key": None, "items": []}
+
+
 def _load_index():
+    """曲库索引（约 18368 首、几 MB 的 JSON）。2026-11-15：原来每次搜索/随机都重读重解析一遍，
+    现在按文件的 mtime 缓存在内存里，同时算好搜索键（繁简归一、去标点）。"""
     for path in MUSIC_INDEX_CANDIDATES:
-        if os.path.isfile(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                items = data.get("items") if isinstance(data, dict) else data
-                if isinstance(items, list):
-                    return items
-            except (OSError, ValueError):
-                continue
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        key = (path, st.st_mtime, st.st_size)
+        if _INDEX_CACHE["key"] == key:
+            return _INDEX_CACHE["items"]
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        items = data.get("items") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            continue
+        for t in items:
+            t["_k"] = _key(t.get("title"))
+            t["_c"] = _key(_core_title(t.get("title")))
+            t["_ka"] = _key(t.get("artist")) + "|" + _key(t.get("album")) + "|" + _key(t.get("path"))
+        _INDEX_CACHE.update(key=key, items=items)
+        return items
     return []
+
+
+_TRACKNO = re.compile(r"^\s*(?:cd\s*\d+\s*[\-_.]?\s*)?\d{1,3}(?:[.\-_]\d{1,3})?(?:\s*[.\-_、)\]]\s*|\s+)", re.I)
+
+
+def _core_title(title):
+    """「12 周杰伦 - 稻香」->「稻香」（和网关 play_music._split_title 同一个规则）。"""
+    t = _TRACKNO.sub("", str(title or ""), count=1).strip().lstrip("-–—_.、 ").strip() or str(title or "")
+    if " - " in t:
+        left, right = t.split(" - ", 1)
+        if left.strip() and right.strip() and len(left) <= 24:
+            return right.strip()
+    return t
+
+
+def _key(text):
+    return re.sub(r"[\W_]+", "", t2s(str(text or "").casefold()))
+
+
+def _whole_disc(t):
+    """整张 CD 一个文件（CDImage + cue，300 MB 以上）：随机里不抽，一放就是一小时。"""
+    return (t.get("size") or 0) > 300e6 or (t.get("title") or "").casefold().startswith("cdimage")
+
+
+GENRES = {   # 面板的风格标签 -> 索引里的 genre_dir（NAS 顶层目录）
+    "classical": ("Classical",), "pop": ("PoP",), "ost": ("OST",), "euro": ("Euro_US_Korea",),
+    "mainland": ("Mainland",), "light": ("FO_Light",), "beyond": ("BEYOND合集资源",),
+    "test": ("试音", "纯试音"),
+}
 
 
 _exist_cache = {}
@@ -94,53 +145,72 @@ def _file_exists(path):
 
 
 def _public(track):
+    path = track.get("path") or ""
     return {
-        "title": track.get("title") or os.path.basename(track.get("path") or ""),
+        "title": track.get("title") or os.path.basename(path),
         "artist": track.get("artist") or "",
         "album": track.get("album") or "",
         "ext": (track.get("ext") or "").lstrip(".").lower(),
-        "path": track.get("path") or "",
+        "genre": track.get("genre_dir") or "",
+        "path": path,
+        "source": "youtube" if path.startswith(YTM_PREFIX) else "nas",
     }
 
 
 def _match(items, q):
-    return [
-        t for t in items
-        if q in (t.get("title") or "").lower()
-        or q in (t.get("artist") or "").lower()
-        or q in (t.get("album") or "").lower()
-    ]
+    """多个词（空格隔开）都要出现在 歌名/歌手/专辑/路径 里；繁简、大小写、标点都不计较。"""
+    words = [_key(w) for w in str(q or "").split()]
+    words = [w for w in words if w]
+    if not words:
+        return list(items)
+    return [t for t in items if all(w in t.get("_k", "") or w in t.get("_ka", "") for w in words)]
+
+
+def _rank(t, words):
+    k = t.get("_k", "")
+    joined = "".join(words)
+    core = t.get("_c", "")                 # 去掉曲序号和「歌手 - 」前缀的歌名
+    full = core == joined or k == joined or (core and core in words and all(w in core or w in t.get("_ka", "") for w in words))
+    return (0 if full else 1 if core.startswith(joined) else 2 if joined in k else 3,
+            _whole_disc(t), (t.get("ext") or "").lower() in (".dsf", ".dff", ".ape", ".wv"), len(k))
 
 
 def list_tracks(limit=50, query=""):
-    """搜索结果也只给能播的：搜到 .cue/.log 这类会让用户点了没反应。"""
+    """搜索：多词同时命中，歌名完全一样的排前面、再是开头一样的、再是包含的，只出现在歌手/专辑里的最后；
+    同一首（歌名+歌手）只留一个版本。只给能播的：搜到 .cue/.log 会让用户点了没反应。"""
     items = _load_index()
-    q = (query or "").strip().lower()
-    if q:
-        items = _match(items, q)
-    # [2026-11-11] 只判到 limit 条为止，不再扫全库
-    out = []
-    checked_dirs = {}
+    q = (query or "").strip()
+    words = [w for w in (_key(x) for x in q.split()) if w]
+    if words:
+        items = sorted(_match(items, q), key=lambda t: _rank(t, words))
+    out, seen, checked_dirs = [], set(), {}
     for t in items:
+        dup = (t.get("_c", ""), _key(t.get("artist")))
+        if words and dup in seen:
+            continue
         root = os.path.dirname(t.get("path") or "")
         if root not in checked_dirs:
             checked_dirs[root] = _playable(t)
         if checked_dirs[root]:
+            seen.add(dup)
             out.append(_public(t))
             if len(out) >= limit:
                 break
     return out
 
 
-def random_tracks(count=20, query=""):
-    """随机取 count 首。
+def random_tracks(count=20, query="", genre=""):
+    """随机取 count 首；genre 是面板的风格标签（GENRES），按索引里的 genre_dir 筛（原来按歌名关键词猜）。
 
     [2026-11-11] 原来对 18368 首逐个 _playable（=按目录 NFS stat），1734 个目录在
     设备上一次 80ms，实测 /api/music/random?count=20 要 144s，面板一直黑着。
     现在按目录去重后抽样：先打乱目录，只 stat 到凑够 count 首为止，正常几个目录就够。
     """
-    items = _load_index()
-    q = (query or "").strip().lower()
+    items = [t for t in _load_index() if not _whole_disc(t)]
+    if genre:
+        dirs = GENRES.get(str(genre).lower(), (genre,))
+        items = [t for t in items if t.get("genre_dir") in dirs]
+    q = (query or "").strip()
     if q:
         items = _match(items, q)
     if not items:
@@ -151,6 +221,7 @@ def random_tracks(count=20, query=""):
     roots = list(by_dir)
     random.shuffle(roots)
     picked = []
+    per_dir = max(2, count // 8)            # 一个目录最多拿几首：随机列表不要整张都是同一张专辑
     for root in roots:
         if len(picked) >= count:
             break
@@ -159,7 +230,7 @@ def random_tracks(count=20, query=""):
         probe = cand[0]
         if not _playable(probe):
             continue
-        picked.extend(cand[:count - len(picked)])
+        picked.extend(cand[:min(per_dir, count - len(picked))])
     if not picked:
         # 缓存可能整库判死（NFS 抖动）：清一次重试一个目录
         _exist_cache.clear()
@@ -270,7 +341,15 @@ def local_play(path, volume=70, seek=0.0):
     只有音量变了才重开——ffplay 不支持运行时改音量。
     """
     global _local_proc, _local_track, _local_volume, _local_started, _paused_total, _seek, _user_stopped
-    if not path or not os.path.isfile(path):
+    source = path
+    if str(path or "").startswith(YTM_PREFIX):
+        if resolver is None:
+            return {"ok": False, "error": "YouTube Music 不可用"}
+        try:
+            source = resolver(path[len(YTM_PREFIX):])
+        except Exception as exc:
+            return {"ok": False, "error": "YouTube Music 取流失败: %s" % exc}
+    elif not path or not os.path.isfile(path):
         return {"ok": False, "error": "本机没有这个文件: %s" % path}
     vol = max(0, min(100, int(volume)))
     if (_local_proc is not None and _local_proc.poll() is None
@@ -284,7 +363,9 @@ def local_play(path, volume=70, seek=0.0):
     cmd = [PLAYER_BIN, "-nodisp", "-autoexit", "-loglevel", "error", "-volume", str(vol)]
     if seek and seek > 1:
         cmd += ["-ss", "%.1f" % seek]
-    cmd.append(path)
+    if source != path:
+        cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+    cmd.append(source)
     try:
         _local_proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL,
@@ -306,6 +387,8 @@ def set_queue(tracks, index=0):
     """面板的播放列表（随机/搜索/筛选的结果）。tick() 按它接下一首。"""
     global _queue, _idx
     _queue = [t for t in (tracks or []) if isinstance(t, dict) and t.get("path")][:200]
+    for t in _queue:
+        t["source"] = "youtube" if t["path"].startswith(YTM_PREFIX) else "nas"
     _idx = max(0, min(int(index or 0), len(_queue) - 1)) if _queue else -1
     return _queue[_idx] if _queue else None
 
@@ -317,7 +400,7 @@ def play_index(i, volume=None):
     i = i % len(_queue)
     for step in range(len(_queue)):           # 文件不在（NAS 掉了一块）就往后找能放的
         j = (i + step) % len(_queue)
-        if _file_exists(_queue[j]["path"]):
+        if _queue[j]["path"].startswith(YTM_PREFIX) or _file_exists(_queue[j]["path"]):
             _idx = j
             vol = volume if volume is not None else (_local_volume if _local_volume is not None else 55)
             r = local_play(_queue[j]["path"], vol)
@@ -407,6 +490,7 @@ def local_status():
         "title": ((cur or {}).get("title") or os.path.splitext(os.path.basename(_local_track))[0])
                  if playing and _local_track else None,
         "artist": (cur or {}).get("artist") or "",
+        "origin": ("youtube" if str(_local_track or "").startswith(YTM_PREFIX) else "nas") if playing else None,
         "path": _local_track if playing else None,
         "elapsed": round(_elapsed(), 1) if playing else 0,
         "volume": _local_volume if playing else None,
