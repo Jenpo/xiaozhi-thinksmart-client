@@ -179,15 +179,35 @@ def make_app(client: Client):
         title = body.get('title') or ''
         if target not in ('local', 'tv'):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
+        queue = body.get('queue')
+        if target == 'local' and isinstance(queue, list) and queue:
+            # 面板的整张列表：放完一首自动接下一首（原来只放点的那一首）。路径必须在 NAS 曲库里。
+            tracks = [t for t in queue if isinstance(t, dict)
+                      and str(t.get('path') or '').startswith(music_api.NAS_ROOTS)]
+            if tracks:
+                if (client.music_status() or {}).get('source') == 'voice':
+                    await client.music_control('stop')     # 喇叭同一时刻只放一样
+                music_api.set_queue(tracks, body.get('index') or 0)
+                vol = body.get('volume')
+                if vol is None:
+                    vol = (music_api.local_status().get('volume') or 55)
+                r = music_api.play_index(int(body.get('index') or 0), vol)
+                client.events.publish('music', client.music_status())
+                return web.json_response(r, status=200 if r.get('ok') else 404)
         track = music_api.find_track(title)
         if track is None:
             return web.json_response({'ok': False, 'error': '没找到这首'}, status=404)
         if target == 'local':
+            if (client.music_status() or {}).get('source') == 'voice':
+                await client.music_control('stop')
             # 面板的滑杆值就是本机音量；没传时沿用上一次的（重复点同一首不会突然变成默认 70）
             vol = body.get('volume')
             if vol is None:
                 vol = (music_api.local_status().get('volume') or 70)
-            return web.json_response(music_api.local_play(track['path'], vol))
+            music_api.set_queue([track], 0)
+            r = music_api.local_play(track['path'], vol)
+            client.events.publish('music', client.music_status())
+            return web.json_response(r)
         # tv 交给 hub 的 cast_youtube 插件真正播放（不是只回个 echo）
         query = track.get('title') or title
         try:
@@ -212,7 +232,11 @@ def make_app(client: Client):
         if target not in ('local', 'tv'):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
         if target == 'local':
-            return web.json_response(music_api.local_stop())     # nothing playing is still ok
+            if (client.music_status() or {}).get('source') == 'voice':
+                await client.music_control('stop')                # 语音点的歌也从这里停
+            r = music_api.local_stop()                            # nothing playing is still ok
+            client.events.publish('music', client.music_status())
+            return web.json_response(r)
         try:
             result = await client._hub_http('/kiosk/music/stop', {'target': target})
         except Exception as e:
@@ -220,6 +244,25 @@ def make_app(client: Client):
                                      status=502)
         return web.json_response({'ok': bool(result.get('ok')), 'target': target,
                                   'message': result.get('message')})
+
+    async def music_control(request):
+        """本机喇叭上的 下一首/上一首/暂停/继续/停：语音点的歌交给 hub，面板自己的歌在这里处理。"""
+        body = await request.json()
+        action = str(body.get('action') or '').strip().lower()
+        if action not in ('next', 'prev', 'pause', 'resume', 'stop'):
+            return web.json_response({'ok': False, 'error': '未知的 action'}, status=400)
+        st = client.music_status() or {}
+        if st.get('source') == 'voice' or (action == 'resume' and not st.get('paused') and not st.get('playing')
+                                           and not music_api.local_status().get('path')):
+            ok = await client.music_control(action)
+            return web.json_response({'ok': bool(ok), 'source': 'voice',
+                                      **({} if ok else {'error': '现在没有在放语音点的歌'})},
+                                     status=200 if ok else 409)
+        r = {'next': lambda: music_api.local_next(1), 'prev': lambda: music_api.local_next(-1),
+             'pause': music_api.local_pause, 'resume': music_api.local_resume,
+             'stop': music_api.local_stop}[action]()
+        client.events.publish('music', client.music_status())
+        return web.json_response(dict(r, source='local'), status=200 if r.get('ok') else 409)
 
     def _device_volume(entity_id):
         """That entity's volume as 0-100, or None when the hub hasn't reported one."""
@@ -242,6 +285,10 @@ def make_app(client: Client):
         except (TypeError, ValueError):
             return web.json_response({'ok': False, 'error': 'volume must be 0-100'}, status=400)
         if target == 'local':
+            if (client.music_status() or {}).get('source') == 'voice':
+                # 语音点的歌从 hub 推流到本机喇叭：滑杆就是喇叭音量
+                await client.set_volume(vol, 'page')
+                return web.json_response({'ok': True, 'target': 'local', 'volume': vol, 'source': 'voice'})
             return web.json_response(music_api.local_set_volume(vol))
         # 电视走 ARC 到 HT-Z9F soundbar，HA 的 volume_level 就是实际出声音量
         # [2026-11-10] HomePod 通路下线，面板只留本机与电视
@@ -303,7 +350,8 @@ def make_app(client: Client):
         """
         target = (request.query.get('target') or 'local').strip().lower()
         if target == 'local':
-            return web.json_response(music_api.local_status())
+            # 本机喇叭：语音点的歌（hub 推流）优先，没有才是面板自己的播放器
+            return web.json_response(client.music_status())
         if target not in ('tv',):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
         try:
@@ -342,7 +390,19 @@ def make_app(client: Client):
     async def watch_updates(_app):
         watchers.append(asyncio.create_task(update.watch(client.events.publish)))
 
+    async def watch_local_music(_app):
+        async def loop():
+            while True:
+                await asyncio.sleep(1)
+                try:
+                    if music_api.tick():                  # a track ended: the next one is already on
+                        client.events.publish('music', client.music_status())
+                except Exception:
+                    pass
+        watchers.append(asyncio.create_task(loop()))
+
     app.on_startup.append(watch_updates)
+    app.on_startup.append(watch_local_music)
     app.router.add_get('/', index)
     app.router.add_get('/v2', index)
     app.router.add_get('/v1', index_v1)
@@ -375,6 +435,7 @@ def make_app(client: Client):
     app.router.add_post('/api/music/play', music_play)
     app.router.add_post('/api/music/stop', music_stop)
     app.router.add_post('/api/music/volume', music_volume)
+    app.router.add_post('/api/music/control', music_control)
     app.router.add_get('/api/health', health)
     app.router.add_get('/api/weather', weather_now)
     app.router.add_get('/api/network', network)

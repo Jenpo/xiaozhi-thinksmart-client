@@ -40,7 +40,7 @@ from pathlib import Path
 import aiohttp
 import numpy as np
 
-from . import alarms, config, mcp, sleep, update, wake_verify
+from . import alarms, config, mcp, music_api, sleep, update, wake_verify
 from .audio import OUT_RATE, Audio, load_wav
 from .device import DIM_LEVEL, Keys, Screen, normalize_screen_off
 from .hub import Hub
@@ -233,6 +233,7 @@ class Client:
         self.hold_open = False        # a tool call is running: don't let the idle timer close the mic
         self.mute_audio = False       # after an abort, drop the old reply's frames
         self.listen_after_reply = False   # the mic was closed for this reply: reopen it when played
+        self.hub_music = None             # what the hub streams (a voice request): {state, title, index, ...}
         self.reply_samples = 0        # reply audio received since "tts start" (to tell what was heard)
         self.reply_packets = 0
         self.muted_packets = 0
@@ -823,6 +824,49 @@ class Client:
             self.events.publish('thread', {'entry': self.view_entry(), 'messages': [], 'reset': True})
         elif kind == 'server':
             log.info('server message: %s', msg)
+        elif kind == 'music':
+            self._on_music(msg)
+
+    def _on_music(self, msg):
+        """The hub streams a voice-requested song or playlist: which track (start), cut off (paused, it
+        remembers where), or over (stop/idle). The page's player shows it; the speaker plays one thing at
+        a time, so the page's own player stops when the hub starts one."""
+        state = msg.get('state')
+        if state in ('start', 'paused'):
+            self.hub_music = {k: msg.get(k) for k in ('state', 'title', 'artist', 'album', 'index', 'total',
+                                                      'desc', 'elapsed', 'mode')}
+            self.hub_music['since'] = time.time() - (msg.get('elapsed') or 0)
+            if state == 'start':
+                log.info('the hub plays %s/%s: %s', msg.get('index'), msg.get('total'), msg.get('title'))
+                if music_api.local_status().get('playing') or music_api.local_status().get('paused'):
+                    music_api.local_stop()
+        else:
+            self.hub_music = None
+            if state == 'idle' and self.state == 'connecting':
+                self.set_state('idle')     # reconnected to resume, but there was nothing left to play
+        self.events.publish('music', self.music_status())
+
+    def music_status(self):
+        """What the speaker plays: the hub's stream (a voice request) or the page's own player."""
+        hm = getattr(self, 'hub_music', None)
+        if hm and self.hub.connected:
+            playing = hm.get('state') == 'start'
+            return {'source': 'voice', 'playing': playing, 'paused': not playing,
+                    'title': hm.get('title'), 'artist': hm.get('artist') or '', 'album': hm.get('album') or '',
+                    'index': hm.get('index'), 'total': hm.get('total'), 'desc': hm.get('desc') or '',
+                    'elapsed': round(time.time() - hm['since']) if playing else (hm.get('elapsed') or 0),
+                    'path': None, 'volume': None}
+        return music_api.local_status()
+
+    async def music_control(self, action):
+        """The page's buttons on the hub's stream: next / prev / pause / resume / stop."""
+        if not self.hub.connected:
+            # the conversation ended (the hub's idle timeout after a pause): the hub keeps the playlist
+            # per device, so "resume" reconnects; the rest has nothing to act on
+            if action != 'resume' or not await self.ensure_connected():
+                self.hub_music = None
+                return False
+        return await self.hub.send({'type': 'music', 'action': action})
 
     async def _refresh_after_question(self, m):
         """The hub may have switched models for this question (called one by name, or changed in its
@@ -903,6 +947,9 @@ class Client:
 
     async def _on_closed(self):
         # the conversation is over (the hub's idle timeout, an exit word, the end button)
+        if getattr(self, 'hub_music', None):
+            self.hub_music = None
+            self.events.publish('music', self.music_status())
         self.play('bye')
         self.uploading = False
         self.vad_ended = False

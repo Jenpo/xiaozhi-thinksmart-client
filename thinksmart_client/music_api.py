@@ -217,12 +217,32 @@ def find_track(title=""):
 
 
 # ---------------- 本机播放 ----------------
+# 2026-11-15：原来一次只放一首，放完就停（面板「随机播放」排了 20 首也只放第一首）；「暂停」其实是停止；
+# 调音量要重开 ffplay，歌从头开始。现在：
+#   - 本机有一个队列，放完一首 tick() 自动接下一首（web.py 每秒调一次）；
+#   - 暂停 = SIGSTOP，继续 = SIGCONT，位置不丢；
+#   - 调音量从当前位置重开（-ss）。
+
+import signal
+
+_queue = []           # [{title, artist, album, path, ...}]
+_idx = -1
+_paused_at = None     # 暂停的时刻（time.time()）
+_paused_total = 0.0   # 本首累计暂停了多少秒
+_seek = 0.0           # 本首是从第几秒开始放的
+_user_stopped = False  # 停止/换歌是用户做的：tick() 不要自动接下一首
+
 
 def _kill_local():
-    global _local_proc, _local_track, _local_volume
+    global _local_proc, _local_track, _local_volume, _paused_at
     if _local_proc is not None:
         try:
             if _local_proc.poll() is None:
+                if _paused_at is not None:
+                    try:
+                        os.killpg(_local_proc.pid, signal.SIGCONT)   # 停住的进程收不到 TERM
+                    except OSError:
+                        pass
                 _local_proc.terminate()
                 try:
                     _local_proc.wait(timeout=3)
@@ -233,25 +253,38 @@ def _kill_local():
     _local_proc = None
     _local_track = None
     _local_volume = None
+    _paused_at = None
 
 
-def local_play(path, volume=70):
-    """用 ffplay 在本机扬声器播放。volume 0-100。
+def _elapsed():
+    if _local_proc is None:
+        return 0.0
+    now = _paused_at or time.time()
+    return max(0.0, _seek + now - _local_started - _paused_total)
+
+
+def local_play(path, volume=70, seek=0.0):
+    """用 ffplay 在本机扬声器播放。volume 0-100，seek 从第几秒开始。
 
     幂等：同一首正在放就不再重开（页面的轮询/重试不会让歌从头开始），
     只有音量变了才重开——ffplay 不支持运行时改音量。
     """
-    global _local_proc, _local_track, _local_volume, _local_started
+    global _local_proc, _local_track, _local_volume, _local_started, _paused_total, _seek, _user_stopped
     if not path or not os.path.isfile(path):
         return {"ok": False, "error": "本机没有这个文件: %s" % path}
     vol = max(0, min(100, int(volume)))
     if (_local_proc is not None and _local_proc.poll() is None
-            and _local_track == path and _local_volume == vol):
+            and _local_track == path and _local_volume == vol and not seek):
+        if _paused_at is not None:
+            local_resume()
         return {"ok": True, "target": "local", "path": path, "volume": vol,
-                "elapsed": round(time.time() - _local_started, 1), "restarted": False}
+                "elapsed": round(_elapsed(), 1), "restarted": False}
+    _user_stopped = True      # 换歌：旧进程被我们杀掉，不是自然放完
     _kill_local()
-    cmd = [PLAYER_BIN, "-nodisp", "-autoexit", "-loglevel", "error",
-           "-volume", str(vol), path]
+    cmd = [PLAYER_BIN, "-nodisp", "-autoexit", "-loglevel", "error", "-volume", str(vol)]
+    if seek and seek > 1:
+        cmd += ["-ss", "%.1f" % seek]
+    cmd.append(path)
     try:
         _local_proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL,
@@ -263,31 +296,120 @@ def local_play(path, volume=70):
     _local_track = path
     _local_volume = vol
     _local_started = time.time()
+    _paused_total = 0.0
+    _seek = float(seek or 0) if seek and seek > 1 else 0.0
+    _user_stopped = False
     return {"ok": True, "target": "local", "path": path, "volume": vol, "restarted": True}
 
 
+def set_queue(tracks, index=0):
+    """面板的播放列表（随机/搜索/筛选的结果）。tick() 按它接下一首。"""
+    global _queue, _idx
+    _queue = [t for t in (tracks or []) if isinstance(t, dict) and t.get("path")][:200]
+    _idx = max(0, min(int(index or 0), len(_queue) - 1)) if _queue else -1
+    return _queue[_idx] if _queue else None
+
+
+def play_index(i, volume=None):
+    global _idx
+    if not _queue:
+        return {"ok": False, "error": "播放列表是空的"}
+    i = i % len(_queue)
+    for step in range(len(_queue)):           # 文件不在（NAS 掉了一块）就往后找能放的
+        j = (i + step) % len(_queue)
+        if _file_exists(_queue[j]["path"]):
+            _idx = j
+            vol = volume if volume is not None else (_local_volume if _local_volume is not None else 55)
+            r = local_play(_queue[j]["path"], vol)
+            r["index"] = j
+            return r
+    return {"ok": False, "error": "列表里的歌都读不到，NAS 可能没挂上"}
+
+
+def local_next(step=1):
+    if not _queue:
+        return {"ok": False, "error": "播放列表是空的"}
+    return play_index((_idx if _idx >= 0 else -1) + step)
+
+
 def local_stop():
+    global _user_stopped
+    _user_stopped = True
     _kill_local()
     return {"ok": True, "target": "local", "state": "stopped"}
 
 
+def local_pause():
+    global _paused_at
+    if _local_proc is None or _local_proc.poll() is not None:
+        return {"ok": False, "error": "本机没有在播"}
+    if _paused_at is None:
+        try:
+            os.killpg(_local_proc.pid, signal.SIGSTOP)
+        except OSError as exc:
+            return {"ok": False, "error": "暂停失败: %s" % exc}
+        _paused_at = time.time()
+    return {"ok": True, "target": "local", "state": "paused", "elapsed": round(_elapsed(), 1)}
+
+
+def local_resume():
+    global _paused_at, _paused_total
+    if _local_proc is None or _local_proc.poll() is not None:
+        if _queue and _idx >= 0:
+            return play_index(_idx)
+        return {"ok": False, "error": "本机没有在播"}
+    if _paused_at is not None:
+        try:
+            os.killpg(_local_proc.pid, signal.SIGCONT)
+        except OSError as exc:
+            return {"ok": False, "error": "继续失败: %s" % exc}
+        _paused_total += time.time() - _paused_at
+        _paused_at = None
+    return {"ok": True, "target": "local", "state": "playing", "elapsed": round(_elapsed(), 1)}
+
+
 def local_set_volume(volume):
-    """ffplay 不支持运行时调音量，只能重启当前曲目（从当前位置无法续播）。"""
-    global _local_proc
+    """ffplay 不支持运行时调音量：从当前位置重开（原来从头开始）。"""
     if _local_proc is None or _local_proc.poll() is not None:
         return {"ok": False, "error": "本机没有在播"}
     path = _local_track
     vol = max(0, min(100, int(volume)))
-    return local_play(path, vol)
+    if vol == _local_volume:
+        return {"ok": True, "target": "local", "volume": vol, "restarted": False}
+    paused = _paused_at is not None
+    r = local_play(path, vol, seek=_elapsed())
+    if paused and r.get("ok"):
+        local_pause()
+    return r
+
+
+def tick():
+    """每秒调一次：一首自然放完就接队列里的下一首。返回 True 表示状态变了（要通知页面）。"""
+    global _local_proc, _local_track
+    if _local_proc is None or _local_proc.poll() is None:
+        return False
+    natural = not _user_stopped and _local_proc.returncode == 0
+    _local_proc = None
+    _local_track = None
+    if natural and _queue and _idx + 1 < len(_queue):
+        play_index(_idx + 1)
+    return True
 
 
 def local_status():
     playing = _local_proc is not None and _local_proc.poll() is None
+    cur = _queue[_idx] if playing and 0 <= _idx < len(_queue) and _queue[_idx].get("path") == _local_track else None
     return {
-        "playing": playing,
+        "playing": playing and _paused_at is None,
+        "paused": playing and _paused_at is not None,
+        "source": "local",
         # 面板标题要靠它显示「在放什么」：以前只回 path，前端只能猜
-        "title": os.path.basename(_local_track) if playing and _local_track else None,
+        "title": ((cur or {}).get("title") or os.path.splitext(os.path.basename(_local_track))[0])
+                 if playing and _local_track else None,
+        "artist": (cur or {}).get("artist") or "",
         "path": _local_track if playing else None,
-        "elapsed": round(time.time() - _local_started, 1) if playing else 0,
+        "elapsed": round(_elapsed(), 1) if playing else 0,
         "volume": _local_volume if playing else None,
+        "index": (_idx + 1) if cur else None,
+        "total": len(_queue) if cur else None,
     }

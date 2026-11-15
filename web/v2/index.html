@@ -142,7 +142,9 @@
       <div class="music-progress"><i id="musicBar"></i></div>
       <div class="music-controls">
         <button class="pri" id="musicShuffle">随机播放</button>
+        <button id="musicPrev" aria-label="上一首">上一首</button>
         <button id="musicPauseLocal">暂停</button>
+        <button id="musicNext" aria-label="下一首">下一首</button>
         <button id="musicStopLocal">停止</button>
       </div>
       <div class="music-volume">
@@ -166,7 +168,7 @@
       <button class="mq-chip" data-filter="rock">摇滚</button>
     </div>
     <div class="music-queue" id="musicQueue"></div>
-    <p class="opt-note">本机走 NAS 直读（ffplay）；电视走 Chromecast + YouTube。电视这条通路拿不到播放进度，进度条只在本机有效。</p>
+    <p class="opt-note">本机：面板点的歌走 NAS 直读，放完自动接下一首；语音点的歌由网关推流，上面的按钮同样能切歌、暂停。电视走 Chromecast + YouTube。</p>
   </div>
 </div>
 

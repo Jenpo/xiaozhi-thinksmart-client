@@ -58,6 +58,15 @@ class FakeMusic:
         return next((t for t in self.tracks
                      if q in t['title'].lower() or q in t['artist'].lower()), None)
 
+    NAS_ROOTS = ('/mnt/thinksmart-music/main', '/mnt/thinksmart-music/datavol2')
+
+    def set_queue(self, tracks, index=0):
+        self.queue = list(tracks)
+        return self.queue[index] if self.queue else None
+
+    def tick(self):
+        return False
+
     def local_play(self, path, volume=70):
         self.starts += 1
         self.playing = path
@@ -109,6 +118,14 @@ class FakeClient:
 
     def health(self):
         return {'state': self.state, 'audio': 'ok'}
+
+    def music_status(self):
+        from thinksmart_client import web
+        return web.music_api.local_status()     # nothing streams from the hub in these tests
+
+    async def music_control(self, action):
+        self.actions.append(('music_control', (action,)))
+        return False
 
     async def set_volume(self, value):
         if value is None or not 0 <= float(value) <= 100:

@@ -760,13 +760,24 @@ const MUSIC = { tv: 'media_player.bravia_xr_55x90j' };
 // volumeByTarget：每个通路各存各的音量。原来 MP.volume 是单一全局值，切到电视拉到
 // 电视音量后再切回本机，滑杆显示的是上一个目标的值，一动就把错值写到新目标。
 const MP = { target: 'local', queue: [], idx: -1,
+             // 本机喇叭上在放的：source=voice 是语音点的（hub 推流），local 是面板自己的播放器
+             source: 'local', paused: false, index: null, total: null, desc: '', elapsed: 0, elapsedAt: 0,
              volumeByTarget: { local: 55, tv: 30 },
              playing: false, title: '', nowTitle: '', startedAt: 0, volTimer: null, pollFailed: false,
              // 非本机通路的真实状态（从后台查 HA 实体得到）：{state, playing, title, artist}
              remote: { state: '', playing: false, title: '', artist: '' } };
 Object.defineProperty(MP, 'volume', {
-  get() { return this.volumeByTarget[this.target]; },
-  set(v) { this.volumeByTarget[this.target] = Math.max(0, Math.min(100, Number(v) || 0)); },
+  // 语音点的歌是网关推流到本机喇叭：滑杆就是设备音量（不是面板播放器自己的 ffplay 音量）
+  get() {
+    if (this.target === 'local' && this.source === 'voice' && ui.status && typeof ui.status.volume === 'number')
+      return ui.status.volume;
+    return this.volumeByTarget[this.target];
+  },
+  set(v) {
+    const n = Math.max(0, Math.min(100, Number(v) || 0));
+    if (this.target === 'local' && this.source === 'voice' && ui.status) ui.status.volume = n;
+    else this.volumeByTarget[this.target] = n;
+  },
 });
 
 function musicEntity(id) {
@@ -786,16 +797,56 @@ async function musicApi(path, opts) {
   return data;
 }
 
+function fmtSec(t) {
+  t = Math.max(0, Math.round(Number(t) || 0));
+  return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
+}
+
+// 后台（/api/music/status 或 SSE 'music'）报的本机喇叭状态。语音点的歌也在这里：
+// 原来面板只认自己的 ffplay，说「来点古典」放着歌，顶栏还写「放点音乐」，停止键也停不掉。
+function applyMusicStatus(s) {
+  if (!s) return;
+  MP.source = s.source || 'local';
+  MP.playing = !!s.playing;
+  MP.paused = !!s.paused;
+  MP.index = s.index || null;
+  MP.total = s.total || null;
+  MP.desc = s.desc || '';
+  MP.elapsed = Number(s.elapsed) || 0;
+  MP.elapsedAt = Date.now();
+  if (MP.playing || MP.paused) {
+    MP.title = s.title || MP.title;
+    MP.nowTitle = s.title ? s.title + (s.artist ? ' — ' + s.artist : '') : MP.nowTitle;
+  } else {
+    MP.title = ''; MP.nowTitle = '';
+  }
+  if (MP.source === 'local' && s.path && MP.queue.length) {
+    const i = MP.queue.findIndex(t => t.path === s.path);
+    if (i >= 0 && i !== MP.idx) { MP.idx = i; renderQueue(); }
+  }
+  renderMusic();
+}
+
+async function refreshMusic() {
+  if (DEMO) return;
+  try { applyMusicStatus(await musicApi('/api/music/status')); } catch (e) { /* 后台没起来：保持原样 */ }
+}
+
 function renderMusic() {
   const tv = musicEntity(MUSIC.tv);
   const tvOn = !!(tv && tv.on);
   const pill = $('musicPill');
   if (!pill) return;
 
+  const active = MP.playing || MP.paused;
   const localOn = MP.playing && MP.target === 'local';
-  pill.classList.toggle('playing', localOn || tvOn);
-  $('musicTitle').textContent = MP.playing ? (MP.title || '在放') : '放点音乐';
-  $('musicSub').textContent = MP.playing ? ({ local: '本机', tv: '电视' })[MP.target] : '随机播放';
+  pill.classList.toggle('playing', localOn || tvOn || (MP.source === 'voice' && MP.playing));
+  pill.classList.toggle('paused', MP.paused && !MP.playing);
+  const count = MP.total > 1 ? ' ' + MP.index + '/' + MP.total : '';
+  $('musicTitle').textContent = active ? (MP.title || '在放') : '放点音乐';
+  $('musicSub').textContent = !active ? '随机播放'
+    : (MP.paused ? '已暂停' : ({ local: '本机', tv: '电视' })[MP.target]) +
+      (MP.source === 'voice' ? ' · 语音点歌' : '') + count;
 
   // 音响选择状态
   for (const t of ['local', 'tv']) {
@@ -818,11 +869,17 @@ function renderMusic() {
   // 失败就永远停在「现在没在放」——设备已经在出声，面板却说没放。
   const remoteLive = MP.target !== 'local' && MP.remote.playing;
   const nowTitle = MP.target !== 'local' ? (MP.remote.title || (remoteLive ? '在放' : ''))
-                                        : (MP.playing ? (MP.nowTitle || MP.title || '在放') : '');
-  const nowPlaying = MP.target !== 'local' ? remoteLive : MP.playing;
+                                        : (active ? (MP.nowTitle || MP.title || '在放') : '');
+  const nowPlaying = MP.target !== 'local' ? remoteLive : active;
+  const elapsed = MP.elapsed + (MP.playing ? (Date.now() - MP.elapsedAt) / 1000 : 0);
 
   $('musicNowTitle').textContent = nowPlaying ? (nowTitle || '在放') : '现在没在放';
-  $('musicNowSub').textContent = nowPlaying
+  $('musicNowSub').textContent = nowPlaying && MP.target === 'local'
+    ? [MP.paused ? '已暂停' : '在本机播放',
+       MP.source === 'voice' ? '语音点的' + (MP.desc && MP.desc !== '随机' ? MP.desc : '') + (MP.total > 1 ? '歌单' : '歌') : '',
+       MP.total > 1 ? '第 ' + MP.index + '/' + MP.total + ' 首' : '',
+       fmtSec(elapsed)].filter(Boolean).join(' · ')
+    : nowPlaying
     ? ('在 ' + ({ local: 'SmartView 本机', tv: 'SONY 电视' })[MP.target] + ' 播放' +
        (MP.target !== 'local' ? '（这条通路不提供进度）' : ''))
     : (MP.target === 'local' ? '点「随机播放」开始'
@@ -833,13 +890,16 @@ function renderMusic() {
   if ($('musicVolume')) $('musicVolume').value = String(MP.volume);
   if ($('musicVolumeText')) $('musicVolumeText').textContent = String(MP.volume);
 
-  // 只有本机通路能拿到真实进度；HomePod/电视 的进度条要明确标注不可用，而不是留个空条骗人
-  const prog = document.querySelector('.music-progress');
-  if (prog) {
-    const unsupported = MP.target !== 'local';
-    prog.classList.toggle('unsupported', unsupported);
-    prog.setAttribute('aria-disabled', unsupported ? 'true' : 'false');
+  // 暂停/继续一个键；上一首/下一首只对本机喇叭（电视那条通路没有队列）
+  if ($('musicPauseLocal')) $('musicPauseLocal').textContent = MP.target === 'local' && MP.paused ? '继续' : '暂停';
+  for (const id of ['musicPrev', 'musicNext']) {
+    const b = $(id);
+    if (b) b.disabled = MP.target === 'local' ? !active && !MP.queue.length : MP.queue.length < 2;
   }
+
+  const prog = document.querySelector('.music-progress');
+  // 曲库索引没有时长，原来本机进度条按 240 秒假算：长曲永远到不了头，短曲早早满格。改成只报已放时长
+  if (prog) prog.style.display = 'none';
 }
 
 function renderQueue() {
@@ -949,7 +1009,9 @@ async function playTrack(i) {
     try {
       const r = await musicApi('/api/music/play', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: 'local', title: t.title, volume: MP.volume }),
+        // 整张列表一起给后台：放完一首自动接下一首（原来只放点的那一首就停）
+        body: JSON.stringify({ target: 'local', title: t.title, volume: MP.volume, index: i,
+                               queue: MP.queue.map(x => ({ title: x.title, artist: x.artist, album: x.album, path: x.path })) }),
       });
       if (r && r.ok === false) {
         toast('本机没放成：' + (r.error || '后台没响应'), 'error');
@@ -958,6 +1020,11 @@ async function playTrack(i) {
       } else {
         // 点下去要有回音：曲目名/歌手先写进面板，再让轮询去对真实状态
         MP.playing = true;
+        MP.paused = false;
+        MP.source = 'local';
+        MP.index = i + 1;
+        MP.total = MP.queue.length;
+        MP.elapsed = 0; MP.elapsedAt = Date.now();
         MP.startedAt = Date.now();
         MP.nowTitle = t.title + (t.artist ? ' — ' + t.artist : '');
         renderMusic();
@@ -1013,24 +1080,10 @@ async function pollMusic() {
   if (document.hidden) return;   // 屏幕熄灭/页面在后台就别打后台了
   try {
     if (MP.target === 'local') {
-      const s = await musicApi('/api/music/status');
-      MP.playing = !!s.playing;
-      if (MP.playing) {
-        // 曲名以后台真实 path 为准：用户在语音里让小麦放歌、或队列已被筛/搜换掉时，
-        // MP.queue[MP.idx] 已经不指向在放的那首，界面会显示错的标题。
-        const base = String(s.path || '').split('/').pop().replace(/\.[^.]+$/, '');
-        if (base) MP.title = base;
-        const el = $('musicBar');
-        if (el) {
-          // 原来分母写死 240 秒，长曲永远到不了 100%；接口给了时长就用真实时长
-          const total = Number(s.duration) || 240;
-          el.style.width = Math.min(100, ((Number(s.elapsed) || 0) / total) * 100) + '%';
-        }
-      } else if ($('musicBar')) {
-        // 后台已停（自然播完或语音停掉）时，界面不能还挂着上一首
-        MP.title = '';
-        $('musicBar').style.width = '0%';
-      }
+      // 曲名以后台为准：语音点的歌、面板自己的列表自动换到下一首，都靠它更新
+      applyMusicStatus(await musicApi('/api/music/status'));
+      MP.pollFailed = false;
+      return;
     } else {
       // 非本机通路：向后台查该通路的真实状态（HA 实体），不要只留一个空进度条
       const s = await musicApi('/api/music/status?target=' + MP.target);
@@ -1149,14 +1202,35 @@ if ($('musicPill')) {
     });
   });
   $('musicStopLocal').addEventListener('click', stopMusic);
-  // 暂停和停止必须分开：原来两个键都绑 stopMusic，点暂停实际是停止，无法续播
+  // 本机喇叭上的控制（语音点的歌和面板自己的列表都走 /api/music/control，后台分给 hub 或本机播放器）
+  async function musicControl(action) {
+    if (DEMO) { toast('演示模式：' + action); return; }
+    try {
+      const r = await musicApi('/api/music/control', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      if (r && r.ok === false) toast(r.error || '没成功', 'warn');
+    } catch (e) {
+      toast(e.message || '连不上后台', 'error');
+    }
+    setTimeout(refreshMusic, 600);
+  }
+  // 暂停和停止分开：暂停记住位置，「继续」从那里接着放（原来两个键都是停止）
   $('musicPauseLocal').addEventListener('click', async () => {
     if (MP.target !== 'local') {
       // 非本机通路没有独立的 pause 语义，明确告知而不是静默当暂停
       toast('这条通路只能停止，暂停请用电视自己的遥控', 'info');
+      return stopMusic();
     }
-    await stopMusic();
+    await musicControl(MP.paused ? 'resume' : 'pause');
   });
+  const skipTo = step => {
+    if (MP.target === 'local' && (MP.playing || MP.paused)) return musicControl(step > 0 ? 'next' : 'prev');
+    if (MP.queue.length) return playTrack(((MP.idx < 0 ? 0 : MP.idx + step) + MP.queue.length) % MP.queue.length);
+  };
+  if ($('musicPrev')) $('musicPrev').addEventListener('click', () => skipTo(-1));
+  if ($('musicNext')) $('musicNext').addEventListener('click', () => skipTo(1));
   $('musicVolume').addEventListener('input', (e) => {
     MP.volume = Number(e.target.value);
     $('musicVolumeText').textContent = String(MP.volume);
@@ -1588,6 +1662,7 @@ const handlers = {
     if (s.alarms) ui.alarms = s.alarms;
     if (s.devices) ui.devices = s.devices;
     renderModels(); renderThread(); renderStatus(); renderAlarms(); renderDevices();
+    refreshMusic();
     updateFinished((s.update || {}).job);
     probeHub();
   },
@@ -1615,10 +1690,11 @@ const handlers = {
     ui.thread = t; renderThread();
   },
   message: m => upsertMessage(m),
+  music: m => { if (MP.target === 'local') applyMusicStatus(m); },
   toast: t => toast(t.text, t.kind),
   volume(v) {
     // a ring's own volume (keys while it rings) is shown, but isn't the device volume
-    if (!v.ring) { ui.status.volume = v.volume; renderVol(); }
+    if (!v.ring) { ui.status.volume = v.volume; renderVol(); renderMusic(); }
     if (v.source !== 'page') showVolume(v.volume);
   },
   alarms(a) {
