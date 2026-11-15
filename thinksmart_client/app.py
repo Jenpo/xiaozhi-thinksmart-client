@@ -1544,8 +1544,8 @@ class Client:
 
     # ---- models (the hub's local-only /kiosk/llm endpoints) ----
 
-    async def _hub_http(self, path, body=None):
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+    async def _hub_http(self, path, body=None, total=15):
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=total)) as s:
             if body is None:
                 async with s.get(self.cfg['hub_http'] + path) as r:
                     data = await r.json(content_type=None)

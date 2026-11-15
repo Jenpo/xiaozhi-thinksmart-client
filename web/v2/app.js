@@ -44,6 +44,11 @@ const SCENES = [
     ['现在家里有哪些设备', '#5ee0ff24', '#8ff0ff', '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'],
     ['电视关掉', '#ff7ac824', '#ff9bd6', '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/>'],
   ]],
+  ['看作业', [
+    ['睇下我嘅作业', '#5ee0ff24', '#8ff0ff', '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>'],
+    ['帮我看一下作业', '#ffb54729', '#ffcf7a', '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>'],
+    ['Check my homework', '#9b7bff2b', '#c8b4ff', '<path d="M4 6l2 2 3-3M4 13l2 2 3-3M12 7h8M12 14h8"/>'],
+  ]],
   ['夜间', [
     ['晚安', '#5ee0ff24', '#8ff0ff', '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>'],
     ['把屏幕亮度调到 20%', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>'],
@@ -69,6 +74,7 @@ function renderChips() {
     b.innerHTML = `<i style="background:${bg};color:${fg}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></i>${esc(q)}`;
     b.addEventListener('click', async () => {
+      if (SCENES[i][0] === '看作业') { hwSetLang(q === 'Check my homework' ? 'en' : q === '睇下我嘅作业' ? 'yue' : 'zh'); hwOpen(true); return; }
       // 触屏偶尔一次点按报 6-15 次 click（11-14 日志），还会连带点到相邻卡片：
       // 一张卡在发送/冷却期间，所有卡片都不再响应
       if (chipLock) return;
@@ -91,6 +97,179 @@ function renderChips() {
     box.appendChild(b);
   }
 }
+
+/* ---- 看作业：内置摄像头拍照 → 网关看图 → 逐题卡片 + 粤语/英文朗读 ---- */
+const HW = { lang: 'yue', data: null, busy: false, audio: null };
+
+function hwEl(id) { return document.getElementById(id); }
+
+function hwSetBusy(on, text) {
+  HW.busy = on;
+  const b = hwEl('hwBusy');
+  if (b) { b.hidden = !on; hwEl('hwBusyText').textContent = text || '在看…'; }
+  const shoot = hwEl('hwShoot'), again = hwEl('hwAgain');
+  if (shoot) shoot.disabled = on;
+  if (again) again.disabled = on;
+}
+
+function hwRenderBoxes(items) {
+  const box = hwEl('hwBoxes');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const it of items || []) {
+    const b = it.box;
+    if (!Array.isArray(b) || b.length !== 4) continue;
+    const d = document.createElement('div');
+    d.className = 'hw-box' + (it.ok === false ? '' : ' ok');
+    d.style.left = (b[0] * 100) + '%';
+    d.style.top = (b[1] * 100) + '%';
+    d.style.width = (b[2] * 100) + '%';
+    d.style.height = (b[3] * 100) + '%';
+    box.appendChild(d);
+  }
+}
+
+function hwRender(d) {
+  HW.data = d || null;
+  const img = hwEl('hwImg'), empty = hwEl('hwEmpty'), head = hwEl('hwHead');
+  const list = hwEl('hwItems'), boxes = hwEl('hwBoxes');
+  const speak = hwEl('hwSpeak'), stop = hwEl('hwStop');
+  if (!d) {
+    if (img) { img.hidden = true; img.removeAttribute('src'); }
+    if (empty) empty.hidden = false;
+    if (head) head.innerHTML = '';
+    if (boxes) boxes.innerHTML = '';
+    if (list) list.innerHTML = '<div class="hw-tip">拍一张作业纸的照片，我会逐题告诉你哪里要再看一次，先给提示、不直接报答案。</div>';
+    if (speak) speak.hidden = true;
+    if (stop) stop.hidden = true;
+    return;
+  }
+  const thumb = d.thumb || '';
+  if (img && thumb) {
+    img.src = thumb;
+    img.hidden = false;
+    if (empty) empty.hidden = true;
+    img.onload = () => hwRenderBoxes(d.items);
+  }
+  if (head) {
+    const n = (d.items || []).length;
+    const bad = (d.items || []).filter(i => i.ok === false).length;
+    head.innerHTML = `<b>${esc(d.subject || '作业')}</b><span>${esc(d.grade_guess || '')}`
+      + (d.readable === false ? ' · 看不清，请再拍一张' : ` · ${n} 题，${bad} 题要再看一次`) + '</span>';
+  }
+  if (list) {
+    list.innerHTML = '';
+    if (d.readable === false) {
+      const t = document.createElement('div');
+      t.className = 'hw-tip';
+      t.textContent = (d.speech && (d.speech[HW.lang] || d.speech.zh)) || '这张看不清，请把作业纸放到摄像头前面再拍一张。';
+      list.appendChild(t);
+    }
+    for (const it of d.items || []) {
+      const el = document.createElement('div');
+      el.className = 'hw-item ' + (it.ok === false ? 'bad' : it.ok === true ? 'good' : '');
+      const mark = it.ok === false ? '✗' : it.ok === true ? '✓' : '·';
+      let html = `<div class="q"><em>第 ${esc(String(it.no ?? ''))} 题</em>${esc(it.question || '')}<span class="mark">${mark}</span></div>`;
+      if (it.child_answer) html += `<div class="a">写的：${esc(it.child_answer)}`
+        + (it.ok === false && it.correct ? ` <s>✗</s> 应该是 <b>${esc(it.correct)}</b>` : '') + '</div>';
+      if (it.hint) html += `<div class="hint">💡 ${esc(it.hint)}</div>`;
+      if (it.explain && it.ok === false) html += `<div class="explain">${esc(it.explain)}</div>`;
+      el.innerHTML = html;
+      el.addEventListener('click', () => { if (it.ok === false) hwSpeakItem(it); });
+      list.appendChild(el);
+    }
+    if (d.summary) {
+      const s = document.createElement('div');
+      s.className = 'hw-tip';
+      s.textContent = d.summary;
+      list.appendChild(s);
+    }
+  }
+  if (speak) speak.hidden = !hwSpeechText(d);
+  if (stop) stop.hidden = true;
+}
+
+function hwSpeechText(d) {
+  if (!d) return '';
+  const sp = d.speech || {};
+  return (sp[HW.lang] || sp.zh || d.summary || '').trim();
+}
+
+function hwSpeakText(text) {
+  if (!text) return;
+  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  const url = '/api/hw/tts?lang=' + encodeURIComponent(HW.lang) + '&text=' + encodeURIComponent(text);
+  const a = new Audio(url);
+  HW.audio = a;
+  const stop = hwEl('hwStop');
+  if (stop) stop.hidden = false;
+  a.addEventListener('ended', () => { if (HW.audio === a) HW.audio = null; if (stop) stop.hidden = true; });
+  a.addEventListener('error', () => { if (stop) stop.hidden = true; });
+  a.play().catch(() => toast('朗读没播出来', 'error'));
+}
+
+function hwSpeakItem(it) {
+  const parts = [it.question, it.hint, it.explain].filter(Boolean);
+  if (parts.length) hwSpeakText(parts.join('。'));
+}
+
+async function hwCapture() {
+  if (HW.busy) return;
+  hwSetBusy(true, '在拍照…');
+  try {
+    const r = await fetch('/api/hw/capture', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: HW.lang }),
+    });
+    const d = await r.json().catch(() => ({ ok: false, error: '网关没有回话' }));
+    if (!d.ok) { toast(d.error || '没拍成，再试一次', 'error'); return; }
+    hwRender(d);
+    const text = hwSpeechText(d);
+    if (text) hwSpeakText(text);
+  } catch (e) {
+    toast('拍照失败，再试一次', 'error');
+  } finally {
+    hwSetBusy(false);
+  }
+}
+
+function hwOpen(on) {
+  const sheet = hwEl('hwSheet');
+  if (!sheet) return;
+  sheet.classList.toggle('on', !!on);
+  if (on) {
+    if (!HW.data) hwLoadLatest();
+    hwCapture();
+  } else if (HW.audio) {
+    HW.audio.pause(); HW.audio = null;
+  }
+}
+
+async function hwLoadLatest() {
+  try {
+    const r = await fetch('/api/hw/latest');
+    const d = await r.json();
+    if (d.ok && d.homework) hwRender(d.homework);
+  } catch (e) { /* 网关不通就保持空白 */ }
+}
+
+function hwSetLang(lang) {
+  HW.lang = lang;
+  document.querySelectorAll('.hw-lang').forEach(el => el.classList.toggle('on', el.dataset.lang === lang));
+  if (HW.data) hwRender(HW.data);
+}
+
+for (const el of document.querySelectorAll('.hw-lang')) {
+  el.addEventListener('click', () => hwSetLang(el.dataset.lang));
+}
+if (hwEl('hwShoot')) hwEl('hwShoot').addEventListener('click', hwCapture);
+if (hwEl('hwAgain')) hwEl('hwAgain').addEventListener('click', hwCapture);
+if (hwEl('hwClose')) hwEl('hwClose').addEventListener('click', () => hwOpen(false));
+if (hwEl('hwSpeak')) hwEl('hwSpeak').addEventListener('click', () => hwSpeakText(hwSpeechText(HW.data)));
+if (hwEl('hwStop')) hwEl('hwStop').addEventListener('click', () => {
+  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  hwEl('hwStop').hidden = true;
+});
 
 /* ---- clock ---- */
 function tick() {
@@ -1812,6 +1991,8 @@ for (const [name] of SCENES) {
     ui.scene = SCENES.findIndex(s => s[0] === name);
     ui.scenePicked = Date.now();
     renderChips();
+    // 「看作业」这一栏不是话术：点标签就把面板打开并拍一张（摄像头是设备内置的，不用手机扫码）
+    if (name === '看作业') hwOpen(true);
   });
   $('sceneTabs').appendChild(t);
 }

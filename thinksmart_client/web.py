@@ -491,6 +491,10 @@ def make_app(client: Client):
     app.router.add_post('/api/power-off', power_off)
     app.router.add_post('/api/update/check', update_check)
     app.router.add_post('/api/update/install', update_install)
+    # [2026-11-15] 看作业：内置摄像头拍照 → 网关看图 → 屏幕卡片 + 语音
+    from . import homework
+    for path, handler in homework.install(client):
+        app.router.add_route('*', path, handler)
     app.router.add_static('/static/', WEB)
 
     async def revalidate(request, response):

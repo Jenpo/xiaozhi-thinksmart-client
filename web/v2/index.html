@@ -177,6 +177,47 @@
   </div>
 </div>
 
+<div class="sheet hw" id="hwSheet">
+  <div class="sheet-bar">
+    <div><h2>看作业</h2><p>把作业放到摄像头前面，我帮你看哪几题要再想一想</p></div>
+    <button class="close" id="hwClose" aria-label="关闭">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="hw-body">
+    <div class="hw-left">
+      <div class="hw-photo" id="hwPhoto">
+        <img id="hwImg" alt="作业照片" hidden>
+        <div class="hw-empty" id="hwEmpty">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 0-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2"/><rect x="3.5" y="9" width="17" height="6" rx="3"/><circle cx="12" cy="12" r="2.2"/></svg>
+          <span>还没拍</span>
+        </div>
+        <div class="hw-busy" id="hwBusy" hidden><i></i><span id="hwBusyText">在拍照…</span></div>
+        <div class="hw-boxes" id="hwBoxes"></div>
+      </div>
+      <div class="hw-actions">
+        <button class="pri" id="hwShoot">拍作业</button>
+        <button id="hwAgain">再拍一张</button>
+        <div class="hw-langs" id="hwLangs">
+          <button class="hw-lang on" data-lang="yue">粤语</button>
+          <button class="hw-lang" data-lang="en">English</button>
+          <button class="hw-lang" data-lang="zh">普通话</button>
+        </div>
+      </div>
+    </div>
+    <div class="hw-right">
+      <div class="hw-head" id="hwHead"></div>
+      <div class="hw-items" id="hwItems">
+        <div class="hw-tip">拍一张作业纸的照片，我会逐题告诉你哪里要再看一次，先给提示、不直接报答案。</div>
+      </div>
+      <div class="hw-foot">
+        <button id="hwSpeak" hidden>听一次</button>
+        <button id="hwStop" hidden>停</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="sheet" id="sheet">
   <div class="sheet-bar">
     <div><h2>选择模型</h2><p>切换后，新的提问交给它回答；每个模型各自保留对话</p></div>
