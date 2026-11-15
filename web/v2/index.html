@@ -188,6 +188,8 @@
     <div class="hw-left">
       <div class="hw-photo" id="hwPhoto">
         <img id="hwImg" alt="作业照片" hidden>
+        <img id="hwLive" class="hw-live" alt="实时画面" hidden>
+        <div class="hw-livetag" id="hwLiveTag" hidden><i></i>实时画面</div>
         <div class="hw-empty" id="hwEmpty">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 0-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2"/><rect x="3.5" y="9" width="17" height="6" rx="3"/><circle cx="12" cy="12" r="2.2"/></svg>
           <span>还没拍</span>
@@ -211,6 +213,7 @@
         <div class="hw-tip">拍一张作业纸的照片，我会逐题告诉你哪里要再看一次，先给提示、不直接报答案。</div>
       </div>
       <div class="hw-foot">
+        <button id="hwBook">错题本</button>
         <button id="hwSpeak" hidden>听一次</button>
         <button id="hwStop" hidden>停</button>
       </div>

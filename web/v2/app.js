@@ -99,7 +99,7 @@ function renderChips() {
 }
 
 /* ---- 看作业：内置摄像头拍照 → 网关看图 → 逐题卡片 + 粤语/英文朗读 ---- */
-const HW = { lang: 'yue', data: null, busy: false, audio: null, tick: null };
+const HW = { lang: 'yue', data: null, busy: false, audio: null, tick: null, view: 'result', live: false };
 const HW_COUNTDOWN = 3;   // 点「拍」或说「睇作业」后先倒数，给孩子把作业纸摆到镜头前
 
 function hwEl(id) { return document.getElementById(id); }
@@ -108,6 +108,7 @@ function hwSetBusy(on, text) {
   if (HW.tick) { clearInterval(HW.tick); HW.tick = null; }
   HW.busy = on;
   const b = hwEl('hwBusy');
+  if (b) b.classList.remove('cd');
   if (b) { b.hidden = !on; hwEl('hwBusyText').textContent = text || '在看…'; }
   const shoot = hwEl('hwShoot'), again = hwEl('hwAgain');
   if (shoot) shoot.disabled = on;
@@ -131,8 +132,9 @@ function hwRenderBoxes(items) {
   }
 }
 
-function hwRender(d) {
+function hwRender(d, fresh = false) {   // fresh=刚拍出来的结果：收掉实时画面换成照片
   HW.data = d || null;
+  hwSetView('result');
   const img = hwEl('hwImg'), empty = hwEl('hwEmpty'), head = hwEl('hwHead');
   const list = hwEl('hwItems'), boxes = hwEl('hwBoxes');
   const speak = hwEl('hwSpeak'), stop = hwEl('hwStop');
@@ -147,17 +149,20 @@ function hwRender(d) {
     return;
   }
   const thumb = d.thumb || '';
+  if (thumb && fresh) hwLiveOff();
   if (img && thumb) {
     img.src = thumb;
-    img.hidden = false;
-    if (empty) empty.hidden = true;
+    img.hidden = HW.live;
+    if (empty && !HW.live) empty.hidden = true;
     img.onload = () => hwRenderBoxes(d.items);
   }
   if (head) {
     const n = (d.items || []).length;
     const bad = (d.items || []).filter(i => i.ok === false).length;
+    const fixed = (d.fixed || []).length;
     head.innerHTML = `<b>${esc(d.subject || '作业')}</b><span>${esc(d.grade_guess || '')}`
-      + (d.readable === false ? ' · 看不清，请再拍一张' : ` · ${n} 题，${bad} 题要再看一次`) + '</span>';
+      + (d.readable === false ? ' · 看不清，请再拍一张' : ` · ${n} 题，${bad} 题要再看一次`) + '</span>'
+      + (fixed ? `<span class="hw-fixed">🎉 改对了 ${fixed} 题</span>` : '');
   }
   if (list) {
     list.innerHTML = '';
@@ -171,13 +176,14 @@ function hwRender(d) {
       const el = document.createElement('div');
       el.className = 'hw-item ' + (it.ok === false ? 'bad' : it.ok === true ? 'good' : '');
       const mark = it.ok === false ? '✗' : it.ok === true ? '✓' : '·';
-      let html = `<div class="q"><em>第 ${esc(String(it.no ?? ''))} 题</em>${esc(it.question || '')}<span class="mark">${mark}</span></div>`;
-      if (it.child_answer) html += `<div class="a">写的：${esc(it.child_answer)}`
-        + (it.ok === false && it.correct ? ` <s>✗</s> 应该是 <b>${esc(it.correct)}</b>` : '') + '</div>';
-      if (it.hint) html += `<div class="hint">💡 ${esc(it.hint)}</div>`;
-      if (it.explain && it.ok === false) html += `<div class="explain">${esc(it.explain)}</div>`;
-      el.innerHTML = html;
-      el.addEventListener('click', () => { if (it.ok === false) hwSpeakItem(it); });
+      // 先提示、后答案：错题只给提示；点「看答案」或第二次还错（retry）才露出正确答案和讲解
+      const wasFixed = (d.fixed || []).some(no => String(no) === String(it.no));
+      el.innerHTML = hwItemHtml(it, mark, it.retry === true, wasFixed);
+      el.addEventListener('click', ev => {
+        if (it.ok !== false) return;
+        if (ev.target.closest('.reveal')) { el.innerHTML = hwItemHtml(it, mark, true, false); it._shown = true; return; }
+        hwSpeakItem(it);
+      });
       list.appendChild(el);
     }
     if (d.summary) {
@@ -189,6 +195,101 @@ function hwRender(d) {
   }
   if (speak) speak.hidden = !hwSpeechText(d);
   if (stop) stop.hidden = true;
+}
+
+function hwItemHtml(it, mark, show, fixed) {
+  let html = `<div class="q"><em>第 ${esc(String(it.no ?? ''))} 题</em>${esc(it.question || '')}<span class="mark">${mark}</span>`
+    + (fixed ? '<span class="hw-tag ok">改对了</span>' : it.retry ? '<span class="hw-tag">再错一次</span>' : '') + '</div>';
+  const open = show || it._shown;
+  if (it.child_answer) html += `<div class="a">写的：${esc(it.child_answer)}`
+    + (it.ok === false && it.correct && open ? ` <s>✗</s> 应该是 <b>${esc(it.correct)}</b>` : '') + '</div>';
+  if (it.hint) html += `<div class="hint">💡 ${esc(it.hint)}</div>`;
+  if (it.ok === false) {
+    if (open && it.explain) html += `<div class="explain">${esc(it.explain)}</div>`;
+    else if (!open && (it.explain || it.correct)) html += '<button class="reveal">改过还不会？看答案</button>';
+  }
+  return html;
+}
+
+/* ---- 实时画面：面板开着、倒数时看得到镜头里有什么；拍的那一下客户端会自己停掉 ---- */
+function hwLiveOn() {
+  const v = hwEl('hwLive');
+  if (!v || HW.live) return;
+  HW.live = true;
+  v.onerror = () => hwLiveOff(true);
+  v.onload = null;
+  v.src = '/api/hw/live?t=' + Date.now();
+  v.hidden = false;
+  const tag = hwEl('hwLiveTag'); if (tag) tag.hidden = false;
+  const e = hwEl('hwEmpty'); if (e) e.hidden = true;
+  const img = hwEl('hwImg'); if (img) img.hidden = true;
+  const bx = hwEl('hwBoxes'); if (bx) bx.hidden = true;
+}
+
+function hwLiveOff(failed) {
+  const v = hwEl('hwLive');
+  HW.live = false;
+  if (v) { v.onerror = null; v.removeAttribute('src'); v.hidden = true; }
+  const tag = hwEl('hwLiveTag'); if (tag) tag.hidden = true;
+  const img = hwEl('hwImg'), e = hwEl('hwEmpty'), bx = hwEl('hwBoxes');
+  const has = img && img.getAttribute('src');
+  if (img) img.hidden = !has;
+  if (bx) bx.hidden = false;
+  if (e) {
+    e.hidden = !!has;
+    const t = e.querySelector('span');
+    if (t) t.textContent = failed ? '看不到实时画面，点一下再试（镜头盖拨开了吗？）' : '点一下看实时画面';
+  }
+}
+
+/* ---- 错题本：网关把盘上 30 天的结果合并成错题清单 + 本周小结（不调模型） ---- */
+function hwSetView(v) {
+  HW.view = v;
+  const b = hwEl('hwBook');
+  if (b) b.textContent = v === 'book' ? '本次结果' : '错题本';
+}
+
+async function hwShowBook() {
+  const head = hwEl('hwHead'), list = hwEl('hwItems');
+  if (!list) return;
+  hwSetView('book');
+  list.innerHTML = '<div class="hw-tip">在翻错题本…</div>';
+  let d;
+  try {
+    d = await (await fetch('/api/hw/book')).json();
+  } catch (e) { d = { ok: false }; }
+  if (HW.view !== 'book') return;
+  if (!d.ok) { list.innerHTML = '<div class="hw-tip">错题本暂时打不开</div>'; return; }
+  const w = d.week || {};
+  if (head) head.innerHTML = `<b>错题本</b><span>还要练 ${d.open || 0} 题</span>`;
+  list.innerHTML = '';
+  const sum = document.createElement('div');
+  sum.className = 'hw-week';
+  sum.innerHTML = w.checks
+    ? `<b>这 7 天</b>看了 ${w.checks} 次作业，${w.items} 题里做对 ${w.right} 题`
+      + (w.accuracy != null ? `（${w.accuracy}%）` : '') + `，改对 ${w.fixed} 道错题`
+    : '<b>这 7 天</b>还没看过作业';
+  list.appendChild(sum);
+  const ms = d.mistakes || [];
+  if (!ms.length) {
+    const t = document.createElement('div');
+    t.className = 'hw-tip';
+    t.textContent = '最近 30 天没有错题，继续保持！';
+    list.appendChild(t);
+  }
+  for (const m of ms) {
+    const el = document.createElement('div');
+    el.className = 'hw-item ' + (m.fixed ? 'good' : 'bad');
+    const when = (m.last || '').slice(5, 10);
+    el.innerHTML = `<div class="q"><em>${esc(m.subject || '')} ${esc(when)}</em>${esc(m.question)}`
+      + `<span class="mark">${m.fixed ? '✓' : '✗'}</span>`
+      + (m.fixed ? '<span class="hw-tag ok">已改对</span>' : m.times > 1 ? `<span class="hw-tag">错了 ${m.times} 次</span>` : '')
+      + '</div>'
+      + (m.child_answer ? `<div class="a">写过：${esc(m.child_answer)}</div>` : '')
+      + (m.hint ? `<div class="hint">💡 ${esc(m.hint)}</div>` : '');
+    el.addEventListener('click', () => hwSpeakText([m.question, m.hint].filter(Boolean).join('。')));
+    list.appendChild(el);
+  }
 }
 
 function hwSpeechText(d) {
@@ -211,12 +312,14 @@ function hwSpeakText(text) {
 }
 
 function hwSpeakItem(it) {
-  const parts = [it.question, it.hint, it.explain].filter(Boolean);
+  // 没点「看答案」前只念题目和提示，不把讲解（含答案）念出来
+  const parts = [it.question, it.hint, (it._shown || it.retry) ? it.explain : ''].filter(Boolean);
   if (parts.length) hwSpeakText(parts.join('。'));
 }
 
 function hwCountdown(n) {
   hwSetBusy(true, '把作业放到镜头前… ' + n);
+  const b = hwEl('hwBusy'); if (b) b.classList.add('cd');   // 倒数时半透明，看得到实时画面
   let left = n;
   HW.tick = setInterval(() => {
     left -= 1;
@@ -236,17 +339,20 @@ function hwEvent(e) {
     if (e.language && e.language !== HW.lang) hwSetLang(e.language);
   }
   switch (e.phase) {
-    case 'countdown': hwCountdown(e.seconds || HW_COUNTDOWN); break;
-    case 'shooting': hwSetBusy(true, '在拍照…'); break;
+    case 'countdown': hwLiveOn(); hwCountdown(e.seconds || HW_COUNTDOWN); break;
+    case 'shooting': hwLiveOff(); hwSetBusy(true, '在拍照…'); break;
     case 'analyzing': hwSetBusy(true, '在看作业…'); break;
-    case 'done': if (voice) { hwSetBusy(false); hwRender(e.data); } break;   // 语音那条由网关念，这里不再朗读
-    case 'error': if (voice) { hwSetBusy(false); toast(e.error || '没拍成', 'error'); } break;
+    case 'done': if (voice) { hwSetBusy(false); hwRender(e.data, true); } break;   // 语音那条由网关念，这里不再朗读
+    // 出错一律停转圈（点按那条 hwCapture 也会再收一次尾，重复无害）；提示只在语音那条弹，点按的由 hwCapture 弹
+    case 'error': hwSetBusy(false); if (voice) toast(e.error || '没拍成', 'error'); break;
   }
 }
 
 async function hwCapture() {
   if (HW.busy) return;
+  hwLiveOn();
   hwSetBusy(true, '准备拍照…');
+  const b0 = hwEl('hwBusy'); if (b0) b0.classList.add('cd');
   try {
     const r = await fetch('/api/hw/capture', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -254,13 +360,14 @@ async function hwCapture() {
     });
     const d = await r.json().catch(() => ({ ok: false, error: '网关没有回话' }));
     if (!d.ok) { toast(d.code === 'busy' ? '正在拍，等一下' : (d.error || '没拍成，再试一次'), 'error'); return; }
-    hwRender(d);
+    hwRender(d, true);
     const text = hwSpeechText(d);
     if (text) hwSpeakText(text);
   } catch (e) {
     toast('拍照失败，再试一次', 'error');
   } finally {
     hwSetBusy(false);
+    if (HW.live && !(HW.data && HW.data.thumb)) hwLiveOff();
   }
 }
 
@@ -268,8 +375,10 @@ function hwOpen(on, shoot = true) {
   const sheet = hwEl('hwSheet');
   if (!sheet) return;
   sheet.classList.toggle('on', !!on);
+  if (!on) hwLiveOff();
   if (on) {
     if (!HW.data) hwLoadLatest();
+    if (!shoot && !HW.busy) hwLiveOn();
     if (shoot) hwCapture();
   } else if (HW.audio) {
     HW.audio.pause(); HW.audio = null;
@@ -296,6 +405,10 @@ for (const el of document.querySelectorAll('.hw-lang')) {
 if (hwEl('hwShoot')) hwEl('hwShoot').addEventListener('click', hwCapture);
 if (hwEl('hwAgain')) hwEl('hwAgain').addEventListener('click', hwCapture);
 if (hwEl('hwClose')) hwEl('hwClose').addEventListener('click', () => hwOpen(false));
+if (hwEl('hwPhoto')) hwEl('hwPhoto').addEventListener('click', () => { if (!HW.busy && !HW.live) hwLiveOn(); });
+if (hwEl('hwBook')) hwEl('hwBook').addEventListener('click', () => {
+  if (HW.view === 'book') hwRender(HW.data); else hwShowBook();
+});
 if (hwEl('hwSpeak')) hwEl('hwSpeak').addEventListener('click', () => hwSpeakText(hwSpeechText(HW.data)));
 if (hwEl('hwStop')) hwEl('hwStop').addEventListener('click', () => {
   if (HW.audio) { HW.audio.pause(); HW.audio = null; }

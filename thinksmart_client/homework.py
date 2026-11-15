@@ -10,6 +10,9 @@ thinksmart-camera 包里（2026-11-15 装上并验证：S5KC505A 3-0037 识别�
   POST /api/hw/clear             清掉网关的最近一次
   GET  /api/hw/photo             拿最近一次的缩略图
   GET  /api/hw/diag              服务进程自己的设备权限 + 镜头盖状态
+  GET  /api/hw/live              实时画面（multipart MJPEG，640x480 约 10 帧/秒，最长 LIVE_MAX 秒）；
+                                 摄像头独占：拍照前自动停掉，拍的那一下回 409
+  GET  /api/hw/book              错题本 + 本周小结（转网关 /kiosk/hw/book）
 分析本身在网关（/kiosk/hw/analyze），这里只负责拍和转。
 拍照各阶段经 /events 推 'homework' 事件给页面（countdown → shooting → analyzing → done/error），
 语音触发（hub 的 homework_check）时屏幕也会自动打开面板、显示倒数和结果。
@@ -36,6 +39,16 @@ CAPTURE_HEIGHT = 960
 CAPTURE_TIMEOUT = 60
 PHOTO_DIR = os.path.expanduser('~/.local/share/thinksmart/photo')
 MAX_COUNTDOWN = 5
+# 网关 aiohttp 收包上限 1 MB，照片按 base64 发（×1.34），原图超过这个就先压一遍。
+# 2026-11-15 晚亮处拍出 894–933 KB → 413 → 页面一直转（实测 524 KB 时正常）。
+MAX_SEND_BYTES = 600 * 1024
+# 实时画面：实测 640x480@10fps 占一个核约 60%（8 核），SIGTERM 能干净退出
+LIVE_CMD = ['gst-launch-1.0', '-q', 'libcamerasrc',
+            '!', 'video/x-raw,width=640,height=480',
+            '!', 'videorate', 'drop-only=true', '!', 'video/x-raw,framerate=10/1',
+            '!', 'videoconvert', '!', 'jpegenc', 'quality=60',
+            '!', 'multipartmux', 'boundary=frame', '!', 'fdsink', 'fd=1']
+LIVE_MAX = 120             # 面板开着没人动也别一直占摄像头、发热
 
 # 镜头盖：内核把侧面拨片报成 EV_SW / SW_CAMERA_LENS_COVER（1 = 盖着）
 EV_SW = 0x05
@@ -69,6 +82,28 @@ def _lens_state():
 
 def _gst_available():
     return shutil.which('gst-launch-1.0') is not None
+
+def _shrink(jpeg, limit=MAX_SEND_BYTES):
+    """太大的照片用 ffmpeg 降 JPEG 质量重压（尺寸不变，判题实测与分辨率/质量无关）。压不下来就缩到 960 宽。"""
+    if len(jpeg) <= limit:
+        return jpeg
+    for q, vf in ((6, None), (9, None), (9, 'scale=960:-2')):
+        cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0']
+        if vf:
+            cmd += ['-vf', vf]
+        cmd += ['-q:v', str(q), '-f', 'mjpeg', 'pipe:1']
+        try:
+            p = subprocess.run(cmd, input=jpeg, capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning('压照片失败: %s', e)
+            return jpeg
+        out = p.stdout
+        if p.returncode == 0 and out.startswith(b'\xff\xd8\xff') and len(out) <= limit:
+            log.info('照片 %dKB 压到 %dKB（q=%d%s）', len(jpeg) // 1024, len(out) // 1024, q, ' 960宽' if vf else '')
+            return out
+    log.warning('照片 %dKB 压不到 %dKB 以下', len(jpeg) // 1024, limit // 1024)
+    return out if out and len(out) < len(jpeg) else jpeg
+
 
 def _capture_sync(width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT, timeout=CAPTURE_TIMEOUT):
     """拍一张 JPEG。libcamerasrc 不支持 num-buffers，所以用 multifilesink 收两帧后杀掉进程：
@@ -153,6 +188,54 @@ def install(client):
     """把这些接口挂到客户端（和 web.py 里的路由同一份 app）。"""
 
     lock = asyncio.Lock()
+    live = {'proc': None, 'shooting': False}
+
+    async def stop_live():
+        """停掉实时画面，等 gst 真退出（不然 /dev/media0 还被占着，拍照报 busy）。"""
+        p, live['proc'] = live['proc'], None
+        if not p or p.returncode is not None:
+            return
+        p.terminate()
+        try:
+            await asyncio.wait_for(p.wait(), 4)
+        except asyncio.TimeoutError:
+            p.kill()
+            try:
+                await asyncio.wait_for(p.wait(), 3)
+            except asyncio.TimeoutError:
+                log.warning('实时画面 gst 没退出（pid %s）', p.pid)
+        await asyncio.sleep(0.3)
+
+    async def live_stream(request):
+        if live['shooting']:
+            return web.json_response({'ok': False, 'code': 'busy', 'error': '正在拍'}, status=409)
+        if client.cfg.get('homework_lens_check', True) and await asyncio_to_thread(_lens_state) is True:
+            return web.json_response({'ok': False, 'code': 'lens_closed', 'error': '镜头盖没打开'}, status=409)
+        await stop_live()                     # 只留一路：新开的页面/重连顶掉旧的
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *LIVE_CMD, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        except OSError as e:
+            return web.json_response({'ok': False, 'error': '起不了实时画面: %s' % e}, status=503)
+        live['proc'] = proc
+        resp = web.StreamResponse(headers={'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
+                                           'Cache-Control': 'no-store'})
+        await resp.prepare(request)
+        until = time.monotonic() + LIVE_MAX
+        try:
+            while time.monotonic() < until:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                await resp.write(chunk)
+        except (ConnectionResetError, ConnectionError):
+            pass
+        finally:
+            if live['proc'] is proc:
+                await stop_live()
+            elif proc.returncode is None:
+                proc.kill()
+        return resp
 
     def push(phase, **data):
         client.events.publish('homework', {'phase': phase, **data})
@@ -205,7 +288,9 @@ def install(client):
                 push('countdown', seconds=countdown, language=language, source=source)
                 await asyncio.sleep(countdown)
             push('shooting', source=source)
+            live['shooting'] = True
             try:
+                await stop_live()             # 实时画面在倒数时开着，拍之前让出摄像头
                 jpeg = await asyncio_to_thread(_capture_sync)
             except RuntimeError as e:
                 log.warning('拍照失败: %s', e)
@@ -213,7 +298,10 @@ def install(client):
             except Exception as e:
                 log.exception('拍照失败')
                 return fail('capture', '拍照失败: %s' % e, 500)
+            finally:
+                live['shooting'] = False
             push('analyzing', source=source)
+            jpeg = await asyncio_to_thread(_shrink, jpeg)
             payload = {'image': base64.b64encode(jpeg).decode(), 'language': language,
                        'source': 'camera'}
             try:
@@ -228,6 +316,15 @@ def install(client):
     async def latest(_request):
         try:
             data = await client._hub_http('/kiosk/hw/latest')
+        except Exception as e:
+            return web.json_response({'ok': False, 'error': '网关没答: %s' % e}, status=502)
+        return web.json_response(data)
+
+    async def book(request):
+        """错题本 + 本周小结：原样转网关 /kiosk/hw/book。"""
+        days = request.query.get('days') or '30'
+        try:
+            data = await client._hub_http('/kiosk/hw/book?days=' + urllib.parse.quote(days))
         except Exception as e:
             return web.json_response({'ok': False, 'error': '网关没答: %s' % e}, status=502)
         return web.json_response(data)
@@ -278,7 +375,7 @@ def install(client):
     client.hw_photo = photo
     return [('/api/hw/capture', capture), ('/api/hw/latest', latest),
             ('/api/hw/clear', clear), ('/api/hw/photo', photo), ('/api/hw/tts', tts),
-            ('/api/hw/diag', diag)]
+            ('/api/hw/diag', diag), ('/api/hw/book', book), ('/api/hw/live', live_stream)]
 
 async def asyncio_to_thread(func, *args, **kwargs):
     import functools
