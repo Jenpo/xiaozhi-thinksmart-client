@@ -22,13 +22,14 @@
 | `thinksmart_client/sleep.py` | 睡眠时段（可跨午夜）：回复音量减半、屏幕调暗、补报不主动念；设置存在用户配置里（`config.save`），页面设置页和语音工具都能改 |
 | `thinksmart_client/opus.py` | 系统 libopus 的 ctypes 封装 |
 | `thinksmart_client/web.py` | 页面、事件流（SSE）、按钮接口 |
+| `thinksmart_client/music_api.py` | 面板播放器（本机喇叭）：读网关生成的 NAS 曲库索引（18368 首）、搜索/随机、ffplay 播放；有队列（放完自动接下一首，`web.py` 每秒 `tick()`）、真暂停（SIGSTOP/SIGCONT）、调音量从当前位置重开 |
 | `web/` | 界面：正式版是 `v2/`（带表情的光球，首页 `/` 和 `/v2`），第一版 `index.html`、`app.css`、`app.js` 留在 `/v1`；`test/` 是 GPU 排查用的测试页；另有提示音、厂商图标 |
 | `models/kws-zh/` | 唤醒词模型 |
 | `deploy/thinksmart-client.service` | 系统服务 |
 
 ## 接口（只监听本机）
 
-- `GET /events`：事件流，`snapshot`、`state`、`message`、`thread`、`model`、`level`、`toast`、`volume`（`source`：`key`/`voice`/`page`；`ring` 为 true 是响铃时音量键调的这一次铃声）、`alarms`（列表、错过的、是否对过时、正在响的、闹钟音量和铃声）
+- `GET /events`：事件流，`snapshot`、`state`、`message`、`thread`、`model`、`level`、`toast`、`music`（见下面「音乐」）、`volume`（`source`：`key`/`voice`/`page`；`ring` 为 true 是响铃时音量键调的这一次铃声）、`alarms`（列表、错过的、是否对过时、正在响的、闹钟音量和铃声）
 - `POST /api/wake`、`/api/end`、`/api/abort`、`/api/ptt/start`、`/api/ptt/stop`
 - `POST /api/text {"text": "..."}`：文字提问（服务端按识别出的话处理）
 - `POST /api/model {"kind": "...", "vendor": "..."}`：切换模型（转给服务端的 `/kiosk/llm/use`）
@@ -38,6 +39,13 @@
 - `POST /api/alarm-volume {"volume": 0-100}`：闹钟音量（存用户配置，默认 70）；`POST /api/alarm-tone {"tone": "coffee|morning|bright|hop|marimba", "preview": false}`：选铃声，`preview` 为 true 时用闹钟音量试听一段（前 8 秒），`{"stop": true}` 停止试听（关设置页时页面会发）
 - `POST /api/alarms/delete {"id": n}`、`/api/alarms/stop`、`/api/alarms/snooze`（正在响或 15 分钟内响过的那条 10 分钟后再响）、`/api/alarms/missed/clear`
 - `POST /api/power-off`：关机（`systemctl halt`，插着电也不会自己重新开机，屏幕变黑后等 10 秒再拔电源；正在更新时不执行）。页面先收到 `power {"state": "off"}` 显示「正在关机」
+- 音乐（本机喇叭同一时刻只放一样：语音点的歌由网关推流，面板点的歌由本机 ffplay 放；一边开始另一边就停）
+  - `GET /api/music/status[?target=tv]`：本机喇叭在放什么，`source` 为 `voice`（语音点的，带 `index`/`total`/`desc`）或 `local`（面板播放器）；`playing`、`paused`、`title`、`artist`、`elapsed`（已放秒数，曲库没有时长）
+  - `POST /api/music/control {"action": "next|prev|pause|resume|stop"}`：语音点的歌转给网关（`{"type": "music", "action": ...}`），面板的歌在本机处理；暂停后连接已断时 `resume` 会重新连上网关
+  - `POST /api/music/play {"target": "local|tv", "title": "...", "queue": [...], "index": n, "volume": 0-100}`：`queue` 是面板当前列表（路径须在 NAS 曲库里），放完一首接下一首；`tv` 交给网关的 `/kiosk/music/play`
+  - `POST /api/music/stop {"target": ...}`、`POST /api/music/volume {"target", "volume"}`（语音点的歌在放时本机音量 = 设备音量）、`GET /api/music/tracks?q=`、`GET /api/music/random?count=`、`GET /api/music/target_volume?target=`
+  - 事件流 `music`：同 `/api/music/status`，网关每开始/打断/放完一首都会推一次
+  - 网关发来的 `{"type": "music", "state": "start|paused|stop|idle", "title", "artist", "index", "total", "desc", "elapsed"}` 由 `app.py` 收下
 - `POST /api/history/clear {}` 或 `{"memory_only": true}`：清除聊天记录（转给服务端的 `/kiosk/chat/clear`，只清服务端本机存的所有模型的记录和总结记忆，Claude Code、Grok Bot 自己的会话不动；`memory_only` 只清记忆）。聊天页的记录来自服务端存的 `GET /kiosk/chat/history`（每个模型最近 50 条），没连着时载入，断开、重启后还在；说「清除聊天记录」确认后服务端发 `{"type": "chat_history", "state": "cleared"}`，页面清空
 
 ## 第三方
