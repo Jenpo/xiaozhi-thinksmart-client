@@ -49,6 +49,19 @@ const SCENES = [
     ['帮我看一下作业', '#ffb54729', '#ffcf7a', '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>'],
     ['Check my homework', '#9b7bff2b', '#c8b4ff', '<path d="M4 6l2 2 3-3M4 13l2 2 3-3M12 7h8M12 14h8"/>'],
   ]],
+  ['学习', [
+    ['口算闪卡', '#5ee0ff24', '#8ff0ff', '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h3M9.5 7.5v3M13 9h3M8 15h3M13 14h3M13 16h3"/>', 'flash'],
+    ['听写', '#ffb54729', '#ffcf7a', '<path d="M4 20l4-1 10-10-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/>', 'dictation'],
+    ['这是什么', '#9b7bff2b', '#c8b4ff', '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M9.5 9a1.8 1.8 0 1 1 2.3 1.8c-.5.2-.8.6-.8 1.1M11 14h.01"/>', 'identify'],
+    ['朗读检查', '#ff7ac824', '#ff9bd6', '<path d="M4 5h6a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H4zM20 5h-6a3 3 0 0 0-3 3"/>', 'read'],
+    ['错题本', '#5ee0ff24', '#8ff0ff', '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8l6 6M15 8l-6 6"/>', 'book'],
+  ]],
+  ['家庭', [
+    ['作息清单', '#5ee0ff24', '#8ff0ff', '<path d="M4 6l2 2 3-3M4 13l2 2 3-3M12 7h8M12 14h8M12 20h8"/>', 'routine'],
+    ['电视再睇 30 分钟就熄', '#ffb54729', '#ffcf7a', '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M12 9v3l2 1"/>'],
+    ['讲个睡前故事', '#9b7bff2b', '#c8b4ff', '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>'],
+    ['留言：放学返嚟先食生果', '#ff7ac824', '#ff9bd6', '<path d="M4 5h16v11H8l-4 4z"/>'],
+  ]],
   ['夜间', [
     ['晚安', '#5ee0ff24', '#8ff0ff', '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>'],
     ['把屏幕亮度调到 20%', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>'],
@@ -68,12 +81,13 @@ function renderChips() {
     el.setAttribute('aria-selected', k === i ? 'true' : 'false');
   });
   box.innerHTML = '';
-  for (const [q, bg, fg, icon] of SCENES[i][1]) {
+  for (const [q, bg, fg, icon, open] of SCENES[i][1]) {
     const b = document.createElement('button');
     b.className = 'chip';
     b.innerHTML = `<i style="background:${bg};color:${fg}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></i>${esc(q)}`;
     b.addEventListener('click', async () => {
+      if (open) { stOpen(open); return; }   // 学习/家庭：直接开面板，不走语音
       if (SCENES[i][0] === '看作业') { hwSetLang(q === 'Check my homework' ? 'en' : q === '睇下我嘅作业' ? 'yue' : 'zh'); hwOpen(true); return; }
       // 触屏偶尔一次点按报 6-15 次 click（11-14 日志），还会连带点到相邻卡片：
       // 一张卡在发送/冷却期间，所有卡片都不再响应
@@ -332,6 +346,7 @@ function hwCountdown(n) {
 // 客户端拍照各阶段的推送（点按和语音触发都会来）。语音触发时面板自动打开；
 // 点按那条路的结果和朗读仍由 hwCapture 自己处理，这里只管进度和语音那条的结果。
 function hwEvent(e) {
+  if (e.mode && e.mode !== 'homework') { stCamEvent(e); return; }   // 这是什么 / 抄课文：学习面板自己管
   const voice = e.source === 'voice';
   if (voice) {
     const sheet = hwEl('hwSheet');
@@ -348,15 +363,16 @@ function hwEvent(e) {
   }
 }
 
-async function hwCapture() {
+async function hwCapture(extra) {
   if (HW.busy) return;
+  extra = (extra && typeof extra === 'object' && !(extra instanceof Event)) ? extra : {};
   hwLiveOn();
   hwSetBusy(true, '准备拍照…');
   const b0 = hwEl('hwBusy'); if (b0) b0.classList.add('cd');
   try {
     const r = await fetch('/api/hw/capture', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ language: HW.lang, countdown: HW_COUNTDOWN, source: 'page' }),
+      body: JSON.stringify({ language: HW.lang, countdown: HW_COUNTDOWN, source: 'page', ...extra }),
     });
     const d = await r.json().catch(() => ({ ok: false, error: '网关没有回话' }));
     if (!d.ok) { toast(d.code === 'busy' ? '正在拍，等一下' : (d.error || '没拍成，再试一次'), 'error'); return; }
@@ -2015,6 +2031,10 @@ const handlers = {
   },
   message: m => upsertMessage(m),
   homework: e => hwEvent(e),
+  family: f => famApply(f),
+  say: x => { speakText(x.text, x.language); toast(x.text); },
+  card: c => cardShow(c),
+  study: x => stOpen(x.mode, x),
   music: m => { if (MP.target === 'local') applyMusicStatus(m); },
   toast: t => toast(t.text, t.kind),
   volume(v) {
@@ -2306,3 +2326,356 @@ renderStatus();
 renderThread();
 if (demo) demo.start();
 else connectEvents();
+
+/* ======== 学习 · 家庭（2026-11-15）：口算闪卡、听写、这是什么、朗读检查、作息清单、屏幕卡片、留言、电视限时 ======== */
+function speakText(text, lang) {
+  if (!text) return;
+  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  const a = new Audio('/api/hw/tts?lang=' + encodeURIComponent(lang || 'yue') + '&text=' + encodeURIComponent(text));
+  HW.audio = a;
+  a.play().catch(() => {});
+  return a;
+}
+const isLatin = s => /^[\x00-\x7f\s]+$/.test(String(s || ''));
+const stEl = id => document.getElementById(id);
+const ST = { mode: 'flash', lang: 'yue', flash: null, dict: null, read: null, ident: null, live: false };
+
+function stOpen(mode, opts) {
+  opts = opts || {};
+  const sheet = stEl('stSheet');
+  if (!sheet) return;
+  if (mode === 'book') { hwOpen(true, false); hwShowBook(); return; }
+  if (opts.language) ST.lang = opts.language;
+  sheet.classList.add('on');
+  stTab(mode || ST.mode, opts);
+}
+function stClose() {
+  const sheet = stEl('stSheet');
+  if (sheet) sheet.classList.remove('on');
+  stLive(false);
+  if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
+  if (ST.read && ST.read.recording) fetch('/api/rec/stop', { method: 'POST' }).catch(() => {});
+}
+function stTab(mode, opts) {
+  ST.mode = mode;
+  document.querySelectorAll('.st-tab').forEach(t => t.classList.toggle('on', t.dataset.mode === mode));
+  stLive(false);
+  const body = stEl('stBody');
+  body.innerHTML = '';
+  ({ flash: flashView, dictation: dictView, identify: identView, read: readView, routine: routineView }[mode] || flashView)(body, opts || {});
+}
+
+/* -- 摄像头小窗（这是什么 / 拍课文） -- */
+function stLive(on) {
+  const v = stEl('stLive');
+  ST.live = !!on;
+  if (!v) return;
+  if (on) { v.src = '/api/hw/live?t=' + Date.now(); v.hidden = false; }
+  else { v.removeAttribute('src'); v.hidden = true; }
+}
+function camBox(label) {
+  return `<div class="st-cam"><img id="stLive" alt="实时画面" hidden><img id="stShot" alt="" hidden>
+    <div class="st-cam-msg" id="stCamMsg">${esc(label)}</div></div>`;
+}
+async function stShoot(mode, extra) {
+  const msg = stEl('stCamMsg');
+  stLive(true);
+  if (msg) msg.textContent = '准备…';
+  try {
+    const r = await fetch('/api/hw/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: ST.lang, countdown: 3, source: 'page', mode, ...(extra || {}) }) });
+    const d = await r.json().catch(() => ({ ok: false, error: '网关没有回话' }));
+    if (!d.ok) { toast(d.code === 'lens_closed' ? '镜头盖没打开' : (d.error || '没拍成'), 'error'); if (msg) msg.textContent = '再试一次'; return null; }
+    return d;
+  } catch (e) { toast('拍照失败', 'error'); return null; }
+  finally { stLive(false); }
+}
+function stCamEvent(e) {
+  const msg = stEl('stCamMsg');
+  if (e.source === 'voice' && e.mode === 'identify') {
+    const sheet = stEl('stSheet');
+    if (!sheet.classList.contains('on') || ST.mode !== 'identify') stOpen('identify', { language: e.language });
+  }
+  if (e.phase === 'countdown') { stLive(true); if (msg) msg.textContent = '放到镜头前… ' + (e.seconds || 3); }
+  if (e.phase === 'shooting') { stLive(false); if (msg) msg.textContent = '在拍照…'; }
+  if (e.phase === 'analyzing') { if (msg) msg.textContent = e.mode === 'ocr' ? '在抄课文…' : '在认…'; }
+  if (e.phase === 'error' && msg) msg.textContent = e.error || '没拍成';
+  if (e.phase === 'done' && e.source === 'voice' && e.mode === 'identify') identShow(e.data, false);
+}
+
+/* -- 口算闪卡 -- */
+const FLASH_LEVELS = { add20: '20 以内加减', add100: '100 以内加减', times: '乘法表', mixed: '混合' };
+const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+function flashQuestion(level) {
+  const lv = level === 'mixed' ? ['add20', 'add100', 'times'][rnd(0, 2)] : level;
+  if (lv === 'times') { const a = rnd(2, 9), b = rnd(1, 9); return Math.random() < 0.75 ? [`${a} × ${b}`, a * b] : [`${a * b} ÷ ${a}`, b]; }
+  const max = lv === 'add100' ? 100 : 20;
+  const a = rnd(1, max - 1);
+  if (Math.random() < 0.5) { const b = rnd(1, max - a); return [`${a} + ${b}`, a + b]; }
+  const b = rnd(1, a); return [`${a} − ${b}`, a - b];
+}
+function flashView(body, opts) {
+  const level = FLASH_LEVELS[opts.level] ? opts.level : (ST.flashLevel || 'add20');
+  ST.flashLevel = level;
+  body.innerHTML = `<div class="st-row">${Object.entries(FLASH_LEVELS).map(([k, v]) =>
+      `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${v}</button>`).join('')}</div>
+    <div class="flash"><div class="flash-q" id="flQ">准备好就开始</div><div class="flash-a" id="flA"></div>
+      <div class="flash-meta" id="flMeta">10 题一轮</div>
+      <div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
+      <button class="pri st-go" id="flGo">开始</button></div>`;
+  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => flashView(body, { level: b.dataset.lv })));
+  body.querySelectorAll('.pad button').forEach(b => b.addEventListener('click', () => flashKey(b.dataset.k)));
+  stEl('flGo').addEventListener('click', () => flashStart(level));
+}
+function flashStart(level) {
+  if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
+  ST.flash = { level, n: 0, total: 10, right: 0, wrong: [], input: '', started: Date.now(), q: null };
+  ST.flash.tick = setInterval(flashMeta, 500);
+  stEl('flGo').hidden = true;
+  flashNext();
+}
+function flashNext() {
+  const f = ST.flash;
+  if (f.n >= f.total) return flashEnd();
+  f.q = flashQuestion(f.level); f.input = ''; f.n += 1;
+  stEl('flQ').textContent = f.q[0] + ' = ?';
+  stEl('flA').textContent = ''; stEl('flA').className = 'flash-a';
+  flashMeta();
+}
+function flashMeta() {
+  const f = ST.flash; if (!f) return;
+  const sec = Math.round((Date.now() - f.started) / 1000);
+  const m = stEl('flMeta'); if (m) m.textContent = `第 ${f.n}/${f.total} 题 · 答对 ${f.right} · ${sec} 秒`;
+}
+function flashKey(k) {
+  const f = ST.flash; if (!f || !f.q || f.locked) return;
+  if (k === '⌫') f.input = f.input.slice(0, -1);
+  else if (k === '✓') { if (f.input) flashCheck(); return; }
+  else if (f.input.length < 4) f.input += k;
+  stEl('flA').textContent = f.input;
+}
+function flashCheck() {
+  const f = ST.flash, ok = Number(f.input) === f.q[1], a = stEl('flA');
+  f.locked = true;
+  if (ok) { f.right += 1; a.className = 'flash-a good'; a.textContent = f.input + ' ✓'; }
+  else { f.wrong.push({ question: f.q[0] + ' =', child_answer: f.input, correct: String(f.q[1]), ok: false });
+         a.className = 'flash-a bad'; a.textContent = `${f.input} ✗  = ${f.q[1]}`; }
+  setTimeout(() => { f.locked = false; flashNext(); }, ok ? 500 : 1600);
+}
+function flashEnd() {
+  const f = ST.flash; clearInterval(f.tick);
+  const sec = Math.round((Date.now() - f.started) / 1000);
+  stEl('flQ').textContent = `答对 ${f.right} / ${f.total}，用了 ${sec} 秒`;
+  stEl('flA').textContent = f.right === f.total ? '全对！好叻！' : '错的题已放进错题本';
+  stEl('flA').className = 'flash-a';
+  const go = stEl('flGo'); go.hidden = false; go.textContent = '再来一轮';
+  const say = { yue: f.right === f.total ? '全部啱晒，好叻！' : `啱咗${f.right}题，错咗嘅放咗入错题本`,
+                en: f.right === f.total ? 'All correct, well done!' : `${f.right} right. The others are in your mistake book`,
+                zh: f.right === f.total ? '全对了，真棒！' : `对了${f.right}题，错的放进错题本了` }[ST.lang];
+  speakText(say, ST.lang);
+  if (f.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subject: '口算', source: 'flash', items: f.wrong.map((w, i) => ({ no: i + 1, ...w })) }) }).catch(() => {});
+}
+
+/* -- 听写 -- */
+const DICT_SAMPLE = { yue: ['太阳', '朋友', '学校', '苹果', '老师'], zh: ['太阳', '朋友', '学校', '苹果', '老师'],
+                      en: ['apple', 'friend', 'school', 'teacher', 'happy'] };
+async function dictFromBook() {
+  try {
+    const d = await (await fetch('/api/hw/book')).json();
+    return (d.mistakes || []).filter(m => !m.fixed && m.correct && String(m.correct).length <= 12 && !/^[\d\s+\-×÷=.]+$/.test(m.correct))
+      .map(m => m.correct).slice(0, 10);
+  } catch (e) { return []; }
+}
+function dictView(body, opts) {
+  const words = (opts.words && opts.words.length) ? opts.words : (ST.dict && ST.dict.words) || DICT_SAMPLE[ST.lang];
+  ST.dict = { words, i: -1 };
+  body.innerHTML = `<div class="st-row"><button class="st-pill" id="dcBook">用错题本的词</button>
+      <button class="st-pill" id="dcSample">示例词</button><span class="st-note">也可以说「帮我听写：苹果、香蕉……」</span></div>
+    <div class="dict"><div class="dict-n" id="dcN">共 ${words.length} 个词</div>
+      <div class="dict-w" id="dcW">准备好纸笔</div>
+      <div class="st-row center"><button class="pri st-go" id="dcNext">开始</button><button id="dcAgain" hidden>再念一次</button></div>
+      <div class="st-row center"><button id="dcShoot" hidden>写完了，拍照批改</button></div></div>`;
+  stEl('dcNext').addEventListener('click', dictNext);
+  stEl('dcAgain').addEventListener('click', dictSay);
+  stEl('dcShoot').addEventListener('click', () => { stClose(); hwOpen(true, false); hwCapture({ expected: ST.dict.words }); });
+  stEl('dcBook').addEventListener('click', async () => { const w = await dictFromBook();
+    if (!w.length) return toast('错题本里没有可以听写的词');
+    dictView(body, { words: w }); });
+  stEl('dcSample').addEventListener('click', () => dictView(body, { words: DICT_SAMPLE[ST.lang] }));
+}
+function dictSay() {
+  const d = ST.dict, w = d.words[d.i];
+  if (w == null) return;
+  speakText(w, isLatin(w) ? 'en' : ST.lang);
+  setTimeout(() => speakText(w, isLatin(w) ? 'en' : ST.lang), 3500);   // 念两遍
+}
+function dictNext() {
+  const d = ST.dict;
+  d.i += 1;
+  const n = stEl('dcN'), w = stEl('dcW'), next = stEl('dcNext');
+  stEl('dcAgain').hidden = false;
+  if (d.i >= d.words.length) {
+    n.textContent = '听写完了'; w.textContent = '检查一下，再拍照批改';
+    next.hidden = true; stEl('dcAgain').hidden = true; stEl('dcShoot').hidden = false;
+    speakText({ yue: '写完喇，检查下再影相', en: 'All done. Check your work, then take a photo', zh: '写完了，检查一下再拍照' }[ST.lang], ST.lang);
+    return;
+  }
+  n.textContent = `第 ${d.i + 1} / ${d.words.length} 个`;
+  w.textContent = '🔊 ' + '＿'.repeat(Math.min(6, String(d.words[d.i]).length));
+  next.textContent = d.i + 1 === d.words.length ? '写完了' : '下一个';
+  dictSay();
+}
+
+/* -- 这是什么 -- */
+function identView(body) {
+  body.innerHTML = `<div class="st-split">${camBox('拿一样东西到镜头前')}<div class="st-side" id="idOut">
+      <div class="st-note">拿一样东西到镜头前，点「认一认」，我会讲粤语、普通话、英文点叫。</div></div></div>
+    <div class="st-row"><button class="pri" id="idGo">认一认</button></div>`;
+  stLive(true);
+  stEl('idGo').addEventListener('click', async () => { const d = await stShoot('identify'); if (d) identShow(d, true); });
+}
+function identShow(d, speak) {
+  const out = stEl('idOut');
+  if (!out) return;
+  const shot = stEl('stShot');
+  if (shot && d.thumb) { shot.src = d.thumb; shot.hidden = false; }
+  if (d.sure === false) { out.innerHTML = `<div class="st-note">${esc((d.speech || {}).zh || '没看清，拿近一点再试')}</div>`; return; }
+  const row = (label, word, sub, lang) => `<div class="id-row" data-say="${esc(word)}" data-lang="${lang}"><em>${label}</em>
+      <b>${esc(word || '')}</b><span>${esc(sub || '')}</span><i>🔊</i></div>`;
+  out.innerHTML = row('粤语', d.yue, d.jyutping, 'yue') + row('普通话', d.zh, d.pinyin, 'zh') + row('English', d.en, '', 'en')
+    + (d.en_sentence ? `<div class="id-sent" data-say="${esc(d.en_sentence)}" data-lang="en">🔊 ${esc(d.en_sentence)}</div>` : '')
+    + (d.fact ? `<div class="st-note">💡 ${esc(d.fact)}</div>` : '');
+  out.querySelectorAll('[data-say]').forEach(el => el.addEventListener('click', () => speakText(el.dataset.say, el.dataset.lang)));
+  if (speak) speakText((d.speech || {})[ST.lang] || d.zh, ST.lang);
+}
+
+/* -- 朗读检查 -- */
+function readView(body) {
+  ST.read = ST.read || { text: '' };
+  body.innerHTML = `<div class="st-split">${camBox('把课文放到镜头前')}<div class="st-side">
+      <div class="read-text" id="rdText">${ST.read.text ? esc(ST.read.text) : '<span class="st-note">先拍下要读的课文</span>'}</div>
+      <div class="st-note" id="rdScore"></div></div></div>
+    <div class="st-row"><button id="rdShoot">拍课文</button><button class="pri" id="rdGo" ${ST.read.text ? '' : 'disabled'}>开始读</button></div>`;
+  stLive(true);
+  stEl('rdShoot').addEventListener('click', async () => {
+    const d = await stShoot('ocr');
+    if (!d) return;
+    ST.read.text = (d.text || '').trim();
+    stEl('rdText').textContent = ST.read.text || '没抄到字，放正一点再拍';
+    stEl('rdGo').disabled = !ST.read.text;
+    stLive(true);
+  });
+  stEl('rdGo').addEventListener('click', readToggle);
+}
+async function readToggle() {
+  const go = stEl('rdGo'), r = ST.read;
+  if (!r.recording) {
+    stLive(false);
+    await fetch('/api/rec/start', { method: 'POST' });
+    r.recording = true; go.textContent = '读完了'; go.classList.add('rec');
+    stEl('rdScore').textContent = '在听… 读完点「读完了」';
+    return;
+  }
+  r.recording = false; go.textContent = '在听写…'; go.disabled = true; go.classList.remove('rec');
+  let d = {};
+  try { d = await (await fetch('/api/rec/stop', { method: 'POST' })).json(); } catch (e) {}
+  go.disabled = false; go.textContent = '再读一次';
+  readCompare(r.text, d.text || '');
+}
+function readCompare(ref, heard) {
+  // 中文按字、英文按词对齐（最长公共子序列），读漏的标红
+  const latin = isLatin(ref);
+  const tok = s => latin ? (s.toLowerCase().match(/[a-z0-9']+/g) || []) : Array.from(s.replace(/[^一-鿿0-9a-zA-Z]/g, ''));
+  const refRaw = latin ? (ref.match(/[A-Za-z0-9']+|[^A-Za-z0-9']+/g) || []) : Array.from(ref);
+  const a = tok(ref), b = tok(heard);
+  const n = a.length, m = b.length, dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const hit = new Array(n).fill(false);
+  for (let i = 0, j = 0; i < n && j < m;) {
+    if (a[i] === b[j]) { hit[i] = true; i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++;
+  }
+  let k = 0, html = '';
+  for (const piece of refRaw) {
+    const isTok = latin ? /^[A-Za-z0-9']+$/.test(piece) : /[一-鿿0-9a-zA-Z]/.test(piece);
+    if (isTok) { html += `<span class="${hit[k] ? 'rd-ok' : 'rd-miss'}">${esc(piece)}</span>`; k++; }
+    else html += esc(piece);
+  }
+  stEl('rdText').innerHTML = html;
+  const pct = n ? Math.round(hit.filter(Boolean).length * 100 / n) : 0;
+  stEl('rdScore').textContent = heard ? `读对 ${pct}%，红色是读漏或读错的` : '没听到声音，靠近一点再读';
+  if (heard) speakText({ yue: pct >= 90 ? '读得好好！' : '红色嗰啲再读多次', en: pct >= 90 ? 'Great reading!' : 'Try the red words again',
+                         zh: pct >= 90 ? '读得很好！' : '红色的再读一遍' }[ST.lang], ST.lang);
+}
+
+/* -- 作息清单 -- */
+const FAM = { state: null };
+function routineView(body, opts) {
+  const r = (FAM.state && FAM.state.routine) || {};
+  const col = (key, title) => {
+    const x = r[key] || { items: [], done: [] };
+    const done = new Set(x.done || []);
+    return `<div class="rt-col"><h3>${title} <span>${done.size}/${x.items.length}</span></h3>${x.items.map((it, i) =>
+      `<button class="rt-item${done.has(i) ? ' on' : ''}" data-list="${key}" data-i="${i}">${done.has(i) ? '✓' : '○'} ${esc(it)}</button>`).join('')
+      || '<div class="st-note">还没有，可以说「早上清单：刷牙、吃早餐」</div>'}</div>`;
+  };
+  body.innerHTML = `<div class="rt">${col('morning', '早上')}${col('evening', '晚上')}</div>
+    <div class="st-note">改清单直接说，例如「晚上清单加冲凉」。每天自动清零。</div>`;
+  body.querySelectorAll('.rt-item').forEach(b => b.addEventListener('click', async () => {
+    const on = !b.classList.contains('on');
+    await fetch('/api/routine/tick', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ list: b.dataset.list, index: Number(b.dataset.i), done: on }) });
+  }));
+}
+
+/* -- 家庭状态：留言横幅、电视限时 -- */
+function famApply(f) {
+  FAM.state = f;
+  const bar = stEl('famBar');
+  if (bar) {
+    const n = (f.notes || [])[0];
+    const tv = f.tv;
+    let html = '';
+    if (tv) html += `<div class="fam-chip tv">📺 电视还剩 <b id="famTvLeft">${Math.ceil(tv.left / 60)}</b> 分钟<button data-act="tvcancel">取消</button></div>`;
+    if (n) html += `<div class="fam-chip note">📝 ${n.from ? esc(n.from) + '：' : ''}${esc(n.text)}
+        <button data-act="say" data-id="${n.id}">🔊</button><button data-act="done" data-id="${n.id}">知道了</button>
+        ${f.notes.length > 1 ? `<span>还有 ${f.notes.length - 1} 条</span>` : ''}</div>`;
+    bar.innerHTML = html;
+    bar.hidden = !html;
+    FAM.tvEnd = tv ? Date.now() + tv.left * 1000 : null;
+  }
+  if (ST.mode === 'routine' && stEl('stSheet').classList.contains('on')) routineView(stEl('stBody'));
+}
+setInterval(() => { const el = stEl('famTvLeft'); if (el && FAM.tvEnd) el.textContent = Math.max(0, Math.ceil((FAM.tvEnd - Date.now()) / 60000)); }, 15000);
+if (stEl('famBar')) stEl('famBar').addEventListener('click', async ev => {
+  const b = ev.target.closest('button'); if (!b) return;
+  const n = (FAM.state.notes || []).find(x => x.id === b.dataset.id);
+  if (b.dataset.act === 'say' && n) speakText(n.text, n.language);
+  if (b.dataset.act === 'done') await fetch('/api/notes/done', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.dataset.id }) });
+  if (b.dataset.act === 'tvcancel') await fetch('/api/tv-timer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cancel: true }) });
+});
+fetch('/api/family').then(r => r.json()).then(f => { if (f.ok) famApply(f); }).catch(() => {});
+
+/* -- 屏幕卡片 -- */
+let cardTimer = null;
+function cardShow(c) {
+  const box = stEl('cardBox');
+  if (!box) return;
+  const words = c.kind === 'words';
+  stEl('cardTitle').textContent = c.title || '';
+  const list = stEl('cardItems');
+  list.className = 'card-items ' + (c.kind || 'list');
+  list.innerHTML = (c.items || []).map((it, i) => `<li data-say="${esc(it)}">${c.kind === 'steps' ? `<em>${i + 1}</em>` : ''}${esc(it)}${words ? ' <i>🔊</i>' : ''}</li>`).join('');
+  if (words) list.querySelectorAll('li').forEach(li => li.addEventListener('click', () => {
+    const w = li.dataset.say.split(/[ —:：-]/)[0]; speakText(w, isLatin(w) ? 'en' : (c.language || 'yue')); }));
+  box.classList.add('on');
+  clearTimeout(cardTimer);
+  cardTimer = setTimeout(() => box.classList.remove('on'), 180000);
+}
+if (stEl('cardClose')) stEl('cardClose').addEventListener('click', () => stEl('cardBox').classList.remove('on'));
+
+document.querySelectorAll('.st-tab').forEach(t => t.addEventListener('click', () => stTab(t.dataset.mode)));
+if (stEl('stClose')) stEl('stClose').addEventListener('click', stClose);
+document.querySelectorAll('.st-lang').forEach(b => b.addEventListener('click', () => {
+  ST.lang = b.dataset.lang; document.querySelectorAll('.st-lang').forEach(x => x.classList.toggle('on', x === b)); }));

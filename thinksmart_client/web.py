@@ -495,6 +495,10 @@ def make_app(client: Client):
     from . import homework
     for path, handler in homework.install(client):
         app.router.add_route('*', path, handler)
+    # [2026-11-15] 家庭与学习：看电视限时、留言、作息清单、睡前、朗读录音、hub 推屏幕
+    from . import family
+    for path, handler in family.install(client):
+        app.router.add_route('*', path, handler)
     app.router.add_static('/static/', WEB)
 
     async def revalidate(request, response):

@@ -802,3 +802,74 @@ body.ptt-off .hint::after { content: none; }
 /* hidden 属性在看作业面板里要真的藏：.hw-busy/.hw-empty/.hw-livetag 都写了 display:flex，会盖过浏览器默认的
    [hidden]{display:none}，结果转圈遮罩「在拍照…」从上线起就一直挂在画面上（2026-11-15 owner 报「一直在转」）。 */
 #hwSheet [hidden] { display: none !important; }
+
+/* ======== 学习 · 家庭（2026-11-15） ======== */
+#stSheet [hidden], #cardBox [hidden], .fam-bar[hidden] { display: none !important; }
+.st-tabs { display: flex; gap: 10px; margin-top: 14px; }
+.st-tab { height: 48px; padding: 0 20px; border-radius: 14px; font-size: 18px; color: var(--ink2); background: var(--card); border: 1px solid var(--line); }
+.st-tab.on { color: #08122c; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-color: transparent; font-weight: 600; }
+.st-bar-r { display: flex; gap: 16px; align-items: center; }
+.st-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+.st-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.st-row.center { justify-content: center; }
+.st-body button { height: 54px; padding: 0 22px; border-radius: 16px; font-size: 19px; color: var(--ink); background: var(--card); border: 1px solid var(--line); }
+.st-body button.pri, .st-body .st-go { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #08122c; border: none; font-weight: 600; }
+.st-body button:active { transform: scale(.96); }
+.st-body button[disabled] { opacity: .45; }
+.st-pill { height: 46px !important; font-size: 17px !important; }
+.st-pill.on { border-color: var(--accent) !important; color: var(--accent) !important; }
+.st-note { font-size: 17px; color: var(--ink3); line-height: 1.5; }
+/* 闪卡 */
+.flash { flex: 1; display: grid; grid-template-columns: 1fr 360px; grid-template-rows: auto auto auto 1fr; column-gap: 30px; align-items: center; }
+.flash-q { grid-column: 1; font-size: 72px; font-weight: 700; letter-spacing: 2px; }
+.flash-a { grid-column: 1; min-height: 70px; font-size: 56px; color: var(--accent); }
+.flash-a.good { color: #48d18a; } .flash-a.bad { color: #ff8b8b; font-size: 44px; }
+.flash-meta { grid-column: 1; font-size: 18px; color: var(--ink3); }
+.flash .pad { grid-column: 2; grid-row: 1 / span 4; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.flash .pad button { height: 82px; font-size: 32px; font-weight: 600; }
+.flash .st-go { grid-column: 1; justify-self: start; }
+/* 听写 */
+.dict { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+.dict-n { font-size: 20px; color: var(--ink3); }
+.dict-w { font-size: 60px; font-weight: 700; letter-spacing: 6px; }
+/* 摄像头小窗 */
+.st-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.st-cam { position: relative; border-radius: 20px; overflow: hidden; background: #000; border: 1px solid var(--line); display: grid; place-items: center; min-height: 300px; }
+.st-cam img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.st-cam-msg { position: absolute; left: 0; right: 0; bottom: 14px; text-align: center; font-size: 22px; color: #fff; text-shadow: 0 2px 6px #000; }
+.st-side { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.id-row { display: grid; grid-template-columns: 90px 1fr auto; grid-template-rows: auto auto; align-items: center; padding: 14px 18px;
+  border-radius: 18px; background: var(--card); border: 1px solid var(--line); }
+.id-row em { grid-row: 1 / span 2; font-style: normal; color: var(--ink3); font-size: 16px; }
+.id-row b { font-size: 34px; } .id-row span { grid-column: 2; font-size: 17px; color: var(--ink2); }
+.id-row i { grid-row: 1 / span 2; grid-column: 3; font-style: normal; font-size: 26px; }
+.id-sent { padding: 14px 18px; border-radius: 18px; background: var(--card); font-size: 20px; }
+/* 朗读 */
+.read-text { font-size: 26px; line-height: 1.8; white-space: pre-wrap; }
+.rd-ok { color: #48d18a; } .rd-miss { color: #ff6b6b; text-decoration: underline; }
+#rdGo.rec { background: #ff6b6b !important; color: #fff !important; }
+/* 清单 */
+.rt { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.rt-col h3 { margin: 0 0 12px; font-size: 26px; } .rt-col h3 span { font-size: 18px; color: var(--ink3); margin-left: 8px; }
+.rt-col { display: flex; flex-direction: column; gap: 10px; }
+.rt-item { text-align: left; height: 64px !important; font-size: 22px !important; }
+.rt-item.on { color: #48d18a !important; border-color: #48d18a66 !important; text-decoration: line-through; }
+/* 主屏：留言 / 电视限时 */
+.fam-bar { position: fixed; top: 86px; left: 50%; transform: translateX(-50%); z-index: 15; display: flex; flex-direction: column; gap: 8px; max-width: 80vw; }
+.fam-chip { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 18px; border-radius: 999px; font-size: 18px;
+  background: #0d1433ee; border: 1px solid var(--line); box-shadow: 0 6px 20px #0008; }
+.fam-chip.tv { border-color: #ffb54788; } .fam-chip.note { border-color: #5ee0ff88; }
+.fam-chip button { height: 40px; padding: 0 14px; border-radius: 999px; font-size: 16px; color: var(--ink); background: var(--card); border: 1px solid var(--line); }
+.fam-chip span { font-size: 14px; color: var(--ink3); }
+/* 屏幕卡片 */
+.card-box { position: fixed; inset: 0; z-index: 25; display: grid; place-items: center; background: #050a18aa; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.card-box.on { opacity: 1; pointer-events: auto; }
+.card-in { width: min(900px, 86vw); max-height: 80vh; overflow-y: auto; padding: 26px 30px; border-radius: 26px; background: linear-gradient(160deg, #111a3f, #0a1028); border: 1px solid var(--line); }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.card-head h3 { margin: 0; font-size: 30px; }
+.card-items { margin: 18px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.card-items li { padding: 12px 16px; border-radius: 14px; background: var(--card); font-size: 22px; line-height: 1.45; }
+.card-items li em { display: inline-grid; place-items: center; width: 34px; height: 34px; margin-right: 10px; border-radius: 50%; font-style: normal;
+  font-size: 18px; color: #08122c; background: var(--accent); }
+.card-items.list li::before { content: '• '; color: var(--accent); }
+.card-items.words li { display: flex; justify-content: space-between; }

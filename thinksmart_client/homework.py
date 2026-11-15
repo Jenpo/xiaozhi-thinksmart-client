@@ -267,6 +267,9 @@ def install(client):
             body = {}
         language = (body.get('language') or 'yue').strip()
         source = (body.get('source') or 'page').strip()
+        # mode：homework 判作业（默认）/ identify「这是什么」/ ocr 抄课文（朗读检查）；expected：听写词表
+        mode = body.get('mode') if body.get('mode') in ('homework', 'identify', 'ocr') else 'homework'
+        expected = [str(w) for w in body['expected'][:40]] if isinstance(body.get('expected'), list) else None
         try:
             countdown = max(0, min(MAX_COUNTDOWN, int(body.get('countdown') or 0)))
         except (TypeError, ValueError):
@@ -276,7 +279,7 @@ def install(client):
             return web.json_response({'ok': False, 'code': 'busy', 'error': '正在拍，等一下'}, status=409)
         async with lock:
             def fail(code, msg, status):
-                push('error', error=msg, code=code, source=source)
+                push('error', error=msg, code=code, source=source, mode=mode)
                 return web.json_response({'ok': False, 'code': code, 'error': msg}, status=status)
 
             if not _gst_available():
@@ -285,9 +288,9 @@ def install(client):
                 if await asyncio_to_thread(_lens_state) is True:
                     return fail('lens_closed', '镜头盖没打开', 409)
             if countdown:
-                push('countdown', seconds=countdown, language=language, source=source)
+                push('countdown', seconds=countdown, language=language, source=source, mode=mode)
                 await asyncio.sleep(countdown)
-            push('shooting', source=source)
+            push('shooting', source=source, mode=mode)
             live['shooting'] = True
             try:
                 await stop_live()             # 实时画面在倒数时开着，拍之前让出摄像头
@@ -300,17 +303,20 @@ def install(client):
                 return fail('capture', '拍照失败: %s' % e, 500)
             finally:
                 live['shooting'] = False
-            push('analyzing', source=source)
+            push('analyzing', source=source, mode=mode)
             jpeg = await asyncio_to_thread(_shrink, jpeg)
             payload = {'image': base64.b64encode(jpeg).decode(), 'language': language,
                        'source': 'camera'}
+            if expected:
+                payload['expected'] = expected
+            path = {'homework': '/kiosk/hw/analyze', 'identify': '/kiosk/hw/identify', 'ocr': '/kiosk/hw/ocr'}[mode]
             try:
-                data = await client._hub_http('/kiosk/hw/analyze', payload, total=150)
+                data = await client._hub_http(path, payload, total=150)
             except Exception as e:
                 return fail('hub', '网关没答: %s' % e, 502)
             if not data.get('ok'):
                 return fail('analyze', data.get('error') or '没看成', 502)
-            push('done', data=data, source=source)
+            push('done', data=data, source=source, mode=mode)
             return web.json_response(data)
 
     async def latest(_request):
@@ -325,6 +331,18 @@ def install(client):
         days = request.query.get('days') or '30'
         try:
             data = await client._hub_http('/kiosk/hw/book?days=' + urllib.parse.quote(days))
+        except Exception as e:
+            return web.json_response({'ok': False, 'error': '网关没答: %s' % e}, status=502)
+        return web.json_response(data)
+
+    async def record(request):
+        """口算闪卡等不拍照练习的错题 → 网关 /kiosk/hw/record（进错题本）。"""
+        try:
+            body = await request.json()
+        except ValueError:
+            return web.json_response({'ok': False, 'error': 'JSON 格式错误'}, status=400)
+        try:
+            data = await client._hub_http('/kiosk/hw/record', body)
         except Exception as e:
             return web.json_response({'ok': False, 'error': '网关没答: %s' % e}, status=502)
         return web.json_response(data)
@@ -375,7 +393,7 @@ def install(client):
     client.hw_photo = photo
     return [('/api/hw/capture', capture), ('/api/hw/latest', latest),
             ('/api/hw/clear', clear), ('/api/hw/photo', photo), ('/api/hw/tts', tts),
-            ('/api/hw/diag', diag), ('/api/hw/book', book), ('/api/hw/live', live_stream)]
+            ('/api/hw/diag', diag), ('/api/hw/book', book), ('/api/hw/live', live_stream), ('/api/hw/record', record)]
 
 async def asyncio_to_thread(func, *args, **kwargs):
     import functools

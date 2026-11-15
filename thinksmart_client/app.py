@@ -332,6 +332,9 @@ class Client:
         # the CPU it would take is better left to the hub's speech recognition. wake_block: what the
         # wake word hears (during a reply, echo-cancelled without suppressing the voice; audio.py)
         # (after the hub's VAD said the user stopped, the wake word interrupts the recognition)
+        fam = getattr(self, 'family', None)   # 朗读检查在录音时，原样留一份（family.py）
+        if fam is not None and fam.rec is not None:
+            fam.on_block(block)
         hit = None if self.uploading and not self.vad_ended else self.kws.feed(wake_block)
         backlog = self.backlog
         if hit:
