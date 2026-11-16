@@ -2,6 +2,24 @@
 // Same contract as v1. Open with ?demo (or ?demo=<scene>) to preview without a client.
 const $ = id => document.getElementById(id);
 
+// 页面点按/报错进客户端日志（kiosk 没控制台）。2026-11-16「看图有预览，点拍摄没有反应」：客户端一个
+// 拍照请求都没收到，离屏 WebKit 里按钮又点得到，只能在真机上记下点按到了哪一步。
+function pageLog(kind, msg) {
+  if (location.search.includes('demo')) return;
+  try {
+    fetch('/api/page-log', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, msg: String(msg).slice(0, 300) }) }).catch(() => {});
+  } catch (e) { /* 记日志本身不能再出错 */ }
+}
+window.addEventListener('error', e => pageLog('error', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
+window.addEventListener('unhandledrejection', e => pageLog('rejection', e.reason && e.reason.message ? `${e.reason.message} | ${e.reason.stack || ''}` : e.reason));
+for (const type of ['touchstart', 'click']) {
+  document.addEventListener(type, e => {
+    const b = e.target && e.target.closest && e.target.closest('#hwSheet button, #stSheet button');
+    if (b) pageLog('tap', `${type} ${b.id || ''} 「${(b.textContent || '').trim().slice(0, 12)}」 hidden=${b.hidden} disabled=${b.disabled}`);
+  }, { capture: true, passive: true });
+}
+
 // 曲名/歌手来自 NAS 与后台，直接拼 innerHTML 会把 & < > 吃掉或注入标签
 function escapeHtml(s) {
   return String(s == null ? '' : s)
@@ -385,7 +403,7 @@ function hwEvent(e) {
 }
 
 async function hwCapture(extra) {
-  if (HW.busy) return;
+  if (HW.busy) { pageLog('note', 'hwCapture 跳过：HW.busy'); return; }
   extra = (extra && typeof extra === 'object' && !(extra instanceof Event)) ? extra : {};
   hwLiveOn();
   hwSetBusy(true, '准备拍照…');

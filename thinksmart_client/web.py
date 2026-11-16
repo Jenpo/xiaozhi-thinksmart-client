@@ -431,6 +431,27 @@ def make_app(client: Client):
     async def network(_request):
         return web.json_response({'ip': local_ip()})
 
+    page_log_times = []
+
+    async def page_log(request):
+        """页面的点按和 JS 报错进日志（kiosk 里看不到控制台；2026-11-16「点拍摄没有反应」时
+        客户端一个请求都没收到，查不到是没点到、JS 抛错还是被提前 return）。限长、每分钟最多 60 条。"""
+        now = time.monotonic()
+        page_log_times[:] = [t for t in page_log_times if now - t < 60]
+        if len(page_log_times) >= 60:
+            return web.json_response({'ok': False}, status=429)
+        page_log_times.append(now)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        kind = str(body.get('kind') or 'note')[:20]
+        msg = str(body.get('msg') or '')[:300]
+        (log.warning if kind in ('error', 'rejection') else log.info)('页面 %s: %s', kind, msg)
+        return web.json_response({'ok': True})
+
     async def update_check(_request):
         return web.json_response({'ok': update.request('check')})
 
@@ -500,6 +521,7 @@ def make_app(client: Client):
     app.router.add_get('/api/health', health)
     app.router.add_get('/api/weather', weather_now)
     app.router.add_get('/api/network', network)
+    app.router.add_post('/api/page-log', page_log)
     app.router.add_post('/api/power-off', power_off)
     app.router.add_post('/api/update/check', update_check)
     app.router.add_post('/api/update/install', update_install)
