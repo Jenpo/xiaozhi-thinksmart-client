@@ -18,6 +18,9 @@ WEB = ROOT / 'web'
 BUILD = str(int(time.time()))
 
 
+MIN_MUSIC_VOLUME = 15   # 喇叭音量低于这个（wpctl 立方刻度，15 ≈ -49 dB）放歌基本听不见
+
+
 def make_app(client: Client):
     app = web.Application()
 
@@ -215,6 +218,16 @@ def make_app(client: Client):
         return web.json_response({'ok': bool(data.get('ok')), 'message': data.get('message') or data.get('error')},
                                  status=200 if data.get('ok') else 409)
 
+    async def _local_music_volume(vol):
+        """面板放歌时带来的滑杆值设成喇叭音量；没带就不动。音量低到几乎听不见时提到 30，免得「点了没声」。"""
+        if vol is not None:
+            try:
+                await client.set_volume(int(vol), 'page')
+            except (TypeError, ValueError):
+                pass
+        if client.volume is not None and client.volume < MIN_MUSIC_VOLUME:
+            await client.set_volume(30, 'page')
+
     async def music_play(request):
         body = await request.json()
         target = (body.get('target') or 'local').strip().lower()
@@ -231,10 +244,11 @@ def make_app(client: Client):
                 if (client.music_status() or {}).get('source') == 'voice':
                     await client.music_control('stop')     # 喇叭同一时刻只放一样
                 music_api.set_queue(tracks, body.get('index') or 0)
-                vol = body.get('volume')
-                if vol is None:
-                    vol = (music_api.local_status().get('volume') or 55)
-                r = await asyncio.to_thread(music_api.play_index, int(body.get('index') or 0), vol)
+                # [2026-11-16] 本机只有一个音量：面板滑杆 = 设备喇叭音量，ffplay 固定 100。
+                # 以前 ffplay -volume 用滑杆值、喇叭另有设备音量，两者相乘：设备音量被调到 20 时（-42 dB）
+                # 面板拉满也几乎听不见（owner「点了关键词本机播放，没有声音」）。
+                await _local_music_volume(body.get('volume'))
+                r = await asyncio.to_thread(music_api.play_index, int(body.get('index') or 0), 100)
                 client.events.publish('music', client.music_status())
                 return web.json_response(r, status=200 if r.get('ok') else 404)
         track = music_api.find_track(title)
@@ -244,11 +258,9 @@ def make_app(client: Client):
             if (client.music_status() or {}).get('source') == 'voice':
                 await client.music_control('stop')
             # 面板的滑杆值就是本机音量；没传时沿用上一次的（重复点同一首不会突然变成默认 70）
-            vol = body.get('volume')
-            if vol is None:
-                vol = (music_api.local_status().get('volume') or 70)
+            await _local_music_volume(body.get('volume'))
             music_api.set_queue([track], 0)
-            r = music_api.local_play(track['path'], vol)
+            r = music_api.local_play(track['path'], 100)
             client.events.publish('music', client.music_status())
             return web.json_response(r)
         # tv 交给 hub 的 cast_youtube 插件真正播放（不是只回个 echo）
@@ -328,11 +340,9 @@ def make_app(client: Client):
         except (TypeError, ValueError):
             return web.json_response({'ok': False, 'error': 'volume must be 0-100'}, status=400)
         if target == 'local':
-            if (client.music_status() or {}).get('source') == 'voice':
-                # 语音点的歌从 hub 推流到本机喇叭：滑杆就是喇叭音量
-                await client.set_volume(vol, 'page')
-                return web.json_response({'ok': True, 'target': 'local', 'volume': vol, 'source': 'voice'})
-            return web.json_response(await asyncio.to_thread(music_api.local_set_volume, vol))
+            # 本机（语音点的、面板点的都一样）：滑杆就是喇叭音量，不再重开 ffplay
+            vol = await client.set_volume(vol, 'page')
+            return web.json_response({'ok': True, 'target': 'local', 'volume': vol})
         # 电视走 ARC 到 HT-Z9F soundbar，HA 的 volume_level 就是实际出声音量
         # [2026-11-10] HomePod 通路下线，面板只留本机与电视
         entity = {'tv': 'media_player.bravia_xr_55x90j'}.get(target)
@@ -379,7 +389,9 @@ def make_app(client: Client):
         """切到某个目标时，拉它的当前音量做滑杆初值（只读）。"""
         target = (request.query.get('target') or 'local').strip().lower()
         if target == 'local':
-            return web.json_response({'target': 'local', 'volume': 55})
+            # 以前写死 55：滑杆显示 55、喇叭其实在 20，看着够大其实没声
+            vol = await client.device_volume()
+            return web.json_response({'target': 'local', 'volume': vol if vol is not None else client.volume})
         entity = {'tv': 'media_player.bravia_xr_55x90j'}.get(target)
         if not entity:
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)

@@ -226,13 +226,34 @@ function hwItemHtml(it, mark, show, fixed) {
 }
 
 /* ---- 实时画面：面板开着、倒数时看得到镜头里有什么；拍的那一下客户端会自己停掉 ---- */
+/* 实时画面闸门：上一路停掉后至少 LIVE_GAP_MS 才开下一路，停掉时取消还没开的那路。
+   快速「停一路→开一路」（学习面板「这是什么」切到「朗读」150 ms 内）会让 WebKit 网页进程崩溃：
+   新流一开，客户端就掐断旧流，WebKit 处理被掐断的 multipart 图片时崩（2026-11-16 回归测试二分定位；
+   隔 3 秒切换不崩）。kiosk 页面崩了整屏白掉，看作业/这是什么都用不了。 */
+const LIVE_GAP_MS = 900;
+const LIVE = { stopAt: 0, timer: null };
+function liveStart(img, onerror) {
+  clearTimeout(LIVE.timer);
+  const wait = Math.max(0, LIVE_GAP_MS - (Date.now() - LIVE.stopAt));
+  LIVE.timer = setTimeout(() => {
+    LIVE.timer = null;
+    if (!img.isConnected) return;
+    img.onerror = onerror || null;
+    img.src = '/api/hw/live?t=' + Date.now();
+  }, wait);
+}
+function liveStop(img) {
+  clearTimeout(LIVE.timer); LIVE.timer = null;
+  if (img && img.getAttribute('src')) { img.onerror = null; img.removeAttribute('src'); LIVE.stopAt = Date.now(); }
+}
+
 function hwLiveOn() {
   const v = hwEl('hwLive');
   if (!v || HW.live) return;
   HW.live = true;
-  v.onerror = () => hwLiveOff(true);
   v.onload = null;
-  v.src = '/api/hw/live?t=' + Date.now();
+  if (typeof stLive === 'function' && ST.live) stLive(false);   // 同时只开一路
+  liveStart(v, () => hwLiveOff(true));
   v.hidden = false;
   const tag = hwEl('hwLiveTag'); if (tag) tag.hidden = false;
   const e = hwEl('hwEmpty'); if (e) e.hidden = true;
@@ -243,7 +264,7 @@ function hwLiveOn() {
 function hwLiveOff(failed) {
   const v = hwEl('hwLive');
   HW.live = false;
-  if (v) { v.onerror = null; v.removeAttribute('src'); v.hidden = true; }
+  if (v) { liveStop(v); v.hidden = true; }
   const tag = hwEl('hwLiveTag'); if (tag) tag.hidden = true;
   const img = hwEl('hwImg'), e = hwEl('hwEmpty'), bx = hwEl('hwBoxes');
   const has = img && img.getAttribute('src');
@@ -2039,7 +2060,8 @@ const handlers = {
   toast: t => toast(t.text, t.kind),
   volume(v) {
     // a ring's own volume (keys while it rings) is shown, but isn't the device volume
-    if (!v.ring) { ui.status.volume = v.volume; renderVol(); renderMusic(); }
+    // 本机只有一个音量（2026-11-16）：设备音量变了，音乐面板「本机」的滑杆跟着走
+    if (!v.ring) { ui.status.volume = v.volume; if (MP.target === 'local') MP.volume = v.volume; renderVol(); renderMusic(); }
     if (v.source !== 'page') showVolume(v.volume);
   },
   alarms(a) {
@@ -2370,8 +2392,8 @@ function stLive(on) {
   const v = stEl('stLive');
   ST.live = !!on;
   if (!v) return;
-  if (on) { v.src = '/api/hw/live?t=' + Date.now(); v.hidden = false; }
-  else { v.removeAttribute('src'); v.hidden = true; }
+  if (on) { if (HW.live) hwLiveOff(); liveStart(v); v.hidden = false; }
+  else { liveStop(v); v.hidden = true; }
 }
 function camBox(label) {
   return `<div class="st-cam"><img id="stLive" alt="实时画面" hidden><img id="stShot" alt="" hidden>

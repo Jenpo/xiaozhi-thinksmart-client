@@ -39,6 +39,8 @@ CAPTURE_HEIGHT = 960
 CAPTURE_TIMEOUT = 60
 PHOTO_DIR = os.path.expanduser('~/.local/share/thinksmart/photo')
 MAX_COUNTDOWN = 5
+SETTLE_MIN = 1.5           # 第一帧后至少等这么久再取（AE/AWB 收敛）
+SETTLE_MAX = 5.0
 # 网关 aiohttp 收包上限 1 MB，照片按 base64 发（×1.34），原图超过这个就先压一遍。
 # 2026-11-15 晚亮处拍出 894–933 KB → 413 → 页面一直转（实测 524 KB 时正常）。
 MAX_SEND_BYTES = 600 * 1024
@@ -123,7 +125,7 @@ def _capture_sync(width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT, timeout=CAPTURE_TI
            '!', 'video/x-raw,width=%d,height=%d' % (width, height),
            '!', 'videoconvert',
            '!', 'jpegenc', 'quality=85',
-           '!', 'multifilesink', 'location=' + pattern]
+           '!', 'multifilesink', 'max-files=4', 'location=' + pattern]
     started = time.monotonic()
     logpath = '/tmp/thinksmart-hw-gst.log'
     try:
@@ -135,17 +137,31 @@ def _capture_sync(width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT, timeout=CAPTURE_TI
     best = None
     files = []
     try:
-        # 等第二张：第一张常常还在等 AE/AWB 收敛。单张出图实测约 1-2 秒（2026-11-15 回执）。
+        # 等曝光/白平衡稳下来再取：以前取第 2 帧（出图后约 0.1 s），晚上室内灯下 AE/AWB 还没收敛，
+        # 整张又黑又绿（2026-11-15 21:50 实拍平均亮度 18/255，模型判「太暗」）。现在：第一帧后至少等
+        # SETTLE_MIN 秒，相邻两帧 JPEG 大小差 <4% 视为稳定（亮度/细节变化都会改大小），最多等 SETTLE_MAX 秒。
+        # multifilesink max-files=4 只留最新 4 帧；取倒数第二张（最新那张可能还在写）。
+        first = None
         while time.monotonic() - started < timeout:
             files = sorted(f for f in os.listdir(tmp) if f.endswith('.jpg'))
-            if len(files) >= 2:
+            if files and first is None:
+                first = time.monotonic()
+            if first is not None and len(files) >= 3:
+                waited = time.monotonic() - first
+                try:
+                    a, b = (os.path.getsize(os.path.join(tmp, f)) for f in files[-3:-1])
+                except OSError:
+                    a = b = 0
+                steady = a and b and abs(a - b) / max(a, b) < 0.04
+                if waited >= SETTLE_MAX or (waited >= SETTLE_MIN and steady):
+                    break
+            if proc.poll() is not None:
                 break
-            if proc.poll() is not None and not files:
-                break
-            time.sleep(0.2)
+            time.sleep(0.15)
         files = sorted(f for f in os.listdir(tmp) if f.endswith('.jpg'))
-        if files:
-            with open(os.path.join(tmp, files[-1]), 'rb') as f:
+        pick = files[-2] if len(files) >= 2 else (files[-1] if files else None)
+        if pick:
+            with open(os.path.join(tmp, pick), 'rb') as f:
                 best = f.read()
     finally:
         # gst-launch 收到 SIGTERM 有时不退出（实测留下一个 100% CPU 的僵尸，还占着 /dev/media0，
@@ -220,14 +236,32 @@ def install(client):
         live['proc'] = proc
         resp = web.StreamResponse(headers={'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
                                            'Cache-Control': 'no-store'})
-        await resp.prepare(request)
         until = time.monotonic() + LIVE_MAX
         try:
-            while time.monotonic() < until:
-                chunk = await proc.stdout.read(65536)
+            # prepare 也要在 try 里：页面开了又马上关时写响应头就会抛，以前 gst 已经起了却没人收（回归测试抓到）
+            await resp.prepare(request)
+            while True:
+                left = until - time.monotonic()
+                if left <= 0:
+                    break
+                # 看的人走了就停（2026-11-16 回归测试抓到两种）：
+                #  1) 连接关了：aiohttp 往断开的连接写不一定抛异常；
+                #  2) 图片请求被页面取消但连接没关、对方不再读：write 卡在 drain 永远不返回，
+                #     循环连 LIVE_MAX 都检查不到，摄像头一直被占（实测 >2 分钟）。读、写都限时。
+                tr = request.transport
+                if tr is None or tr.is_closing():
+                    break
+                try:
+                    chunk = await asyncio.wait_for(proc.stdout.read(65536), timeout=min(5.0, left))
+                except asyncio.TimeoutError:
+                    break                      # gst 不出帧了
                 if not chunk:
                     break
-                await resp.write(chunk)
+                try:
+                    await asyncio.wait_for(resp.write(chunk), timeout=3.0)
+                except asyncio.TimeoutError:
+                    log.info('实时画面：对方 3 s 没读，停流放手摄像头')
+                    break
         except (ConnectionResetError, ConnectionError):
             pass
         finally:
