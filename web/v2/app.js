@@ -1143,12 +1143,16 @@ function deviceText(d) {
 /* ---- music (top-bar pill + player sheet) ---- */
 // [2026-11-10] HomePod 通路已下线（面板不再有按钮）：只保留本机与电视
 const MUSIC = { tv: 'media_player.bravia_xr_55x90j' };
+// [2026-11-16] 第三个出声位置：客厅 Sony HT-Z9F 音响（hub soundbar_out 经 UPnP 推流）。它和本机一样是 hub 的播放会话：
+// 有队列、有进度、能暂停/切歌，所以凡是「本机才有」的判断都用 hubTarget()；只有电视那条是只能放/停的远程通路。
+const TARGET_NAME = { local: '本机', tv: '电视', soundbar: '音响' };
+const hubTarget = t => t === 'local' || t === 'soundbar';
 // volumeByTarget：每个通路各存各的音量。原来 MP.volume 是单一全局值，切到电视拉到
 // 电视音量后再切回本机，滑杆显示的是上一个目标的值，一动就把错值写到新目标。
 const MP = { target: 'local', queue: [], idx: -1,
              // 本机喇叭上在放的：source=voice 是语音点的（hub 推流），local 是面板自己的播放器
              source: 'local', paused: false, index: null, total: null, desc: '', elapsed: 0, elapsedAt: 0,
-             volumeByTarget: { local: 55, tv: 30 },
+             volumeByTarget: { local: 55, tv: 30, soundbar: 20 }, out: 'local', outputSynced: false,
              playing: false, title: '', nowTitle: '', startedAt: 0, volTimer: null, pollFailed: false,
              // 非本机通路的真实状态（从后台查 HA 实体得到）：{state, playing, title, artist}
              remote: { state: '', playing: false, title: '', artist: '' } };
@@ -1193,6 +1197,9 @@ function fmtSec(t) {
 function applyMusicStatus(s) {
   if (!s) return;
   MP.source = s.source || 'local';
+  MP.out = s.out || 'local';
+  // 面板第一次拿到状态时，按 hub 记住的出声位置选中按钮（语音说过「用音响放」也会反映过来）
+  if (!MP.outputSynced && s.output && MP.target !== 'tv') { MP.target = s.output; MP.outputSynced = true; }
   MP.playing = !!s.playing;
   MP.paused = !!s.paused;
   MP.index = s.index || null;
@@ -1226,25 +1233,27 @@ function renderMusic() {
   if (!pill) return;
 
   const active = MP.playing || MP.paused;
-  const localOn = MP.playing && MP.target === 'local';
+  const localOn = MP.playing && hubTarget(MP.target);
   pill.classList.toggle('playing', localOn || tvOn || (MP.source === 'voice' && MP.playing));
   pill.classList.toggle('paused', MP.paused && !MP.playing);
   const count = MP.total > 1 ? ' ' + MP.index + '/' + MP.total : '';
   $('musicTitle').textContent = active ? (MP.title || '在放') : '放点音乐';
   $('musicSub').textContent = !active ? '随机播放'
-    : (MP.paused ? '已暂停' : ({ local: '本机', tv: '电视' })[MP.target]) +
+    : (MP.paused ? '已暂停' : (MP.out === 'soundbar' ? '音响' : TARGET_NAME[MP.target])) +
       (MP.source === 'voice' ? ' · 语音点歌' : '') + count;
 
   // 音响选择状态
-  for (const t of ['local', 'tv']) {
-    const el = $('mt' + (t === 'local' ? 'Local' : 'Tv'));
+  for (const t of ['local', 'tv', 'soundbar']) {
+    const el = $({ local: 'mtLocal', tv: 'mtTv', soundbar: 'mtSoundbar' }[t]);
     if (el) {
       el.classList.toggle('on', MP.target === t);
       el.setAttribute('aria-checked', MP.target === t ? 'true' : 'false');
     }
   }
   const ls = $('mtLocalState');
-  if (ls) ls.textContent = localOn ? '在放' : '扬声器';
+  if (ls) ls.textContent = MP.playing && MP.out !== 'soundbar' && MP.target === 'local' ? '在放' : '扬声器';
+  const sb = $('mtSoundbarState');
+  if (sb) sb.textContent = MP.out === 'soundbar' && MP.playing ? '在放' : 'HT-Z9F 外放';
   const ts = $('mtTvState');
   if (ts) {
     const tvLive = tvOn || (MP.target === 'tv' && MP.remote.playing);
@@ -1254,23 +1263,23 @@ function renderMusic() {
   // 非本机通路：面板标题/副标以 MP.remote 为准。原来只看 MP.playing，
   // 而 MP.playing 只在轮询回来时才更新，切到 HomePod 后要等 4 秒且第一次轮询
   // 失败就永远停在「现在没在放」——设备已经在出声，面板却说没放。
-  const remoteLive = MP.target !== 'local' && MP.remote.playing;
-  const nowTitle = MP.target !== 'local' ? (MP.remote.title || (remoteLive ? '在放' : ''))
-                                        : (active ? (MP.nowTitle || MP.title || '在放') : '');
-  const nowPlaying = MP.target !== 'local' ? remoteLive : active;
+  const remoteLive = MP.target === 'tv' && MP.remote.playing;
+  const nowTitle = MP.target === 'tv' ? (MP.remote.title || (remoteLive ? '在放' : ''))
+                                     : (active ? (MP.nowTitle || MP.title || '在放') : '');
+  const nowPlaying = MP.target === 'tv' ? remoteLive : active;
   const elapsed = MP.elapsed + (MP.playing ? (Date.now() - MP.elapsedAt) / 1000 : 0);
 
   $('musicNowTitle').textContent = nowPlaying ? (nowTitle || '在放') : '现在没在放';
-  $('musicNowSub').textContent = nowPlaying && MP.target === 'local'
-    ? [MP.paused ? '已暂停' : '在本机播放',
+  $('musicNowSub').textContent = nowPlaying && hubTarget(MP.target)
+    ? [MP.paused ? '已暂停' : (MP.out === 'soundbar' ? '在 HT-Z9F 音响播放' : '在本机播放'),
        MP.source === 'voice' ? '语音点的' + (MP.desc && MP.desc !== '随机' ? MP.desc : '') + (MP.total > 1 ? '歌单' : '歌') : '',
        MP.origin === 'youtube' ? 'YouTube Music' : MP.origin === 'nas' ? 'NAS 曲库' : '',
        MP.total > 1 ? '第 ' + MP.index + '/' + MP.total + ' 首' : '',
        fmtSec(elapsed)].filter(Boolean).join(' · ')
     : nowPlaying
-    ? ('在 ' + ({ local: 'SmartView 本机', tv: 'SONY 电视' })[MP.target] + ' 播放' +
-       (MP.target !== 'local' ? '（这条通路不提供进度）' : ''))
-    : (MP.target === 'local' ? '点「随机播放」开始'
+    ? ('在 ' + ({ local: 'SmartView 本机', tv: 'SONY 电视', soundbar: 'SONY HT-Z9F 音响' })[MP.target] + ' 播放' +
+       (MP.target === 'tv' ? '（这条通路不提供进度）' : ''))
+    : (hubTarget(MP.target) ? '点「随机播放」开始' + (MP.target === 'soundbar' ? '，从客厅音响出声' : '')
        : ('点「随机播放」开始' + (MP.remote.state === 'off' ? '（设备现在是待机/关机）'
           : MP.remote.state === 'unavailable' ? '（设备连不上）'
           : MP.remote.state === 'unknown' ? '（还没读到设备状态）' : '')));
@@ -1279,10 +1288,10 @@ function renderMusic() {
   if ($('musicVolumeText')) $('musicVolumeText').textContent = String(MP.volume);
 
   // 暂停/继续一个键；上一首/下一首只对本机喇叭（电视那条通路没有队列）
-  if ($('musicPauseLocal')) $('musicPauseLocal').textContent = MP.target === 'local' && MP.paused ? '继续' : '暂停';
+  if ($('musicPauseLocal')) $('musicPauseLocal').textContent = hubTarget(MP.target) && MP.paused ? '继续' : '暂停';
   for (const id of ['musicPrev', 'musicNext']) {
     const b = $(id);
-    if (b) b.disabled = MP.target === 'local' ? !active && !MP.queue.length : MP.queue.length < 2;
+    if (b) b.disabled = hubTarget(MP.target) ? !active && !MP.queue.length : MP.queue.length < 2;
   }
 
   const prog = document.querySelector('.music-progress');
@@ -1371,33 +1380,35 @@ async function playTrack(i) {
   MP.idx = i;
   MP.title = t.title + (t.artist ? ' — ' + t.artist : '');
   renderQueue();
-  if (MP.target === 'local') {
+  if (hubTarget(MP.target)) {
+    const where = MP.target === 'soundbar' ? '音响' : '本机';
     try {
       const r = await musicApi('/api/music/play', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         // 整张列表一起给后台：放完一首自动接下一首（原来只放点的那一首就停）
-        body: JSON.stringify({ target: 'local', title: t.title, volume: MP.volume, index: i,
+        body: JSON.stringify({ target: MP.target, title: t.title, volume: MP.volume, index: i,
                                queue: MP.queue.map(x => ({ title: x.title, artist: x.artist, album: x.album, path: x.path, source: x.source })) }),
       });
       if (r && r.ok === false) {
-        toast('本机没放成：' + (r.error || '后台没响应'), 'error');
+        toast(where + '没放成：' + (r.error || '后台没响应'), 'error');
         MP.playing = false;
         MP.startedAt = 0;
       } else {
         // 点下去要有回音：曲目名/歌手先写进面板，再让轮询去对真实状态
         MP.playing = true;
         MP.paused = false;
-        MP.source = 'local';
+        MP.source = MP.target === 'soundbar' ? 'voice' : 'local';
+        MP.out = MP.target === 'soundbar' ? 'soundbar' : 'local';
         MP.index = i + 1;
         MP.total = MP.queue.length;
         MP.elapsed = 0; MP.elapsedAt = Date.now();
         MP.startedAt = Date.now();
         MP.nowTitle = t.title + (t.artist ? ' — ' + t.artist : '');
         renderMusic();
-        toast('本机在放：' + t.title, 'info');
+        toast(MP.target === 'soundbar' ? '音响上开始放：' + t.title + '（音响要几秒才出声）' : '本机在放：' + t.title, 'info');
       }
     } catch (e) {
-      toast('本机播放失败', 'error');
+      toast(where + '播放失败' + (e && e.message ? '：' + e.message : ''), 'error');
       MP.playing = false;
       MP.startedAt = 0;
     }
@@ -1445,8 +1456,8 @@ async function stopMusic() {
 async function pollMusic() {
   if (document.hidden) return;   // 屏幕熄灭/页面在后台就别打后台了
   try {
-    if (MP.target === 'local') {
-      // 曲名以后台为准：语音点的歌、面板自己的列表自动换到下一首，都靠它更新
+    if (hubTarget(MP.target)) {
+      // 曲名以后台为准：语音点的歌、面板自己的列表自动换到下一首，都靠它更新（音响上放的也在这里）
       applyMusicStatus(await musicApi('/api/music/status'));
       MP.pollFailed = false;
       return;
@@ -1511,12 +1522,23 @@ if ($('musicPill')) {
   document.querySelectorAll('.music-target').forEach(el => {
     el.addEventListener('click', async () => {
       const want = el.dataset.target;
+      const before = MP.target;
       MP.target = want;
       // 请求序号：快速连点不同通路时，先发的响应后到会把音量写到错的目标上
       const seq = (MP.targetSeq = (MP.targetSeq || 0) + 1);
       renderMusic();
-      // 切到非本机通路时立刻拉一次真实状态：只靠 4 秒轮询会让用户以为没投上
-      if (want !== 'local') {
+      // 本机 ⇄ 音响：告诉后台出声位置（hub 记住，语音点歌也按它走），正在放的跟着搬过去
+      if (hubTarget(want) && (want === 'soundbar' || before === 'soundbar' || MP.out === 'soundbar')) {
+        try {
+          const r = await musicApi('/api/music/output', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                          body: JSON.stringify({ target: want }) });
+          if (r && r.message) toast(r.message, 'info');
+          else if (r && r.ok === false) toast('没切过去：' + (r.error || '后台没响应'), 'error');
+        } catch (e) { toast('没切过去：' + (e.message || '连不上后台'), 'error'); }
+        setTimeout(refreshMusic, 800);
+      }
+      // 切到电视时立刻拉一次真实状态：只靠 4 秒轮询会让用户以为没投上
+      if (want === 'tv') {
         MP.remote = { state: 'unknown', playing: false, title: '', artist: '' };
         try {
           const s = await musicApi('/api/music/status?target=' + want);
@@ -1537,7 +1559,7 @@ if ($('musicPill')) {
         }
       } catch (err) {
         if (seq !== MP.targetSeq) return;
-        toast('读不到' + ({ local: '本机', tv: '电视' })[want] +
+        toast('读不到' + TARGET_NAME[want] +
               '的当前音量，滑杆用默认值', 'warn');
         renderMusic();
       }
@@ -1605,15 +1627,15 @@ if ($('musicPill')) {
   }
   // 暂停和停止分开：暂停记住位置，「继续」从那里接着放（原来两个键都是停止）
   $('musicPauseLocal').addEventListener('click', async () => {
-    if (MP.target !== 'local') {
-      // 非本机通路没有独立的 pause 语义，明确告知而不是静默当暂停
+    if (MP.target === 'tv') {
+      // 电视那条通路没有独立的 pause 语义，明确告知而不是静默当暂停
       toast('这条通路只能停止，暂停请用电视自己的遥控', 'info');
       return stopMusic();
     }
     await musicControl(MP.paused ? 'resume' : 'pause');
   });
   const skipTo = step => {
-    if (MP.target === 'local' && (MP.playing || MP.paused)) return musicControl(step > 0 ? 'next' : 'prev');
+    if (hubTarget(MP.target) && (MP.playing || MP.paused)) return musicControl(step > 0 ? 'next' : 'prev');
     if (MP.queue.length) return playTrack(((MP.idx < 0 ? 0 : MP.idx + step) + MP.queue.length) % MP.queue.length);
   };
   if ($('musicPrev')) $('musicPrev').addEventListener('click', () => skipTo(-1));
@@ -2082,7 +2104,7 @@ const handlers = {
   say: x => { speakText(x.text, x.language); toast(x.text); },
   card: c => cardShow(c),
   study: x => stOpen(x.mode, x),
-  music: m => { if (MP.target === 'local') applyMusicStatus(m); },
+  music: m => { if (hubTarget(MP.target)) applyMusicStatus(m); },
   toast: t => toast(t.text, t.kind),
   volume(v) {
     // a ring's own volume (keys while it rings) is shown, but isn't the device volume

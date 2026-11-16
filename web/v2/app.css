@@ -80,7 +80,7 @@ button { font: inherit; color: inherit; border: 0; background: none; padding: 0;
 @media (prefers-reduced-motion: reduce) { .mp-eq i { animation: none; } }
 
 /* music sheet — player */
-.music-targets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 18px; }
+.music-targets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }   /* 本机 · 电视 · 音响（2026-11-16） */
 .music-target { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-radius: 18px;
                 background: var(--card); border: 1px solid var(--line); text-align: left; transition: transform .12s; }
 .music-target:active { transform: scale(.97); }

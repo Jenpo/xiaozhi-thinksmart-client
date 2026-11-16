@@ -232,9 +232,23 @@ def make_app(client: Client):
         body = await request.json()
         target = (body.get('target') or 'local').strip().lower()
         title = body.get('title') or ''
-        if target not in ('local', 'tv'):
+        if target not in ('local', 'tv', 'soundbar'):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
         queue = body.get('queue')
+        if target == 'soundbar':
+            # [2026-11-16] 外放到 Sony HT-Z9F：整张列表交给 hub 的 soundbar_out（UPnP 推给音箱，放完接下一首）
+            tracks = [t for t in (queue if isinstance(queue, list) else []) if isinstance(t, dict)
+                      and (str(t.get('path') or '').startswith(music_api.NAS_ROOTS)
+                           or re.fullmatch(r'ytm:[A-Za-z0-9_-]{11}', str(t.get('path') or '')))]
+            index = int(body.get('index') or 0)
+            if not tracks:
+                one = music_api.find_track(title)
+                tracks, index = ([one], 0) if one else ([], 0)
+            if not tracks:
+                return web.json_response({'ok': False, 'error': '没找到这首'}, status=404)
+            if music_api.local_status().get('path'):
+                music_api.local_stop()                 # 喇叭同一时刻只放一样
+            return await _soundbar_play(tracks, index)
         if target == 'local' and isinstance(queue, list) and queue:
             # 面板的整张列表：放完一首自动接下一首（原来只放点的那一首）。路径必须在 NAS 曲库里。
             tracks = [t for t in queue if isinstance(t, dict)
@@ -277,6 +291,50 @@ def make_app(client: Client):
                                   'error': result.get('error')},
                                  status=200 if ok else 409)
 
+    async def _soundbar_play(tracks, index, seek_ms=0):
+        try:
+            r = await client._hub_http('/kiosk/music/out/play', {
+                'device_id': client.cfg.get('device_id'), 'index': index, 'seek_ms': int(seek_ms or 0),
+                'tracks': [{k: t.get(k) for k in ('path', 'title', 'artist', 'album')} for t in tracks]}, total=30)
+        except Exception as e:
+            return web.json_response({'ok': False, 'target': 'soundbar', 'error': '连不上网关: %s' % e}, status=502)
+        ok = bool((r or {}).get('ok'))
+        if ok:
+            client.music_output = 'soundbar'
+            asyncio.create_task(client._soundbar_refresh())
+        return web.json_response({'ok': ok, 'target': 'soundbar', 'message': (r or {}).get('message'),
+                                  'error': (r or {}).get('error')}, status=200 if ok else 409)
+
+    async def music_output(request):
+        """选出声位置：local 本机 / soundbar 客厅 HT-Z9F。正在放的跟着搬过去（hub 记住，语音点歌也按它走）。"""
+        if request.method == 'GET':
+            await client._soundbar_refresh()
+            return web.json_response({'target': getattr(client, 'music_output', 'local')})
+        body = await request.json()
+        target = 'soundbar' if (body.get('target') or '') == 'soundbar' else 'local'
+        ls = music_api.local_status()
+        if target == 'soundbar' and ls.get('path') and music_api._queue:
+            # 面板自己的播放器在本机放：整张列表从这首、这个位置搬到音箱
+            idx = max(0, (ls.get('index') or 1) - 1)
+            seek = int((ls.get('elapsed') or 0) * 1000)
+            queue = list(music_api._queue)
+            music_api.local_stop()
+            return await _soundbar_play(queue, idx, seek)
+        try:
+            r = await client._hub_http('/kiosk/music/out/target',
+                                       {'device_id': client.cfg.get('device_id'), 'target': target})
+        except Exception as e:
+            return web.json_response({'ok': False, 'error': '连不上网关: %s' % e}, status=502)
+        client.music_output = target
+        if target == 'local' and (client.music_status() or {}).get('out') == 'soundbar':
+            client.hub_music = None
+        msg = r.get('message')
+        if target == 'local' and not client.hub.connected:
+            if await client.music_control('resume'):     # 换回本机接着放：需要这条连接
+                msg = '换回本机接着放'
+        asyncio.create_task(client._soundbar_refresh())
+        return web.json_response({'ok': bool(r.get('ok')), 'target': target, 'message': msg})
+
     async def music_stop(request):
         body = {}
         try:
@@ -284,8 +342,12 @@ def make_app(client: Client):
         except Exception:
             pass
         target = (body.get('target') or 'local').strip().lower()
-        if target not in ('local', 'tv'):
+        if target not in ('local', 'tv', 'soundbar'):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
+        if target == 'soundbar' or (client.music_status() or {}).get('out') == 'soundbar':
+            ok = await client.music_control('stop')
+            client.events.publish('music', client.music_status())
+            return web.json_response({'ok': bool(ok), 'target': 'soundbar'})
         if target == 'local':
             if (client.music_status() or {}).get('source') == 'voice':
                 await client.music_control('stop')                # 语音点的歌也从这里停
@@ -339,6 +401,13 @@ def make_app(client: Client):
             vol = max(0, min(100, int(body.get('volume', 70))))
         except (TypeError, ValueError):
             return web.json_response({'ok': False, 'error': 'volume must be 0-100'}, status=400)
+        if target == 'soundbar':
+            try:
+                r = await client._hub_http('/kiosk/music/out/volume', {'volume': vol})
+            except Exception as e:
+                return web.json_response({'ok': False, 'error': '连不上网关: %s' % e}, status=502)
+            return web.json_response({'ok': bool(r.get('ok')), 'target': 'soundbar', 'volume': r.get('volume'),
+                                      'error': r.get('error')}, status=200 if r.get('ok') else 502)
         if target == 'local':
             # 本机（语音点的、面板点的都一样）：滑杆就是喇叭音量，不再重开 ffplay
             vol = await client.set_volume(vol, 'page')
@@ -392,6 +461,13 @@ def make_app(client: Client):
             # 以前写死 55：滑杆显示 55、喇叭其实在 20，看着够大其实没声
             vol = await client.device_volume()
             return web.json_response({'target': 'local', 'volume': vol if vol is not None else client.volume})
+        if target == 'soundbar':
+            try:
+                r = await client._hub_http('/kiosk/music/out?volume=1&device_id='
+                                           + urllib.parse.quote(client.cfg.get('device_id') or ''))
+            except Exception as e:
+                return web.json_response({'ok': False, 'error': str(e)}, status=502)
+            return web.json_response({'target': 'soundbar', 'volume': r.get('volume'), 'power': r.get('power')})
         entity = {'tv': 'media_player.bravia_xr_55x90j'}.get(target)
         if not entity:
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
@@ -404,8 +480,8 @@ def make_app(client: Client):
         用户以为没投上。非本机走 hub 的 /kiosk/music/status 查 HA 实体。
         """
         target = (request.query.get('target') or 'local').strip().lower()
-        if target == 'local':
-            # 本机喇叭：语音点的歌（hub 推流）优先，没有才是面板自己的播放器
+        if target in ('local', 'soundbar'):
+            # 本机喇叭：语音点的歌（hub 推流）优先，没有才是面板自己的播放器；音箱上放的也在这里（out=soundbar）
             return web.json_response(client.music_status())
         if target not in ('tv',):
             return web.json_response({'ok': False, 'error': '未知的 target'}, status=400)
@@ -513,6 +589,7 @@ def make_app(client: Client):
     app.router.add_get('/api/music/status', music_status)
     app.router.add_get('/api/music/target_volume', music_target_volume)
     app.router.add_post('/api/music/play', music_play)
+    app.router.add_route('*', '/api/music/output', music_output)
     app.router.add_post('/api/music/stop', music_stop)
     app.router.add_post('/api/music/volume', music_volume)
     app.router.add_post('/api/music/control', music_control)

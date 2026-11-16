@@ -334,6 +334,7 @@ class Client:
         self._apply_sleep()
         asyncio.create_task(self._sender())
         asyncio.create_task(self._ticker())
+        asyncio.create_task(self._soundbar_watch())
         asyncio.create_task(self._model_poller())
         asyncio.create_task(self._report_poller())
         asyncio.create_task(self._alarm_loop())
@@ -920,7 +921,7 @@ class Client:
         state = msg.get('state')
         if state in ('start', 'paused'):
             self.hub_music = {k: msg.get(k) for k in ('state', 'title', 'artist', 'album', 'index', 'total',
-                                                      'desc', 'elapsed', 'mode')}
+                                                      'desc', 'elapsed', 'mode', 'out')}
             self.hub_music['origin'] = msg.get('source') or 'nas'      # nas / youtube
             self.hub_music['since'] = time.time() - (msg.get('elapsed') or 0)
             if state == 'start':
@@ -936,18 +937,32 @@ class Client:
     def music_status(self):
         """What the speaker plays: the hub's stream (a voice request) or the page's own player."""
         hm = getattr(self, 'hub_music', None)
-        if hm and self.hub.connected:
+        output = getattr(self, 'music_output', 'local')
+        # 音箱上放的不靠这条连接（hub 2 分钟没人说话就关连接，音箱照放）：断了也照样显示
+        if hm and (self.hub.connected or hm.get('out') == 'soundbar'):
             playing = hm.get('state') == 'start'
-            return {'source': 'voice', 'playing': playing, 'paused': not playing,
+            return {'source': 'voice', 'playing': playing, 'paused': not playing, 'out': hm.get('out') or 'local',
+                    'output': output,
                     'title': hm.get('title'), 'artist': hm.get('artist') or '', 'album': hm.get('album') or '',
                     'index': hm.get('index'), 'total': hm.get('total'), 'desc': hm.get('desc') or '',
                     'origin': hm.get('origin') or 'nas',
                     'elapsed': round(time.time() - hm['since']) if playing else (hm.get('elapsed') or 0),
                     'path': None, 'volume': None}
-        return music_api.local_status()
+        return dict(music_api.local_status(), out='local', output=output)
 
     async def music_control(self, action):
         """The page's buttons on the hub's stream: next / prev / pause / resume / stop."""
+        hm = getattr(self, 'hub_music', None)
+        if hm and hm.get('out') == 'soundbar':
+            # 音箱上放的：hub 的 HTTP 接口直接控制，不用这条连接
+            try:
+                r = await self._hub_http('/kiosk/music/out/control',
+                                         {'device_id': self.cfg.get('device_id'), 'action': action})
+            except Exception as e:
+                log.warning('soundbar control %s failed: %s', action, e)
+                return False
+            asyncio.create_task(self._soundbar_refresh())
+            return bool((r or {}).get('ok'))
         if not self.hub.connected:
             # the conversation ended (the hub's idle timeout after a pause): the hub keeps the playlist
             # per device, so "resume" reconnects; the rest has nothing to act on
@@ -1629,6 +1644,37 @@ class Client:
         return True
 
     # ---- models (the hub's local-only /kiosk/llm endpoints) ----
+
+    async def _soundbar_refresh(self):
+        """音箱外放（hub soundbar_out）：出声位置和音箱上在放的。连接断了也靠它更新屏幕。"""
+        try:
+            r = await self._hub_http('/kiosk/music/out?device_id=' + urllib.parse.quote(self.cfg.get('device_id') or ''))
+        except Exception:
+            return
+        if not isinstance(r, dict) or not r.get('ok'):
+            return
+        changed = r.get('target') != getattr(self, 'music_output', 'local')
+        self.music_output = r.get('target') or 'local'
+        m = r.get('music')
+        hm = getattr(self, 'hub_music', None)
+        if m:
+            new = {k: m.get(k) for k in ('state', 'title', 'artist', 'album', 'index', 'total', 'desc', 'elapsed',
+                                         'mode', 'out')}
+            new['origin'] = m.get('source') or 'nas'
+            new['since'] = time.time() - (m.get('elapsed') or 0)
+            if not hm or any(hm.get(k) != new.get(k) for k in ('state', 'title', 'index', 'out')):
+                changed = True
+            self.hub_music = new
+        elif hm and hm.get('out') == 'soundbar':
+            self.hub_music = None
+            changed = True
+        if changed:
+            self.events.publish('music', self.music_status())
+
+    async def _soundbar_watch(self):
+        while True:
+            await asyncio.sleep(4)
+            await self._soundbar_refresh()
 
     async def _hub_http(self, path, body=None, total=15):
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=total)) as s:
