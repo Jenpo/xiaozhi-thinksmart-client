@@ -2662,6 +2662,7 @@ let cardTimer = null;
 function cardShow(c) {
   const box = stEl('cardBox');
   if (!box) return;
+  if (c.close) { box.classList.remove('on'); return; }
   const words = c.kind === 'words';
   stEl('cardTitle').textContent = c.title || '';
   const list = stEl('cardItems');

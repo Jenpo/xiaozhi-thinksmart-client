@@ -88,6 +88,19 @@ MODEL_RETRY = 3          # until the hub answers (it takes over a minute to star
 ALARM_VOLUME = 70        # the alarms' own volume until the user sets one
 TTS_TIMEOUT = 30         # seconds for the hub to synthesise a reminder's words
 PREVIEW_SECONDS = 8      # the settings' 试听 plays at most this much of a tone
+# [2026-11-15] 只唤醒不说话：主动自我介绍（owner「只唤醒，但没有指令」时要有引导）
+INTRO_FULL_EVERY = 6 * 3600     # 这么久没做过完整介绍，就讲完整版；否则只讲一句轮换的小提示
+INTRO_FULL = ('你好，我是小麦。你可以叫我放歌、看作业、做口算和听写，问天气，开关电视和灯，'
+              '也可以讲故事。粤语、普通话、英文都听得懂。现在想做什么？')
+INTRO_TIPS = ('我在。想听歌，可以说：放点轻音乐。',
+              '我在。拿作业到镜头前，说：看作业。',
+              '我在。想练口算，可以说：考考我乘法表。',
+              '我在。拿个东西到镜头前，问我：这是什么。',
+              '我在。看电视可以说：电视再看三十分钟就关。',
+              '我在。想听故事，说：讲个睡前故事。',
+              '我在。可以说：明天天气怎么样。')
+INTRO_CARD = ['放点轻音乐 / 放首周杰伦', '睇作业 / 看看作业', '考考我乘法表', '帮我听写：太阳、朋友',
+              '这是什么（拿东西到镜头前）', '明天天气怎么样', '电视再看三十分钟就关', '讲个睡前故事']
 CLIP_GAP = 0.8           # seconds of silence after each spoken reminder in a ring
 
 # Hub vendor id -> (logo file, company). Unknown vendors are guessed from the model name.
@@ -430,6 +443,54 @@ class Client:
         cur = self.models.get('current')
         return self.entry or (cur['entry'] if cur else None)
 
+    def _stop_intro(self):
+        t = getattr(self, 'intro_task', None)
+        if t and not t.done():
+            t.cancel()
+            self.audio.player.trim(0)
+        self.intro_task = None
+
+    async def _introduce(self):
+        """唤醒了却没说话：讲一段介绍（隔 6 小时一次完整版，其余一句轮换提示），屏幕出示例卡片，
+        讲完再听一轮（再不说话就安静回到待机，不会循环）。夜间模式只出卡片不出声（也防电视声误唤醒）。
+        声音走客户端自己的播放器（有回声消除参考），不走页面，不然再听那一轮会把自己的话听进去。"""
+        now = time.time()
+        full = now - getattr(self, 'intro_full_at', 0) > INTRO_FULL_EVERY
+        self.events.publish('card', {'title': '可以这样叫我', 'kind': 'list', 'items': INTRO_CARD, 'language': 'zh'})
+        if self.sleeping:
+            log.info('woken with nothing said (night): card only')
+            return
+        if full:
+            text, self.intro_full_at = INTRO_FULL, now
+        else:
+            self.intro_tip = (getattr(self, 'intro_tip', -1) + 1) % len(INTRO_TIPS)
+            text = INTRO_TIPS[self.intro_tip]
+        log.info('woken with nothing said: %s intro', 'full' if full else 'short')
+        cache = self.__dict__.setdefault('intro_clips', {})
+        if text not in cache:
+            wav = await self._speech(text)
+            if not wav:
+                return
+            cache[text] = wav
+        parts = self._clip_sound(cache[text])
+        if not parts:
+            return
+        sound = np.concatenate(parts)
+        self.set_state('speaking')
+        self.audio.player.push(sound)
+        try:
+            await asyncio.sleep(len(sound) / OUT_RATE)
+        finally:
+            # 不能用 in_turn()：它把 speaking 本身也算成「对话进行中」，介绍完会一直卡在 speaking（2026-11-16 实测）。
+            # 介绍期间有人唤醒会先 cancel 这里（_stop_intro），状态由 wake 接管
+            if self.state == 'speaking' and not self.uploading:
+                self.set_state('idle')
+        # 再听一轮：直接说指令就行，不用再叫名字
+        if self.state == 'idle' and await self.ensure_connected() and await self.start_listening('realtime'):
+            self.heard = False
+            self.after_intro = True
+            self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
+
     def play(self, name):
         sound = self.sounds.get(name)
         if sound is not None:
@@ -496,6 +557,8 @@ class Client:
 
     async def wake(self, source='button', chimed=False):
         self.screen.poke()
+        self._stop_intro()
+        self.events.publish('card', {'close': True})
         if self.ring:
             await self.stop_alarm()   # the wake word stops a ring (no snooze: "再睡 10 分钟" is said next)
         if self.preview:
@@ -511,6 +574,7 @@ class Client:
         if not await self.start_listening('realtime'):
             return
         self.heard = False
+        self.wake_fresh = True        # 这次唤醒后还一个字都没听到：超时就自我介绍（stop_uploading）
         self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
 
     async def start_listening(self, mode):
@@ -535,6 +599,7 @@ class Client:
         self.vad_tail_until = 0.0
         self.listen_since = time.monotonic()
         self.speech_start = self.speech_end = 0.0
+        self.hub_heard_speech = False
         self.awaiting_text = False
         self.hub_pending = False
         if self.aborted_at is not None:
@@ -553,9 +618,23 @@ class Client:
             await self.hub.send({'type': 'listen', 'state': 'stop'})
 
     async def stop_uploading(self, missed=False):
+        fresh, self.wake_fresh = getattr(self, 'wake_fresh', False), False
+        after_intro, self.after_intro = getattr(self, 'after_intro', False), False
+        # 唤醒后没说话：hub 的 VAD 一句都没断出来（家里有电视/走动声，本机音量门会误判成有人说话，
+        # 2026-11-16 实测第二次唤醒就因此没介绍）；hub 不发 VAD 事件时退回本机音量判断
+        if self.hub.features.get('vad_end'):
+            silent = not getattr(self, 'hub_heard_speech', False)
+        else:
+            silent = self.speech_end <= self.listen_since
+        if missed and after_intro and silent:
+            missed = False                               # 介绍完还是没人说：安静回待机，不报「没听清」
         self.uploading = False
         self.deadline = None
         self.vad_tail_until = 0.0
+        if missed and fresh and silent:
+            self.set_state('idle')
+            self.intro_task = asyncio.create_task(self._introduce())
+            return
         if missed:
             self.play('miss')
             self.events.publish('toast', {'kind': 'info', 'text': '没听清，可以再说一次「小麦小麦」'})
@@ -722,6 +801,7 @@ class Client:
             state = msg.get('state')
             if state == 'end':
                 self.hub_pending = True
+                self.hub_heard_speech = True   # 这次听的过程中 hub 断出过一句话（自我介绍据此判断「没说话」）
                 if self.uploading and not self.recognising:
                     self.recognising = self.vad_ended = True
                     # the hub's estimate of where the sentence ended: keep streaming a moment longer
