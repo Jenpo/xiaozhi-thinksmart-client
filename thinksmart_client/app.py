@@ -62,6 +62,8 @@ HALT_AFTER = 3           # seconds to read "正在关机 … 等 10 秒再拔" b
 UPDATE_BUSY = ('preparing', 'downloading', 'installing', 'testing', 'rolling_back')
 # installing for a page request, or finishing an interrupted one at boot (self-test, rollback)
 UPDATE_UNITS = ('thinksmart-update-run.service', 'thinksmart-update-boot.service')
+LONG_REPLY_TAP = 15       # seconds: a reply playing longer than this (a story) is still cut off by a mic tap
+QUESTION_EXTRA = 10       # seconds added to the follow-up window when the reply ends with a question
 MAX_LISTEN = 60          # seconds: one wake never keeps the mic open longer (a TV could otherwise)
 # seconds to keep uploading after the hub's VAD said the user stopped. Its "vad end" is an estimate:
 # cutting the stream the moment it arrives drops the last syllables (the ASR then gets "你几岁， 你几岁"
@@ -552,6 +554,13 @@ class Client:
         self.play('wake')
         self.events.publish('woke', {'source': source})
 
+    def _tap_interrupts(self):
+        """说话时点麦克风还是照旧打断的两种情况：本机在放歌（不然要等整张歌单放完），或者已经说了很久（讲故事）。"""
+        hm = getattr(self, 'hub_music', None)
+        if hm and hm.get('state') == 'start' and hm.get('out') != 'soundbar':
+            return True
+        return self.state == 'speaking' and self.reply_samples / OUT_RATE > LONG_REPLY_TAP
+
     def in_turn(self):
         """The hub is recognising, thinking or speaking: the wake word interrupts it."""
         return (self.state in ('thinking', 'speaking') or self.vad_ended) and self.hub.connected
@@ -567,6 +576,13 @@ class Client:
         if self.mic_off_toast():
             return
         if self.in_turn():
+            if source == 'button' and not self._tap_interrupts():
+                # 孩子以为要先按麦克风才能回答，一按就把小麦问到一半的话掐掉（2026-11-16 20:26:40「你是想说……还是……」
+                # 播了 2.2 s 被按断；20:26:28「给我」刚识别完就被按掉）。说话时点麦克风改成「说完马上听」，要打断用「打断」键
+                self.listen_after_reply = True
+                log.info('mic tapped during a reply (%s): listen right after it instead of cutting it off', self.state)
+                self.events.publish('toast', {'kind': 'info', 'text': '等我说完这句，马上听你说；要打断点「打断」'})
+                return
             await self.abort('wake_word_detected')
         if not chimed:
             self.chime(source)
@@ -887,6 +903,7 @@ class Client:
                     log.warning('the turn ended without a reply')
                     self.events.publish('toast', {'kind': 'error', 'text': '网络还没连上，稍后再试' if not has_default_route()
                                                   else '没收到回答，可能是网络或模型服务连不上，稍后再试'})
+                self.last_reply = (self.bot_msg or {}).get('text') or ''
                 self.bot_msg = self.question = None
                 self.hold_open = False
                 if self.listen_after_reply:
@@ -1031,7 +1048,13 @@ class Client:
             self.set_state('thinking')
             return
         self.heard = True
-        self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
+        wait = self.cfg['follow_up_seconds']
+        if (getattr(self, 'last_reply', '') or '').rstrip()[-1:] in ('?', '？'):
+            # 小麦问了问题（「你想做哪一个？」）：多等一会儿，孩子要想（20:26:50 问完 15 s 关麦，2 s 后又喊唤醒词）
+            wait += QUESTION_EXTRA
+        # 开麦最多等 3 s，长回答还有十几秒没播完（实测 reply stop 时 14.9 s 在缓冲里）：窗口从真正说完算起，
+        # 不然孩子能回答的时间被还在播的部分吃掉
+        self.deadline = time.monotonic() + self.audio.player.buffered() + wait
 
     def _on_audio(self, packet):
         if self.mute_audio:

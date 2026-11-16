@@ -45,7 +45,7 @@ DEFAULTS = {
     # (music, TV, HA) take 6-12 s; plain answers usually start in 2-3.5 s. 0: off
     'think_cue_seconds': 2.5,
     'port': 8090,
-    'sleep': {'enabled': False, 'start': '22:00', 'end': '07:00'},   # sleep.py
+    'sleep': {'enabled': True, 'start': '22:30', 'end': '09:00'},   # sleep.py（2026-11-16 owner：22:30-09:00 静音）
     'brightness': 100,    # the screen's 0-100, set on the page or by voice (no automatic brightness: the user asked)
     # blank this long after the last touch or conversation (device.SCREEN_OFF_MINUTES); off: never
     'screen_off': {'enabled': True, 'minutes': 5},
