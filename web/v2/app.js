@@ -106,7 +106,9 @@ function renderChips() {
       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></i>${esc(q)}`;
     b.addEventListener('click', async () => {
       if (open) { stOpen(open); return; }   // 学习/家庭：直接开面板，不走语音
-      if (SCENES[i][0] === '看作业') { hwSetLang(q === 'Check my homework' ? 'en' : q === '睇下我嘅作业' ? 'yue' : 'zh'); hwOpen(true); return; }
+      // 只开面板 + 实时画面，等摆好作业再点「拍作业」：以前一点就倒数 3 秒自拍，拍到的是人不是作业，
+      // 接着转圈 20 多秒、按钮被遮罩挡住，owner「点拍摄没有反应」（2026-11-16 16:01 实拍判「无法判断」）
+      if (SCENES[i][0] === '看作业') { hwSetLang(q === 'Check my homework' ? 'en' : q === '睇下我嘅作业' ? 'yue' : 'zh'); hwOpen(true, false); return; }
       // 触屏偶尔一次点按报 6-15 次 click（11-14 日志），还会连带点到相邻卡片：
       // 一张卡在发送/冷却期间，所有卡片都不再响应
       if (chipLock) return;
@@ -395,7 +397,13 @@ function hwEvent(e) {
   switch (e.phase) {
     case 'countdown': hwLiveOn(); hwCountdown(e.seconds || HW_COUNTDOWN); break;
     case 'shooting': hwLiveOff(); hwSetBusy(true, '在拍照…'); break;
-    case 'analyzing': hwSetBusy(true, '在看作业…'); break;
+    case 'analyzing': {
+      // 模型平时 3-7 s，慢时 20 多秒：只转圈像卡死了，显示等了几秒
+      hwSetBusy(true, '在看作业…');
+      const t0 = Date.now(), el = hwEl('hwBusyText');
+      HW.tick = setInterval(() => { if (el) el.textContent = `在看作业… ${Math.round((Date.now() - t0) / 1000)} 秒`; }, 1000);
+      break;
+    }
     case 'done': if (voice) { hwSetBusy(false); hwRender(e.data, true); } break;   // 语音那条由网关念，这里不再朗读
     // 出错一律停转圈（点按那条 hwCapture 也会再收一次尾，重复无害）；提示只在语音那条弹，点按的由 hwCapture 弹
     case 'error': hwSetBusy(false); if (voice) toast(e.error || '没拍成', 'error'); break;
@@ -2197,7 +2205,7 @@ for (const [name] of SCENES) {
     ui.scenePicked = Date.now();
     renderChips();
     // 「看作业」这一栏不是话术：点标签就把面板打开并拍一张（摄像头是设备内置的，不用手机扫码）
-    if (name === '看作业') hwOpen(true);
+    if (name === '看作业') hwOpen(true, false);   // 同上：先看实时画面，摆好再点「拍作业」
   });
   $('sceneTabs').appendChild(t);
 }
