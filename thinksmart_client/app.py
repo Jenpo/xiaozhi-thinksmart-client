@@ -704,6 +704,9 @@ class Client:
         if not self.hub.connected:
             return   # ended (or dropped) while we waited: nothing will answer, stay idle
         await self.hub.send({'type': 'listen', 'state': 'detect', 'text': text})
+        # 点卡片/打字问的也和语音一样：答完开跟进窗口，接着说就行，不用再喊唤醒词
+        # （2026-11-16 实测：点「讲个冷笑话」答完直接回待机，owner「讲一二句就断掉」）
+        self.listen_after_reply = bool(self.keys.mic_on)
         self.set_state('thinking')
 
     async def ptt_start(self):

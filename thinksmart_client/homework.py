@@ -312,7 +312,12 @@ def install(client):
             # 语音和点按同时来：两次拍照会互删 hw-current 里的帧、抢 /dev/media0
             return web.json_response({'ok': False, 'code': 'busy', 'error': '正在拍，等一下'}, status=409)
         async with lock:
+            started = time.monotonic()
+
             def fail(code, msg, status):
+                # 以前只推给页面不进日志，owner 报「拍照看图有问题」时查不到失败在哪一步（2026-11-16）
+                log.warning('看图失败 mode=%s source=%s code=%s %.1fs: %s', mode, source, code,
+                            time.monotonic() - started, msg)
                 push('error', error=msg, code=code, source=source, mode=mode)
                 return web.json_response({'ok': False, 'code': code, 'error': msg}, status=status)
 
@@ -350,6 +355,7 @@ def install(client):
                 return fail('hub', '网关没答: %s' % e, 502)
             if not data.get('ok'):
                 return fail('analyze', data.get('error') or '没看成', 502)
+            log.info('看图完成 mode=%s source=%s %.1fs', mode, source, time.monotonic() - started)
             push('done', data=data, source=source, mode=mode)
             return web.json_response(data)
 

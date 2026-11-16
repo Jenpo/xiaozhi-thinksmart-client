@@ -37,7 +37,9 @@ DEFAULTS = {
     # whether the wake word is really there, '' trusts the wake word model. Off for now: the hub
     # takes 2-2.5 s here, which delays the answer to "小麦小麦今天天气怎么样" said in one go by ~4 s
     'wake_verify': '',
-    'follow_up_seconds': 10,   # after a reply: keep listening this long for a follow-up
+    # after a reply: keep listening this long for a follow-up. 10 → 15 (2026-11-16): kids pause
+    # longer than that before answering, then had to say the wake word again (20:13:47 closed, woke 2 s later)
+    'follow_up_seconds': 15,
     # no reply audio this long after the question was recognised: say a short local "嗯，我看看"
     # (web/sounds/think-*.wav, the hub's Edge TTS voice) so the wait isn't silent. Tool turns
     # (music, TV, HA) take 6-12 s; plain answers usually start in 2-3.5 s. 0: off
