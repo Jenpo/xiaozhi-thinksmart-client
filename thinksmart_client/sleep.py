@@ -11,7 +11,7 @@ TIME = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
 def normalize(setting, changes=None):
     """A complete, valid setting: {'enabled': bool, 'start': 'HH:MM', 'end': 'HH:MM'}.
     Raises ValueError for a time that isn't HH:MM."""
-    s = {'enabled': True, 'start': '22:30', 'end': '09:00'}
+    s = {'enabled': True, 'start': '22:00', 'end': '09:00'}
     s.update({k: v for k, v in (setting or {}).items() if k in s})
     s.update({k: v for k, v in (changes or {}).items() if k in s and v is not None})
     s['enabled'] = bool(s['enabled'])
@@ -26,7 +26,7 @@ def normalize(setting, changes=None):
 
 
 def active(setting, now=None):
-    """Whether now falls in the sleep hours; the range may cross midnight (22:00-07:00)."""
+    """Whether now falls in the sleep hours; the range may cross midnight (22:00-09:00)."""
     if not setting['enabled'] or setting['start'] == setting['end']:
         return False
     t = (now or datetime.datetime.now()).strftime('%H:%M')

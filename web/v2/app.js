@@ -713,10 +713,10 @@ function renderBanner(connected, sleeping, micOff) {
   const el = $('statusBanner');
   if (!el) return;
   // 夜间静音不能只靠服务端的 sleep.active：字段缺失或还没收到快照时，
-  // 前端用 22:00-07:00 的本地时钟兜底，保证夜里总能提示到
+  // 前端用 22:00-09:00 的本地时钟兜底，保证夜里总能提示到
   const now = new Date();
   const hour = now.getHours();
-  const quiet = hour >= 22 || hour < 7;
+  const quiet = hour >= 22 || hour < 9;
   const s = ui.status.sleep || {};
   let serverQuiet = !!sleeping;
   if (!('active' in (ui.status.sleep || {})) && s.start && s.end) {
