@@ -8,7 +8,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from . import __version__, music_api, update, weather
+from . import __version__, device, music_api, update, weather
 from .app import ROOT, Client, local_ip
 
 log = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ def make_app(client: Client):
         client.events.queues.add(q)
         try:
             q.put_nowait(('snapshot', {**client.snapshot(), 'build': BUILD, 'version': __version__,
-                                       'update': update.read()}))
+                                       'update': update.read(), 'screen': {'on': device.screen_lit()}}))
             while True:
                 try:
                     event, data = await asyncio.wait_for(q.get(), timeout=15)
@@ -557,7 +557,11 @@ def make_app(client: Client):
                     pass
         watchers.append(asyncio.create_task(loop()))
 
+    async def watch_screen(_app):
+        watchers.append(asyncio.create_task(device.watch_screen(client.events.publish)))
+
     app.on_startup.append(watch_updates)
+    app.on_startup.append(watch_screen)
     app.on_startup.append(watch_local_music)
     app.router.add_get('/', index)
     app.router.add_get('/v2', index)
@@ -609,6 +613,10 @@ def make_app(client: Client):
     # [2026-11-15] 家庭与学习：看电视限时、留言、作息清单、睡前、朗读录音、hub 推屏幕
     from . import family
     for path, handler in family.install(client):
+        app.router.add_route('*', path, handler)
+    # [2026-11-17] 题库：应用题/奥数题，可增量更新（qbank.py，tools/qbank_update.py）
+    from . import qbank
+    for path, handler in qbank.install(client):
         app.router.add_route('*', path, handler)
     app.router.add_static('/static/', WEB)
 

@@ -1,0 +1,8 @@
+[Unit]
+Description=ThinkSmart question bank update (LLM writes new problems, double-checked, imported into the client)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/thinksmart/client/current/tools/qbank_update.py --count 20
+TimeoutStartSec=600
