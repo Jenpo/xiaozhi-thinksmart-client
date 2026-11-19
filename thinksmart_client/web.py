@@ -11,6 +11,8 @@ from aiohttp import web
 from . import __version__, device, music_api, update, weather
 from .app import ROOT, Client, local_ip
 
+FAMILY_BUILD = True   # 见 update_install：设置页不装官方 Release
+
 log = logging.getLogger(__name__)
 WEB = ROOT / 'web'
 # changes on every restart (every deploy restarts the client): the page reloads itself when it
@@ -532,6 +534,11 @@ def make_app(client: Client):
         return web.json_response({'ok': update.request('check')})
 
     async def update_install(request):
+        # 家庭定制版（2026-11-19）：设备上的 0.1.3 是 S 盘源（学习面板、TIMO、小星星、看作业、音乐…）部署的，
+        # 官方 Release（0.1.6 起）不含这些，装了会整套覆盖掉，hub 的 studyFastPath 也会 404。
+        # 官方的改动由维护者在源库里合并（6f88009 已合并），不从设置页装。
+        if FAMILY_BUILD:
+            return web.json_response({'ok': False, 'error': '家庭定制版：官方更新会覆盖学习面板，已由维护者合并需要的修复'}, status=409)
         if client.state != 'idle':
             return web.json_response({'ok': False, 'error': '对话结束后再更新'}, status=409)
         body = await request.json()

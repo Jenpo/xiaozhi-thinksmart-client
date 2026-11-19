@@ -1873,6 +1873,7 @@ function ago(t) {
   const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60));
   return m < 2 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;
 }
+const UPD_FAMILY = DEMO === null;   // 家庭定制版（2026-11-19）：设置页不提示/不安装官方 Release；演示页照旧
 function renderUpdate() {
   const u = ui.update || {}, job = u.job || {}, avail = u.available;
   const busy = job.state in UPD_STAGE;
@@ -1885,6 +1886,11 @@ function renderUpdate() {
     title = `正在更新到 ${job.version}`;
     const pct = job.state === 'downloading' && job.progress != null ? ` ${Math.round(job.progress * 100)}%` : '';
     text = `${UPD_STAGE[job.state]}${pct}。语音助手会暂停一会儿，请不要断电`;
+  } else if (avail && UPD_FAMILY) {
+    // 家庭定制版：官方包会覆盖学习面板/TIMO/小星星，不在这里装（web.py update_install 同样拒绝）
+    title = '软件更新';
+    text = `${cur}（家庭定制版）。官方 ${avail.version} 的修复已由维护者合并，不需要在这里更新`;
+    label = '';
   } else if (avail) {
     title = `有新版本 ${avail.version}`;
     text = failed ? job.message + '。可以再试一次' : `${cur}，下载约 ${mb(avail.size)}`;
@@ -1898,8 +1904,9 @@ function renderUpdate() {
     bad = failed || (!!u.check_error && !(recent && job.state === 'done'));
     label = '检查更新';
   }
-  $('upd').classList.toggle('new', !!avail && !busy);
-  $('gearDot').classList.toggle('on', !!avail && !busy);
+  const nag = !!avail && !busy && !UPD_FAMILY;
+  $('upd').classList.toggle('new', nag);
+  $('gearDot').classList.toggle('on', nag);
   $('updTitle').textContent = title;
   $('updSub').textContent = text;
   $('updSub').classList.toggle('bad', !!bad);   // toggle(x, undefined) would flip it
