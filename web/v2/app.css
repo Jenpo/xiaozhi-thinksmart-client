@@ -722,7 +722,7 @@ body[data-state="listening"] .hint::after {
 }
 body.ptt-off .hint::after { content: none; }
 
-/* ---- 首页天气（今天 / 明天） ---- */
+/* ---- 首页天气（今天 / 明天，点「7 天预报」展开整周） ---- */
 .home-weather { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; margin-top: 14px;
   color: var(--ink2); font-size: 16px; }
 .home-weather[hidden] { display: none; }
@@ -734,6 +734,11 @@ body.ptt-off .hint::after { content: none; }
 .wx-label { opacity: .75; }
 .wx-t { font-variant-numeric: tabular-nums; }
 .wx-rain { font-size: 13px; color: #8ff0ff; }
+.wx-more { flex: none; margin-left: auto; padding: 4px 12px; font: inherit; font-size: 13px;
+  color: var(--ink2); background: transparent; border: 1px solid rgba(255,255,255,.18);
+  border-radius: 999px; cursor: pointer; }
+.wx-more:active { background: rgba(255,255,255,.08); }
+@media (max-width: 720px) { .wx-more { margin-left: 0; } }
 
 /* ---- 回答还在说：句子之间有停顿时，最后一个气泡末尾显示跳动的点，避免以为只说了一半 ---- */
 .msg.bot.live .body .ts { display: none; }

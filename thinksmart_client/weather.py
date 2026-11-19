@@ -1,11 +1,15 @@
-"""Today's and tomorrow's weather for the home screen (Open-Meteo: no key, same source as the hub's
+"""The next 7 days of weather for the home screen (Open-Meteo: no key, same source as the hub's
 get_weather since 2026-11-11).
 
 The city is config 'weather_city' (the hub's get_weather default is 广州 too). Coordinates are looked up
 once; the forecast is cached for 30 minutes and a failure keeps the last good one, so the page never
 waits on the network and an outage only leaves the line blank.
+
+The page shows today and tomorrow by default; tapping the line expands the whole 7 days (the hub's
+prompt carries the same 7-day forecast, so asking "第3天" / "周几" out loud agrees with the screen).
 """
 import asyncio
+import datetime
 import logging
 import time
 
@@ -43,24 +47,43 @@ def describe(code):
         return ('', 'cloud')
 
 
+FORECAST_DAYS = 7          # the hub's prompt has the same 7 days; keep the two in step
+WEEKDAYS = ('一', '二', '三', '四', '五', '六', '日')
+
+
+def day_label(date):
+    """'2026-11-20' -> '11月20日 周五' (empty when the date is missing/garbled)."""
+    try:
+        y, m, d = (int(x) for x in str(date).split('-')[:3])
+        return '%d月%d日 周%s' % (m, d, WEEKDAYS[datetime.date(y, m, d).weekday()])
+    except (ValueError, TypeError):
+        return ''
+
+
 def summarize(city, data):
-    """Open-Meteo forecast JSON -> what the page shows (pure, tested)."""
+    """Open-Meteo forecast JSON -> what the page shows (pure, tested).
+
+    'days' is every day the forecast returned (today first, at most FORECAST_DAYS); the page shows the
+    first two until the line is tapped. Each day carries a real label (date + weekday) so "第几天"
+    and "周几" asked out loud line up with what is on the screen."""
     cur = data.get('current') or {}
     daily = data.get('daily') or {}
+    dates = daily.get('time') or []
     days = []
-    for i, label in enumerate(('今天', '明天')):
+    for i in range(min(len(dates), FORECAST_DAYS)):
         try:
             code = daily['weather_code'][i]
             lo, hi = daily['temperature_2m_min'][i], daily['temperature_2m_max'][i]
         except (KeyError, IndexError, TypeError):
-            break
+            continue
         text, icon = describe(code)
         rain = None
         try:
             rain = daily['precipitation_probability_max'][i]
         except (KeyError, IndexError, TypeError):
             pass
-        days.append({'label': label, 'text': text, 'icon': icon,
+        days.append({'label': '今天' if i == 0 else ('明天' if i == 1 else day_label(dates[i])),
+                     'date': str(dates[i]), 'text': text, 'icon': icon,
                      'lo': None if lo is None else round(lo), 'hi': None if hi is None else round(hi),
                      'rain': rain})
     now_text, now_icon = describe(cur.get('weather_code'))
@@ -106,7 +129,8 @@ class Weather:
                     if not self.coords:
                         self.coords = await self._geocode(s)
                     lat, lon = self.coords
-                    params = {'latitude': lat, 'longitude': lon, 'timezone': 'Asia/Shanghai', 'forecast_days': 2,
+                    params = {'latitude': lat, 'longitude': lon, 'timezone': 'Asia/Shanghai',
+                              'forecast_days': FORECAST_DAYS,
                               'current': 'temperature_2m,weather_code',
                               'daily': 'weather_code,temperature_2m_max,temperature_2m_min,'
                                        'precipitation_probability_max'}

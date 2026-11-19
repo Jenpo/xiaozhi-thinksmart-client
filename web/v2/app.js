@@ -640,14 +640,24 @@ function renderWeather(w) {
     `<b>${esc(d.text)}</b><span class="wx-t">${d.lo ?? '–'}–${d.hi ?? '–'}°</span>` +
     (d.rain != null && d.rain >= 30 ? `<span class="wx-rain">降水 ${d.rain}%</span>` : '') + '</div>';
   const now = w.now && w.now.temp != null ? `<div class="wx-now">${esc(w.city || '')} <b>${w.now.temp}°</b></div>` : '';
-  box.innerHTML = now + w.days.map(day).join('');
+  // 默认只显示今天/明天（首页不挤），点一下展开整周：hub 提示词里也是 7 天，问「第3天/周几」屏幕和回答能对上
+  box.innerHTML = now + w.days.slice(0, WX_OPEN ? w.days.length : 2).map(day).join('') +
+    (w.days.length > 2 ? `<button class="wx-more" id="wxMore">${WX_OPEN ? '收起' : '7 天预报'}</button>` : '');
+  const more = $('wxMore');
+  if (more) more.onclick = (e) => { e.stopPropagation(); WX_OPEN = !WX_OPEN; renderWeather(w); };
   box.hidden = false;
 }
+let WX_OPEN = false;   // 展开整周只在本次会话里记住；页面重载后回到两行
 async function loadWeather() {
   if (DEMO !== null) {
     return renderWeather({ city: '广州', now: { temp: 21, icon: 'cloud' }, days: [
       { label: '今天', text: '阴', icon: 'cloud', lo: 18, hi: 27, rain: 10 },
-      { label: '明天', text: '小雨', icon: 'rain', lo: 17, hi: 24, rain: 60 }] });
+      { label: '明天', text: '小雨', icon: 'rain', lo: 17, hi: 24, rain: 60 },
+      { label: '11月22日 周日', text: '晴', icon: 'sun', lo: 18, hi: 26, rain: 0 },
+      { label: '11月23日 周一', text: '多云', icon: 'cloud-sun', lo: 17, hi: 25, rain: 10 },
+      { label: '11月24日 周二', text: '阵雨', icon: 'rain', lo: 16, hi: 23, rain: 55 },
+      { label: '11月25日 周三', text: '阴', icon: 'cloud', lo: 15, hi: 22, rain: 20 },
+      { label: '11月26日 周四', text: '晴', icon: 'sun', lo: 15, hi: 24, rain: 0 }] });
   }
   try { renderWeather(await (await fetch('/api/weather')).json()); } catch (e) { /* 没网就不显示 */ }
 }
