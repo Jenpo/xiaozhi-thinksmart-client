@@ -72,6 +72,7 @@ const SCENES = [
     ['听写', '#ffb54729', '#ffcf7a', '<path d="M4 20l4-1 10-10-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/>', 'dictation'],
     ['这是什么', '#9b7bff2b', '#c8b4ff', '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M9.5 9a1.8 1.8 0 1 1 2.3 1.8c-.5.2-.8.6-.8 1.1M11 14h.01"/>', 'identify'],
     ['朗读检查', '#ff7ac824', '#ff9bd6', '<path d="M4 5h6a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H4zM20 5h-6a3 3 0 0 0-3 3"/>', 'read'],
+    ['Maths olympiad', '#5ee0ff24', '#8ff0ff', '<path d="M5 4h11l3 3v13H5z"/><path d="M9 9h5M9 13h5M9 17h3"/><circle cx="17.5" cy="17.5" r="3"/>', 'timo'],
     ['错题本', '#5ee0ff24', '#8ff0ff', '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8l6 6M15 8l-6 6"/>', 'book'],
   ]],
   ['家庭', [
@@ -2408,7 +2409,7 @@ function speakText(text, lang) {
 }
 const isLatin = s => /^[\x00-\x7f\s]+$/.test(String(s || ''));
 const stEl = id => document.getElementById(id);
-const ST = { mode: 'flash', lang: 'yue', flash: null, dict: null, read: null, ident: null, live: false };
+const ST = { mode: 'flash', lang: 'en', flash: null, dict: null, read: null, ident: null, live: false };
 
 function stOpen(mode, opts) {
   opts = opts || {};
@@ -2416,6 +2417,8 @@ function stOpen(mode, opts) {
   if (!sheet) return;
   if (mode === 'book') { hwOpen(true, false); hwShowBook(); return; }
   if (opts.language) ST.lang = opts.language;
+  if (mode === 'timo') ST.lang = 'en';   // owner 2026-11-19：奥数练习用英文交互
+  stLangPills();
   sheet.classList.add('on');
   stTab(mode || ST.mode, opts);
 }
@@ -2426,13 +2429,19 @@ function stClose() {
   if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
   if (ST.read && ST.read.recording) fetch('/api/rec/stop', { method: 'POST' }).catch(() => {});
 }
+/* 语言按钮跟着 ST.lang 走：以前只有点击时才高亮，切到奥数自动改英文时按钮还停在粤语 */
+function stLangPills() {
+  document.querySelectorAll('.st-lang').forEach(x => x.classList.toggle('on', x.dataset.lang === ST.lang));
+}
 function stTab(mode, opts) {
   ST.mode = mode;
+  if (mode === 'timo') ST.lang = 'en';   // owner 2026-11-19：奥数练习用英文交互
+  stLangPills();
   document.querySelectorAll('.st-tab').forEach(t => t.classList.toggle('on', t.dataset.mode === mode));
   stLive(false);
   const body = stEl('stBody');
   body.innerHTML = '';
-  ({ flash: flashView, dictation: dictView, identify: identView, read: readView, routine: routineView }[mode] || flashView)(body, opts || {});
+  ({ flash: flashView, dictation: dictView, identify: identView, read: readView, routine: routineView, timo: timoView }[mode] || flashView)(body, opts || {});
 }
 
 /* -- 摄像头小窗（这是什么 / 拍课文） -- */
@@ -2677,6 +2686,139 @@ function readCompare(ref, heard) {
   stEl('rdScore').textContent = heard ? `读对 ${pct}%，红色是读漏或读错的` : '没听到声音，靠近一点再读';
   if (heard) speakText({ yue: pct >= 90 ? '读得好好！' : '红色嗰啲再读多次', en: pct >= 90 ? 'Great reading!' : 'Try the red words again',
                          zh: pct >= 90 ? '读得很好！' : '红色的再读一遍' }[ST.lang], ST.lang);
+}
+
+/* -- TIMO 奥数练习（2026-11-19）--
+ * 题库在 timo_bank.js（S 盘 timo-papers 的 K2/幼稚园组与小一 P1 卷改写）。
+ * 默认英文交互（owner 2026-11-19）：题面、提示、讲解、对错反馈都用英文走 /api/hw/tts（en 声音）；
+ * 答题用数字键盘或选项。错题照旧进错题本（/api/hw/record），和口算闪卡同一条路。
+ */
+const TIMO = { level: 'k2', n: 0, total: 8, right: 0, wrong: [], input: '', q: null, list: null, started: 0, hintUsed: 0 };
+/* 奥数面板固定英文：页面文案也走英文，切粤语/普通话按钮时同样生效 */
+function timoUI() { return ST.lang === 'en'; }
+const T_UI = {
+  en: { start: 'Start', again: 'Repeat the question', hint: 'Hint', ready: 'Tap Start and I will read the question',
+        meta: '8 questions. Listen first, then answer', done: 'Done', right: 'correct', used: 'seconds', allRight: 'All correct, well done!',
+        inBook: 'The ones you missed went into your mistake book', retry: 'Try another round', loading: 'Question bank not loaded (timo_bank.js)',
+        sec: 'topic' },
+  yue: { start: '开始', again: '再听一次', hint: '提示', ready: '按「开始」听我读题',
+         meta: '一次 8 题，先听题再答', done: '做完啦', right: '答对', used: '秒', allRight: '全对，好叻！',
+         inBook: '错的题已经放进错题本', retry: '再来一轮', loading: '题库没载入（timo_bank.js）', sec: '题型' },
+  zh: { start: '开始', again: '再听一次', hint: '提示', ready: '按「开始」听我读题',
+        meta: '一次 8 题，先听题再答', done: '做完啦', right: '答对', used: '秒', allRight: '全对，真棒！',
+        inBook: '错的题已经放进错题本', retry: '再来一轮', loading: '题库没载入（timo_bank.js）', sec: '题型' },
+};
+function timoT() { return T_UI[ST.lang] || T_UI.en; }
+function timoBank() { return window.TIMO || null; }
+function timoView(body, opts) {
+  const B = timoBank(), t = timoT();
+  if (!B) { body.innerHTML = `<div class="st-note">${t.loading}</div>`; return; }
+  const level = opts.level && B.LEVELS.some(l => l.id === opts.level) ? opts.level : (TIMO.level || 'k2');  TIMO.level = level;
+  const note = (B.LEVELS.find(l => l.id === level) || {}).note || '';
+  body.innerHTML = `<div class="st-row">${B.LEVELS.map(l =>
+      `<button class="st-pill${l.id === level ? ' on' : ''}" data-lv="${l.id}">${esc(l.name)}</button>`).join('')}
+      <span class="st-note">${esc(note)}</span></div>
+    <div class="timo"><div class="timo-q" id="tqQ">${esc(t.ready)}</div>
+      <div class="timo-a" id="tqA"></div>
+      <div class="timo-meta" id="tqMeta">${esc(t.meta)}</div>
+      <div id="tqPad"></div>
+      <div class="st-row"><button class="pri st-go" id="tqGo">${esc(t.start)}</button>
+        <button id="tqSay" hidden>${esc(t.again)}</button><button id="tqHint" hidden>${esc(t.hint)}</button></div></div>`;
+  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => timoView(body, { level: b.dataset.lv })));
+  stEl('tqGo').addEventListener('click', () => timoStart(level, opts));
+  stEl('tqSay').addEventListener('click', timoSay);
+  stEl('tqHint').addEventListener('click', timoHint);
+}
+function timoStart(level, opts) {
+  const B = timoBank();
+  const n = Number(opts && opts.count) || 8;
+  TIMO.list = B.pick(level, n);
+  TIMO.n = 0; TIMO.right = 0; TIMO.wrong = []; TIMO.input = ''; TIMO.hintUsed = 0;
+  TIMO.total = TIMO.list.length; TIMO.started = Date.now();
+  stEl('tqGo').hidden = true;
+  stEl('tqSay').hidden = false; stEl('tqHint').hidden = false;
+  timoNext();
+}
+function timoText(q) {
+  return ST.lang === 'en' ? q.qe : ST.lang === 'yue' ? q.qy : q.q;
+}
+function timoSay() {
+  const q = TIMO.q; if (!q) return;
+  speakText(timoText(q), ST.lang);
+}
+function timoHint() {
+  const q = TIMO.q; if (!q) return;
+  TIMO.hintUsed += 1;
+  const t = ST.lang === 'en' ? q.hinte : ST.lang === 'yue' ? q.hinty : q.hint;
+  const note = stEl('tqA');
+  if (note) note.textContent = '💡 ' + t;
+  speakText(t, ST.lang);
+}
+function timoNext() {
+  const q = TIMO.list[TIMO.n];
+  if (!q) return timoEnd();
+  TIMO.q = q; TIMO.input = ""; TIMO.locked = false; TIMO.hintUsed = 0;
+  const n = stEl('tqQ'), a = stEl('tqA'), pad = stEl('tqPad');
+  n.textContent = `第 ${TIMO.n + 1} / ${TIMO.total} 题（${q.sec}）`;
+  a.className = 'timo-a'; a.textContent = '';
+  stEl('tqMeta').textContent = timoUI() ? 'Listen → answer → I will tell you if it is right' : '听题 → 作答 → 我会告诉你对不对';
+  pad.innerHTML = q.ans === 'choice'
+    ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${esc(o)}</button>`).join('')}</div>`
+    : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`;
+  if (q.ans === 'choice') {
+    pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => timoAnswer(q.opts[Number(b.dataset.o)], b.textContent)));
+  } else {
+    pad.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => timoKey(b.dataset.k)));
+  }
+  setTimeout(timoSay, 250);
+}
+function timoKey(k) {
+  const q = TIMO.q; if (!q || TIMO.locked) return;
+  if (k === '⌫') TIMO.input = TIMO.input.slice(0, -1);
+  else if (k === '✓') { if (TIMO.input) timoAnswer(TIMO.input, TIMO.input); return; }
+  else if (TIMO.input.length < 6) TIMO.input += k;
+  stEl('tqA').textContent = TIMO.input;
+  stEl('tqA').className = 'timo-a';
+}
+function timoNorm(s) { return String(s == null ? "" : s).replace(/[\s,，、。.元蚊$]/g, "").toLowerCase(); }
+function timoAnswer(given, shown) {
+  const q = TIMO.q; if (!q || TIMO.locked) return;
+  TIMO.locked = true;
+  const ok = timoNorm(given) === timoNorm(q.a);
+  const a = stEl('tqA');
+  const right = { yue: '啱晒！', en: 'That\'s right!', zh: '答对了！' }[ST.lang];
+  const wrong = { yue: '唔系喎，再谂下。正确答案系', en: 'Not quite. The answer is', zh: '不对哦，正确答案是' }[ST.lang];
+  if (ok) {
+    TIMO.right += 1;
+    a.className = 'timo-a good';
+    a.textContent = `${shown} ✓  ${q.expe}`;
+    speakText(right + ' ' + q.expe, ST.lang);
+  } else {
+    TIMO.wrong.push({ question: timoText(q), child_answer: String(given), correct: String(q.a), ok: false });
+    a.className = 'timo-a bad';
+    a.textContent = `${shown} ✗  ${wrong} ${q.a}. ${q.expe}`;
+    speakText(wrong + ' ' + q.a + '. ' + q.expe, ST.lang);
+  }
+  TIMO.n += 1;
+  const wait = ok ? 2200 : 5200;   // 讲解长一点，等一下再进下一题
+  setTimeout(timoNext, wait);
+}
+function timoEnd() {
+  const sec = Math.round((Date.now() - TIMO.started) / 1000), t = timoT();
+  TIMO.q = null;
+  stEl('tqQ').textContent = timoUI()
+    ? `${t.done}: ${TIMO.right} / ${TIMO.total} ${t.right}, ${sec} ${t.used}`
+    : `${t.done}：${t.right} ${TIMO.right} / ${TIMO.total}，用了 ${sec} ${t.used}`;
+  stEl('tqA').className = 'timo-a';
+  stEl('tqA').textContent = TIMO.right === TIMO.total ? t.allRight : t.inBook;
+  stEl('tqPad').innerHTML = '';
+  stEl('tqSay').hidden = true; stEl('tqHint').hidden = true;
+  const go = stEl('tqGo'); go.hidden = false; go.textContent = t.retry;
+  speakText({ yue: TIMO.right === TIMO.total ? '全部啱晒，好叻！' : `啱咗${TIMO.right}题，错咗嘅入咗错题本`,
+              en: TIMO.right === TIMO.total ? 'All correct, well done!' : `${TIMO.right} right. The rest went into your mistake book`,
+              zh: TIMO.right === TIMO.total ? '全对了，真棒！' : `对了${TIMO.right}题，错的放进错题本了` }[ST.lang], ST.lang);
+  if (TIMO.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subject: '奥数', source: 'timo', items: TIMO.wrong.map((w, i) => ({ no: i + 1, ...w })) }) }).catch(() => {});
 }
 
 /* -- 作息清单 -- */

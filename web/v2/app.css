@@ -828,6 +828,18 @@ body.ptt-off .hint::after { content: none; }
 .flash .pad { grid-column: 2; grid-row: 1 / span 4; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .flash .pad button { height: 82px; font-size: 32px; font-weight: 600; }
 .flash .st-go { grid-column: 1; justify-self: start; }
+/* 奥数练习（TIMO K2/P1，2026-11-19） */
+.timo { flex: 1; display: grid; grid-template-columns: 1fr 360px; grid-template-rows: auto auto auto 1fr; column-gap: 30px; align-items: center; }
+.timo-q { grid-column: 1; font-size: 40px; font-weight: 700; line-height: 1.35; }
+.timo-a { grid-column: 1; min-height: 90px; font-size: 32px; line-height: 1.5; color: var(--accent); }
+.timo-a.good { color: #48d18a; } .timo-a.bad { color: #ff8b8b; font-size: 26px; }
+.timo-meta { grid-column: 1; font-size: 18px; color: var(--ink3); }
+.timo #tqPad { grid-column: 2; grid-row: 1 / span 4; }
+.timo .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.timo .pad button { height: 82px; font-size: 32px; font-weight: 600; }
+.timo .timo-opts { display: grid; gap: 12px; }
+.timo .timo-opts button { height: 88px; font-size: 28px; font-weight: 600; }
+.timo .st-go { grid-column: 1; justify-self: start; }
 /* 听写 */
 .dict { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
 .dict-n { font-size: 20px; color: var(--ink3); }
