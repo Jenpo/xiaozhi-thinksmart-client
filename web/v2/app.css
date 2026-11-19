@@ -956,3 +956,8 @@ body.ptt-off .hint::after { content: none; }
 .hw-item .reveal { height: 52px; font-size: 20px; }
 .fam-chip { font-size: 22px; } .fam-chip button { height: 46px; font-size: 19px; } .fam-chip span { font-size: 17px; }
 .star-fly { font-size: 80px; } .star-fly em { font-size: 34px; }
+/* 档位一行横滑（2026-11-19）：8 个档位 + 语音开关原来折成两行，占掉题目和键盘约 60 px；语音开关钉在右边 */
+.st-body > .st-row:first-child { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.st-body > .st-row:first-child::-webkit-scrollbar { display: none; }
+.st-body > .st-row:first-child > * { flex: none; }
+.st-pill.voice-pill { position: sticky; right: 0; background: #141a33 !important; box-shadow: -14px 0 14px #0b1027; }

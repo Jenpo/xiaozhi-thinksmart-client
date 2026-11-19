@@ -439,7 +439,9 @@ function hwStars(d) {
   if (!n) return;
   HW_STARRED.add(d.id);
   STARS.today += n; STARS.total += n; starRender();
-  toast(`⭐ +${n} ${items.every(i => i.ok !== false) ? '全对，好叻！' : '改对咗，好叻！'}`);
+  const allOk = items.every(i => i.ok !== false);
+  toast(`⭐ +${n} ` + ({ en: allOk ? 'All correct, well done!' : 'You fixed it, great job!', yue: allOk ? '全对，好叻！' : '改对咗，好叻！',
+                         zh: allOk ? '全对，真棒！' : '改对了，真棒！' }[HW.lang] || 'Well done!'));
   fetch('/api/stars/add', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ stars: n, why: 'homework' }) }).catch(() => {});
 }
