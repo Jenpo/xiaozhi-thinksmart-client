@@ -63,6 +63,7 @@ UPDATE_BUSY = ('preparing', 'downloading', 'installing', 'testing', 'rolling_bac
 # installing for a page request, or finishing an interrupted one at boot (self-test, rollback)
 UPDATE_UNITS = ('thinksmart-update-run.service', 'thinksmart-update-boot.service')
 LONG_REPLY_TAP = 15       # seconds: a reply playing longer than this (a story) is still cut off by a mic tap
+TOUCH_QUIET = 20          # 屏幕刚被点过这么多秒内：没说话也不提醒（不自我介绍、不报没听清）
 QUESTION_EXTRA = 10       # seconds added to the follow-up window when the reply ends with a question
 MAX_LISTEN = 60          # seconds: one wake never keeps the mic open longer (a TV could otherwise)
 # seconds to keep uploading after the hub's VAD said the user stopped. Its "vad end" is an estimate:
@@ -683,6 +684,10 @@ class Client:
         if getattr(self, 'quiet_miss', False):
             self.quiet_miss = False
             missed = False                               # 学习面板等答案：没说也不报「没听清」
+            fresh = False
+        if time.time() - getattr(self, 'touch_at', 0) < TOUCH_QUIET:
+            # owner 2026-11-19「小朋友在点，就不要后台小麦提醒没说话了」：刚点过屏幕，不自我介绍、不响「没听清」
+            missed = False
             fresh = False
         # 唤醒后没说话：hub 的 VAD 一句都没断出来（家里有电视/走动声，本机音量门会误判成有人说话，
         # 2026-11-16 实测第二次唤醒就因此没介绍）；hub 不发 VAD 事件时退回本机音量判断

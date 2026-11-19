@@ -200,6 +200,61 @@ def _capture_sync(width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT, timeout=CAPTURE_TI
     log.info('拍照 %dx%d %dKB %.1fs', width, height, len(best) // 1024, time.monotonic() - started)
     return best
 
+
+WB_TRIGGER = 1.06          # 三通道均值最大/最小超过这个比例才校正
+WB_GAIN = (0.6, 1.8)
+WB_STRENGTH = 0.85
+
+
+def _white_balance(jpeg, width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT):
+    """软件 ISP 的灰世界 AWB 每次开摄像头都从头收敛，要 4-5 s（2026-11-19 实测 1280x960：G/((R+B)/2) 第 0.4 s 1.97 →
+    1.5 s 1.44 → 3 s 1.18 → 4.5 s 1.07），而拍照按 JPEG 大小判稳定、1.5 s 左右就取帧，所以 11-18/19 的照片一律偏绿，
+    模型认不出纸上的字。这里拍完再做一次灰世界：jpegdec 出 RGB → numpy 按通道均值拉平 → jpegenc。
+    偏色不明显就原样返回；任何一步失败都退回原图（宁可偏绿也不能拍不成）。"""
+    try:
+        import numpy as np
+    except ImportError:
+        return jpeg
+    d = os.path.join(PHOTO_DIR, 'hw-current')
+    src, raw, out = (os.path.join(d, n) for n in ('wb-in.jpg', 'wb.rgb', 'wb-out.jpg'))
+    started = time.monotonic()
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(src, 'wb') as f:
+            f.write(jpeg)
+        subprocess.run(['gst-launch-1.0', '-q', 'filesrc', 'location=' + src, '!', 'jpegdec', '!', 'videoconvert',
+                        '!', 'video/x-raw,format=RGB', '!', 'filesink', 'location=' + raw],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
+        a = np.fromfile(raw, dtype=np.uint8)
+        if a.size != width * height * 3:
+            return jpeg
+        px = a.reshape(-1, 3)
+        m = px[::61].astype(np.float32).mean(0)
+        if m.min() < 8 or m.max() / m.min() < WB_TRIGGER:
+            return jpeg
+        gains = np.clip((m.mean() / m) ** WB_STRENGTH, *WB_GAIN).astype(np.float32)   # 全量灰世界实测偏品红，收一点
+        np.clip(px * gains, 0, 255).astype(np.uint8).tofile(raw)
+        subprocess.run(['gst-launch-1.0', '-q', 'filesrc', 'location=' + raw, 'blocksize=%d' % (width * height * 3),
+                        '!', 'rawvideoparse', 'width=%d' % width, 'height=%d' % height, 'format=rgb', 'framerate=1/1',
+                        '!', 'videoconvert', '!', 'jpegenc', 'quality=85', '!', 'filesink', 'location=' + out],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
+        with open(out, 'rb') as f:
+            fixed = f.read()
+        if not fixed.startswith(b'\xff\xd8\xff'):
+            return jpeg
+        log.info('白平衡校正 RGB均值 %s → 增益 %s，%.1fs', m.round(1).tolist(), gains.round(2).tolist(),
+                 time.monotonic() - started)
+        return fixed
+    except Exception as e:
+        log.warning('白平衡校正没做成，用原图: %s', e)
+        return jpeg
+    finally:
+        for f in (src, raw, out):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
 def install(client):
     """把这些接口挂到客户端（和 web.py 里的路由同一份 app）。"""
 
@@ -343,6 +398,7 @@ def install(client):
             finally:
                 live['shooting'] = False
             push('analyzing', source=source, mode=mode)
+            jpeg = await asyncio_to_thread(_white_balance, jpeg)
             jpeg = await asyncio_to_thread(_shrink, jpeg)
             payload = {'image': base64.b64encode(jpeg).decode(), 'language': language,
                        'source': 'camera'}

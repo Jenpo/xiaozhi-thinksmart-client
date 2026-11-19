@@ -14,6 +14,7 @@
   做题现场    POST /api/study/state {active, mode, n, total, right, streak, ans, opts, lang}（页面推）
               GET  /api/study/state → {quiz, stars}（hub studyFastPath 读：在做题就把口说的答案转回页面）
   等答案开麦  POST /api/study/listen {seconds}   POST /api/study/quiet   （页面念完题开麦 / 念讲解前收麦）
+  点屏幕      POST /api/study/touch（页面每 3 s 最多一次）：刚点过就不提醒「没说话」，hub 也不说告别语
 
 说话都交给页面（事件 say → /api/hw/tts，粤语/英文/普通话各用各的声音），和看作业的朗读同一套。
 状态存 ~/.local/share/thinksmart-client/family.json（临时文件 + rename，防断电写坏）。
@@ -417,7 +418,8 @@ def install(client):
 
     async def study_state(request):
         if request.method == 'GET':
-            return ok(quiz=fam.quiz_view(), stars=fam.stars_view())
+            return ok(quiz=fam.quiz_view(), stars=fam.stars_view(),
+                      touch_age=round(time.time() - getattr(client, 'touch_at', 0), 1))
         b = await body_of(request)
         keep = ('active', 'mode', 'level', 'n', 'total', 'right', 'streak', 'ans', 'opts', 'lang', 'question', 'speaking')
         fam.quiz = {k: b.get(k) for k in keep} if b.get('active') else None
@@ -432,6 +434,10 @@ def install(client):
         except (TypeError, ValueError):
             seconds = 12
         return ok(listening=await client.listen_answer(seconds))
+
+    async def study_touch(_r):
+        client.touch_at = time.time()
+        return ok()
 
     async def study_quiet(_r):
         return ok(stopped=await client.listen_quiet_stop())
@@ -449,4 +455,4 @@ def install(client):
             ('/api/routine/set', routine_set), ('/api/routine/tick', routine_tick),
             ('/api/bedtime', bedtime), ('/api/rec/start', rec_start), ('/api/rec/stop', rec_stop),
             ('/api/stars/add', stars_add), ('/api/study/state', study_state),
-            ('/api/study/listen', study_listen), ('/api/study/quiet', study_quiet)]
+            ('/api/study/listen', study_listen), ('/api/study/quiet', study_quiet), ('/api/study/touch', study_touch)]

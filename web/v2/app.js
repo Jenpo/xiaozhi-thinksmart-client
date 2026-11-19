@@ -20,6 +20,15 @@ for (const type of ['touchstart', 'click']) {
   }, { capture: true, passive: true });
 }
 
+// 孩子在点屏幕：告诉客户端（每 3 s 最多一次），小麦就不会在后台提醒「没说话 / 我先休息啦」（owner 2026-11-19）
+let lastTouchPost = 0;
+document.addEventListener('pointerdown', () => {
+  const now = Date.now();
+  if (now - lastTouchPost < 3000) return;
+  lastTouchPost = now;
+  fetch('/api/study/touch', { method: 'POST' }).catch(() => {});
+}, { capture: true, passive: true });
+
 // 曲名/歌手来自 NAS 与后台，直接拼 innerHTML 会把 & < > 吃掉或注入标签
 function escapeHtml(s) {
   return String(s == null ? '' : s)
@@ -72,7 +81,7 @@ const SCENES = [
     ['听写', '#ffb54729', '#ffcf7a', '<path d="M4 20l4-1 10-10-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/>', 'dictation'],
     ['这是什么', '#9b7bff2b', '#c8b4ff', '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M9.5 9a1.8 1.8 0 1 1 2.3 1.8c-.5.2-.8.6-.8 1.1M11 14h.01"/>', 'identify'],
     ['朗读检查', '#ff7ac824', '#ff9bd6', '<path d="M4 5h6a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H4zM20 5h-6a3 3 0 0 0-3 3"/>', 'read'],
-    ['Maths olympiad', '#5ee0ff24', '#8ff0ff', '<path d="M5 4h11l3 3v13H5z"/><path d="M9 9h5M9 13h5M9 17h3"/><circle cx="17.5" cy="17.5" r="3"/>', 'timo'],
+    ['TIMO 奥数 K2 / P1', '#5ee0ff24', '#8ff0ff', '<path d="M5 4h11l3 3v13H5z"/><path d="M9 9h5M9 13h5M9 17h3"/><circle cx="17.5" cy="17.5" r="3"/>', 'timo'],
     ['错题本', '#5ee0ff24', '#8ff0ff', '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8l6 6M15 8l-6 6"/>', 'book'],
   ]],
   ['家庭', [
@@ -205,6 +214,11 @@ function hwRender(d, fresh = false) {   // fresh=刚拍出来的结果：收掉�
       const t = document.createElement('div');
       t.className = 'hw-tip';
       t.textContent = (d.speech && (d.speech[HW.lang] || d.speech.zh)) || '这张看不清，请把作业纸放到摄像头前面再拍一张。';
+      const again = document.createElement('button');
+      again.className = 'pri hw-again';
+      again.textContent = '📷 举起作业纸，再拍一张';
+      again.addEventListener('click', () => hwCapture());
+      t.appendChild(again);
       list.appendChild(t);
     }
     for (const it of d.items || []) {
@@ -374,14 +388,15 @@ function hwSpeakItem(it) {
 }
 
 function hwCountdown(n) {
-  hwSetBusy(true, '把作业放到镜头前… ' + n);
+  // 11-18/19 实拍多张只有房间和孩子的脸：说「放到镜头前」孩子不知道举纸。镜头在屏幕上方，举起来挡住脸正好
+  hwSetBusy(true, '📄 把作业纸举起来，挡住你的脸… ' + n);
   const b = hwEl('hwBusy'); if (b) b.classList.add('cd');   // 倒数时半透明，看得到实时画面
   let left = n;
   HW.tick = setInterval(() => {
     left -= 1;
     if (left <= 0) { clearInterval(HW.tick); HW.tick = null; return; }
     const t = hwEl('hwBusyText');
-    if (t) t.textContent = '把作业放到镜头前… ' + left;
+    if (t) t.textContent = '📄 把作业纸举起来，挡住你的脸… ' + left;
   }, 1000);
 }
 
@@ -405,10 +420,24 @@ function hwEvent(e) {
       HW.tick = setInterval(() => { if (el) el.textContent = `在看作业… ${Math.round((Date.now() - t0) / 1000)} 秒`; }, 1000);
       break;
     }
-    case 'done': if (voice) { hwSetBusy(false); hwRender(e.data, true); } break;   // 语音那条由网关念，这里不再朗读
+    case 'done': if (voice) { hwSetBusy(false); hwRender(e.data, true); hwStars(e.data); } break;   // 语音那条由网关念，这里不再朗读
     // 出错一律停转圈（点按那条 hwCapture 也会再收一次尾，重复无害）；提示只在语音那条弹，点按的由 hwCapture 弹
     case 'error': hwSetBusy(false); if (voice) toast(e.error || '没拍成', 'error'); break;
   }
+}
+
+/* 看作业也发小星星（2026-11-19）：改对一题 +1，整张全对 +2；同一张只发一次 */
+const HW_STARRED = new Set();
+function hwStars(d) {
+  if (!d || d.readable === false || !d.id || HW_STARRED.has(d.id)) return;
+  const items = d.items || [];
+  const n = (d.fixed || []).length + (items.length && items.every(i => i.ok !== false) ? 2 : 0);
+  if (!n) return;
+  HW_STARRED.add(d.id);
+  STARS.today += n; STARS.total += n; starRender();
+  toast(`⭐ +${n} ${items.every(i => i.ok !== false) ? '全对，好叻！' : '改对咗，好叻！'}`);
+  fetch('/api/stars/add', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stars: n, why: 'homework' }) }).catch(() => {});
 }
 
 async function hwCapture(extra) {
@@ -416,6 +445,7 @@ async function hwCapture(extra) {
   extra = (extra && typeof extra === 'object' && !(extra instanceof Event)) ? extra : {};
   hwLiveOn();
   hwSetBusy(true, '准备拍照…');
+  hwSpeakText({ yue: '将份功课举高，挡住块面', en: 'Hold your homework up in front of your face', zh: '把作业纸举起来，挡住你的脸' }[HW.lang] || '把作业纸举起来，挡住你的脸');
   const b0 = hwEl('hwBusy'); if (b0) b0.classList.add('cd');
   try {
     const r = await fetch('/api/hw/capture', {
@@ -425,6 +455,7 @@ async function hwCapture(extra) {
     const d = await r.json().catch(() => ({ ok: false, error: '网关没有回话' }));
     if (!d.ok) { toast(d.code === 'busy' ? '正在拍，等一下' : (d.error || '没拍成，再试一次'), 'error'); return; }
     hwRender(d, true);
+    hwStars(d);
     const text = hwSpeechText(d);
     if (text) hwSpeakText(text);
   } catch (e) {
@@ -2949,9 +2980,12 @@ function timoNext() {
   if (!q) return timoEnd();
   TIMO.q = q; TIMO.input = ""; TIMO.locked = false; TIMO.hintUsed = 0; TIMO.tries = 0;
   const n = stEl('tqQ'), a = stEl('tqA'), pad = stEl('tqPad');
-  n.textContent = `第 ${TIMO.n + 1} / ${TIMO.total} 题（${q.sec}）`;
+  // owner 2026-11-19「出题的时候，题目在屏幕也要有」：题面整句显示，不只念；题号和题型放到下面一行
+  n.textContent = timoText(q);
   a.className = 'timo-a'; a.textContent = '';
-  stEl('tqMeta').textContent = timoUI() ? 'Listen → answer → I will tell you if it is right' : '听题 → 作答 → 我会告诉你对不对';
+  stEl('tqMeta').textContent = timoUI()
+    ? `Question ${TIMO.n + 1} / ${TIMO.total} · say or tap your answer · ⭐ ${QV.roundStars}`
+    : `第 ${TIMO.n + 1} / ${TIMO.total} 题（${q.sec}）· 说答案或点 · ⭐ ${QV.roundStars}`;
   pad.innerHTML = q.ans === 'choice'
     ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${esc(o)}</button>`).join('')}</div>`
     : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`;
