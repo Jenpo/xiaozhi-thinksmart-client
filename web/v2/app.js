@@ -2999,7 +2999,7 @@ function flashView(body, opts) {
   body.innerHTML = `<div class="st-row"><button class="st-pill voice-pill${v ? ' on' : ''}" id="flVoiceT">${v ? (en ? '🎤 Say it' : '🎤 讲答案') : (en ? '⌨ Tap it' : '⌨ 按答案')}</button>
       ${Object.entries(names).map(([k, t]) =>
       `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${t}</button>`).join('')}</div>
-    <div class="flash"><div class="flash-q" id="flQ">${en ? 'Tap Start or any key' : '点「开始」或任何数字'}</div><div class="flash-a" id="flA"></div>
+    <div class="flash"><div class="flash-q long" id="flQ">${en ? 'Tap Start or any key' : '点「开始」或任何数字'}</div><div class="flash-a" id="flA"></div>
       <div class="flash-voice" id="flV"></div>
       <div class="flash-meta" id="flMeta">${meta}</div>
       <div class="pad">${[1,2,3,4,5,6,7,8,9,'.',0,'⌫','✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
