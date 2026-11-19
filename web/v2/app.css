@@ -492,6 +492,8 @@ body[data-state="listening"] .mic-ring { opacity: .75; }
 
 /* ?demo=<scene>&still: freeze transitions so headless screenshots show the settled scene */
 .still *, .still *::before, .still *::after { transition: none !important; animation: none !important; }
+/* screen dark (blanker): nothing is seen, so nothing animates; resumes where it stopped */
+.asleep *, .asleep *::before, .asleep *::after { animation-play-state: paused !important; }
 
 /* ---- 智能家居设备卡片 ---- */
 .device-list { display: flex; flex-direction: column; gap: 10px; }
@@ -840,6 +842,13 @@ body.ptt-off .hint::after { content: none; }
 .timo .timo-opts { display: grid; gap: 12px; }
 .timo .timo-opts button { height: 88px; font-size: 28px; font-weight: 600; }
 .timo .st-go { grid-column: 1; justify-self: start; }
+.flash-voice { grid-column: 1; min-height: 30px; font-size: 22px; color: var(--ink2); }
+.flash-voice.listen { color: #8ff0ff; animation: breathe 1.6s ease-in-out infinite; }
+.flash-voice.speak { color: #ffcf7a; }
+.flash-a.end { font-size: 26px; color: var(--ink2); }
+.flash-q.long { font-size: 36px; font-weight: 600; letter-spacing: 0; line-height: 1.35; align-self: start; }
+.flash .pad button[data-k="✓"] { grid-column: span 3; height: 70px; }
+.st-pill.voice-pill { margin-left: auto; }
 /* 听写 */
 .dict { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
 .dict-n { font-size: 20px; color: var(--ink3); }
@@ -903,3 +912,10 @@ body.ptt-off .hint::after { content: none; }
 
 .hw-tip .hw-again { display: block; margin-top: 14px; height: 56px; padding: 0 24px; border-radius: 16px; font-size: 20px; font-weight: 600;
   color: #08122c; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; }
+
+/* TIMO 选项状态（2026-11-19：讲解时按钮锁了却看不出，孩子连点 30 多下） */
+.timo .timo-opts button.good { background: #48d18a33; border-color: #48d18a; color: #8ff0b8; }
+.timo .timo-opts button.bad { background: #ff8b8b22; border-color: #ff8b8b; color: #ffb0b0; }
+.timo .timo-opts button[disabled]:not(.good) { opacity: .45; }
+.timo .pad button[disabled] { opacity: .45; }
+.timo .flash-voice { grid-column: 1; }

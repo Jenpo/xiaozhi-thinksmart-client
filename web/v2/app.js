@@ -21,9 +21,11 @@ for (const type of ['touchstart', 'click']) {
 }
 
 // 孩子在点屏幕：告诉客户端（每 3 s 最多一次），小麦就不会在后台提醒「没说话 / 我先休息啦」（owner 2026-11-19）
-let lastTouchPost = 0;
+let lastTouchPost = 0, lastTouch = 0;
+const touchedRecently = (ms = 10000) => Date.now() - lastTouch < ms;   // 孩子刚点过屏幕：不出声催「讲答案」
 document.addEventListener('pointerdown', () => {
   const now = Date.now();
+  lastTouch = now;
   if (now - lastTouchPost < 3000) return;
   lastTouchPost = now;
   fetch('/api/study/touch', { method: 'POST' }).catch(() => {});
@@ -77,7 +79,8 @@ const SCENES = [
     ['Check my homework', '#9b7bff2b', '#c8b4ff', '<path d="M4 6l2 2 3-3M4 13l2 2 3-3M12 7h8M12 14h8"/>'],
   ]],
   ['学习', [
-    ['口算闪卡', '#5ee0ff24', '#8ff0ff', '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h3M9.5 7.5v3M13 9h3M8 15h3M13 14h3M13 16h3"/>', 'flash'],
+    ['出几道算术题', '#5ee0ff24', '#8ff0ff', '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h3M9.5 7.5v3M13 9h3M8 15h3M13 14h3M13 16h3"/>', 'flash'],
+    ['Give me some math questions', '#9b7bff2b', '#c8b4ff', '<path d="M5 12h14M12 5v14"/>', 'flash'],
     ['听写', '#ffb54729', '#ffcf7a', '<path d="M4 20l4-1 10-10-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/>', 'dictation'],
     ['这是什么', '#9b7bff2b', '#c8b4ff', '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M9.5 9a1.8 1.8 0 1 1 2.3 1.8c-.5.2-.8.6-.8 1.1M11 14h.01"/>', 'identify'],
     ['朗读检查', '#ff7ac824', '#ff9bd6', '<path d="M4 5h6a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H4zM20 5h-6a3 3 0 0 0-3 3"/>', 'read'],
@@ -115,7 +118,7 @@ function renderChips() {
     b.innerHTML = `<i style="background:${bg};color:${fg}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></i>${esc(q)}`;
     b.addEventListener('click', async () => {
-      if (open) { stOpen(open); return; }   // 学习/家庭：直接开面板，不走语音
+      if (open) { stOpen(open, open === 'flash' ? { auto: true, level: 'mixed', ...(isLatin(q) ? { language: 'en' } : {}) } : undefined); return; }   // 学习/家庭：直接开面板；算术题直接开始念题
       // 只开面板 + 实时画面，等摆好作业再点「拍作业」：以前一点就倒数 3 秒自拍，拍到的是人不是作业，
       // 接着转圈 20 多秒、按钮被遮罩挡住，owner「点拍摄没有反应」（2026-11-16 16:01 实拍判「无法判断」）
       if (SCENES[i][0] === '看作业') { hwSetLang(q === 'Check my homework' ? 'en' : q === '睇下我嘅作业' ? 'yue' : 'zh'); hwOpen(true, false); return; }
@@ -2102,6 +2105,7 @@ const handlers = {
     if (s.update) { ui.version = s.version; ui.update = s.update; }   // the demo's snapshots have none
     if (s.alarms) ui.alarms = s.alarms;
     if (s.devices) ui.devices = s.devices;
+    if (s.screen) handlers.screen(s.screen);
     renderModels(); renderThread(); renderStatus(); renderAlarms(); renderDevices();
     refreshMusic();
     updateFinished((s.update || {}).job);
@@ -2135,7 +2139,8 @@ const handlers = {
   family: f => famApply(f),
   say: x => { speakText(x.text, x.language); toast(x.text); },
   card: c => cardShow(c),
-  study: x => stOpen(x.mode, x),
+  study: x => stOpen(x.mode, { ...x, level: x.level || (x.mode === 'flash' ? 'mixed' : undefined),   // 语音没说哪种 = 混合闯关
+                                  auto: x.autostart || x.mode === 'flash' || (x.mode === 'dictation' && (x.words || []).length > 0) }),
   study_answer: d => studyVoice(d),
   music: m => { if (hubTarget(MP.target)) applyMusicStatus(m); },
   toast: t => toast(t.text, t.kind),
@@ -2153,6 +2158,11 @@ const handlers = {
   },
   level(l) {
     level.target = ui.status.state === 'speaking' ? Math.min(1, l.out * 6) : micLevel(l.mic);
+  },
+  // 屏幕被熄屏程序调暗时暂停所有 CSS 动画（kiosk 用 CPU 渲染，光球的无限动画没人看也要吃 1~3 个核）；
+  // 用 paused 而不是 none：亮屏时从原处接着动，不会跳一下
+  screen(s) {
+    document.documentElement.classList.toggle('asleep', s.on === false);
   },
 };
 
@@ -2448,6 +2458,8 @@ function stOpen(mode, opts) {
   const sheet = stEl('stSheet');
   if (!sheet) return;
   if (mode === 'book') { hwOpen(true, false); hwShowBook(); return; }
+  // owner 2026-11-19「默认奥数就是 TIMO 的幼儿园和小一的，面板上也是」：闪卡的 olympiad 档改走 TIMO
+  if (mode === 'flash' && opts.level === 'olympiad') { mode = 'timo'; opts = { ...opts, level: '' }; }
   // 已经在做同一种题（模型一句话里常连调两三次 study_open，11-18 20:50 / 11-19 08:19 每次都把题重开）：不重开
   const running = (mode === 'flash' && ST.flash && ST.flash.q) || (mode === 'timo' && TIMO.q);
   const sameLevel = () => !opts.level || (mode === 'flash' ? opts.level === ST.flash.level : opts.level === TIMO.level);
@@ -2458,18 +2470,18 @@ function stOpen(mode, opts) {
   sheet.classList.add('on');
   stTab(mode || ST.mode, opts);
   // 语音打开的：不用再点「开始」，小麦那句说完就念第一题
-  if (opts.autostart && mode === 'flash') flashStart(ST.flashLevel || 'add20');
-  if (opts.autostart && mode === 'timo') timoStart(TIMO.level || 'k2', opts);
+  if ((opts.autostart || opts.auto) && mode === 'timo') timoStart(TIMO.level || 'k2', opts);   // 闪卡由 flashView(opts.auto) 自己开始
 }
 function stClose() {
   const sheet = stEl('stSheet');
   if (sheet) sheet.classList.remove('on');
   quizCancel();
   if (ST.flash) ST.flash.q = null;
-  TIMO.q = null;
+  timoStop();
   studyPush();
   stLive(false);
-  if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
+  if (ST.flash) flashStop();
+  listenCancel(); ST.rtGen = (ST.rtGen || 0) + 1; if (ST.dict) ST.dict.gen = (ST.dict.gen || 0) + 1;
   if (ST.read && ST.read.recording) fetch('/api/rec/stop', { method: 'POST' }).catch(() => {});
 }
 /* 语言按钮跟着 ST.lang 走：以前只有点击时才高亮，切到奥数自动改英文时按钮还停在粤语 */
@@ -2477,11 +2489,13 @@ function stLangPills() {
   document.querySelectorAll('.st-lang').forEach(x => x.classList.toggle('on', x.dataset.lang === ST.lang));
 }
 function stTab(mode, opts) {
+  if (ST.flash && mode !== 'flash') flashStop();
+  if (mode !== ST.mode) { listenCancel(); ST.rtGen = (ST.rtGen || 0) + 1; if (ST.dict) ST.dict.gen = (ST.dict.gen || 0) + 1; }
   ST.mode = mode;
   if (mode === 'timo' || mode === 'flash') ST.lang = 'en';   // owner 2026-11-19：出题默认英文交互
   if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
   if (ST.flash) ST.flash.q = null;
-  TIMO.q = null;
+  timoStop();
   quizCancel();
   stLangPills();
   document.querySelectorAll('.st-tab').forEach(t => t.classList.toggle('on', t.dataset.mode === mode));
@@ -2538,7 +2552,6 @@ function stCamEvent(e) {
  */
 const QV = { token: 0, streak: 0, roundStars: 0, mute: false };
 const STARS = { total: 0, today: 0 };
-const sleepMs = ms => new Promise(r => setTimeout(r, ms));
 const pickOne = a => a[Math.floor(Math.random() * a.length)];
 const CHEER = {
   en: ['Great job!', 'Awesome!', 'You got it!', 'Super!', 'Brilliant!', 'Well done!', 'Fantastic!'],
@@ -2645,11 +2658,12 @@ function studyVoice(d) {
   if (cmd === 'stop') { quizCancel(); stClose(); return; }
   if (ST.mode === 'flash') {
     const f = ST.flash;
-    if (!f || !f.q) { if (cmd === 'start' || d.value == null) flashStart(ST.flashLevel || 'add20'); return; }
+    if (!f || !f.q) { if (cmd === 'start' || d.value == null) flashStart(ST.flashLevel || 'mixed'); return; }
     if (f.locked) return;
-    if (cmd === 'repeat' || cmd === 'mute' || cmd === 'unmute') return flashSay();
-    if (cmd === 'skip') { f.input = '—'; return flashCheck(true); }
-    if (d.value != null) { f.input = String(d.value); stEl('flA').textContent = f.input; flashCheck(); }
+    listenCancel();
+    if (cmd === 'repeat' || cmd === 'mute' || cmd === 'unmute') return flashAsk();
+    if (cmd === 'skip' || cmd === 'hint') { f.input = ''; return flashCheck(true); }
+    if (d.value != null) { f.input = String(d.value); stEl('flA').textContent = f.input; flashCheck(true); }
   } else if (ST.mode === 'timo') {
     const q = TIMO.q;
     if (!q) { if (cmd === 'start' || d.value == null) timoStart(TIMO.level || 'k2', {}); return; }
@@ -2664,115 +2678,510 @@ function studyVoice(d) {
       if (!hit) hit = q.opts.find(o => timoNorm(o) && t.includes(timoNorm(o)));
       if (!hit && d.value != null) hit = q.opts.find(o => timoNorm(o) === String(d.value));
       if (hit) timoAnswer(hit, hit);
-      else quizSay(ST.lang === 'en' ? 'Which one? Say one of the choices on the screen.' : '选哪个？说屏幕上的一个', ST.lang, true);
+      else timoAsk(false, ST.lang === 'en' ? 'Which one? Say one of the choices on the screen.' : '选哪个？说屏幕上的一个');
       return;
     }
     if (d.value != null) timoAnswer(String(d.value), String(d.value));
   }
 }
 
-/* -- 口算闪卡 -- */
-const FLASH_LEVELS = { add20: '20 以内加减', add100: '100 以内加减', times: '乘法表', mixed: '混合' };
-const FLASH_LEVELS_EN = { add20: 'Up to 20', add100: 'Up to 100', times: 'Times tables', mixed: 'Mixed' };
+/* -- 口算闪卡（2026-11-17 起可以用嘴答：念题 → 孩子讲答案 → 本地判，不经大模型；键盘照样能用） -- */
+// 奥数 = TIMO K2/P1（owner 2026-11-19）：「一年级奥数」档去掉，在「TIMO 奥数」标签里做；混合闯关每 3 题插的奥数也取 TIMO 题库
+const FLASH_LEVELS = { mixed: '混合闯关', add20: '20 以内加减', add100: '100 以内加减', times: '乘法表', div: '除法',
+                       chain: '口诀接龙', upper: '高年级', review: '错题重考' };
+const FLASH_LEVELS_EN = { mixed: 'Challenge', add20: 'Up to 20', add100: 'Up to 100', times: 'Times tables', div: 'Division',
+                          chain: 'Times chant', upper: 'Upper grades', review: 'Retry mistakes' };
 const flEN = () => ST.lang === 'en';
+/* 混合闯关的奥数题：TIMO 题库里数字作答的题（第 1 关 K2，往上 P1），没有就退回模板 */
+function timoFlashPick(f) {
+  const B = window.TIMO; if (!B) return null;
+  const lv = f && f.tier >= 2 ? 'p1' : 'k2';
+  const pool = B.BANK.filter(q => q.lv === lv && q.ans !== 'choice' && /^-?\d+(\.\d+)?$/.test(String(q.a)));
+  if (!pool.length) return null;
+  const q = pool[rnd(0, pool.length - 1)];
+  const text = ST.lang === 'en' ? q.qe : ST.lang === 'yue' ? q.qy : q.q;
+  return [text, Number(q.a), null, true, 'timo:' + (q.src || '')];
+}
 const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
-function flashQuestion(level) {
-  const lv = level === 'mixed' ? ['add20', 'add100', 'times'][rnd(0, 2)] : level;
-  if (lv === 'times') { const a = rnd(2, 9), b = rnd(1, 9); return Math.random() < 0.75 ? [`${a} × ${b}`, a * b] : [`${a * b} ÷ ${a}`, b]; }
-  const max = lv === 'add100' ? 100 : 20;
-  const a = rnd(1, max - 1);
-  if (Math.random() < 0.5) { const b = rnd(1, max - a); return [`${a} + ${b}`, a + b]; }
-  const b = rnd(1, a); return [`${a} − ${b}`, a - b];
+const CN_DIGIT = '零一二三四五六七八九';
+/* 题库（2026-11-17）：全部按模板现出，答案是算出来的（整数或小数），语音判题才稳。
+   q = [屏幕上的题, 答案, 念出来的话（没有就按屏幕念）, 是否应用题（屏幕不加「= ?」，用小字）] */
+const pick = a => a[rnd(0, a.length - 1)];
+const fmt = x => String(Math.round(x * 1000) / 1000);
+const tr = o => o[ST.lang] || o.zh;
+const CNN = n => n <= 10 ? (n === 10 ? '十' : CN_DIGIT[n]) : String(n);
+const EN_ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+const EN_ORD_DEN = { 2: 'half', 3: 'third', 4: 'quarter', 5: 'fifth', 6: 'sixth', 8: 'eighth', 10: 'tenth' };
+const enOrd = n => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
+const W = (zh, yue, en, a) => [tr({ zh, yue, en }), a, null, true];          // 应用题：屏幕和念的一样
+const S = (screen, a, zh, yue, en) => [screen, a, tr({ zh, yue, en }), false]; // 算式：屏幕是算式，念的另写
+const gcd = (a, b) => b ? gcd(b, a % b) : a;
+
+const GEN = {
+  add20() { const a = rnd(1, 19); if (Math.random() < .5) { const b = rnd(1, 20 - a); return [`${a} + ${b}`, a + b]; } const b = rnd(1, a); return [`${a} − ${b}`, a - b]; },
+  add10gap() { const a = rnd(1, 9), b = rnd(1, 10 - a); return S(`${a} + □ = ${a + b}`, b, `${a}加几等于${a + b}？`, `${a}加幾多等於${a + b}？`, `${a} plus what makes ${a + b}?`); },
+  add100() { const a = rnd(10, 99); if (Math.random() < .5) { const b = rnd(1, 100 - a); return [`${a} + ${b}`, a + b]; } const b = rnd(1, a); return [`${a} − ${b}`, a - b]; },
+  times() { const a = rnd(2, 9), b = rnd(1, 9); return [`${a} × ${b}`, a * b]; },
+  div() { const b = rnd(2, 9), q = rnd(1, 9); return [`${b * q} ÷ ${b}`, q]; },
+  mul21() { const a = rnd(12, 99), b = rnd(2, 9); return [`${a} × ${b}`, a * b]; },
+  div31() { const b = rnd(2, 9), q = rnd(12, 120); return [`${b * q} ÷ ${b}`, q]; },
+  mul22() { const a = rnd(11, 39), b = rnd(11, 29); return [`${a} × ${b}`, a * b]; },
+  mixedOps() {
+    const a = rnd(2, 30), b = rnd(2, 9), c = rnd(2, 9);
+    if (Math.random() < .5) return S(`${a} + ${b} × ${c}`, a + b * c, `${a}加${b}乘${c}等于几？`, `${a}加${b}乘${c}係幾多？`, `What is ${a} plus ${b} times ${c}?`);
+    return S(`(${a} + ${b}) × ${c}`, (a + b) * c, `${a}加${b}的和，再乘${c}，等于几？`, `${a}加${b}嘅和，再乘${c}，係幾多？`, `Add ${a} and ${b}, then times ${c}. What do you get?`);
+  },
+  perim() { const l = rnd(3, 15), w = rnd(2, l); return W(`长方形长 ${l} 厘米，宽 ${w} 厘米，周长是多少厘米？`, `長方形長 ${l} 厘米，闊 ${w} 厘米，周長係幾多厘米？`, `A rectangle is ${l} cm long and ${w} cm wide. What is its perimeter in cm?`, 2 * (l + w)); },
+  time() { const h = rnd(1, 3), m = pick([10, 15, 20, 30, 45]); return W(`${h} 小时 ${m} 分钟是多少分钟？`, `${h} 個鐘 ${m} 分鐘係幾多分鐘？`, `How many minutes are ${h} hours and ${m} minutes?`, 60 * h + m); },
+  decAdd() {
+    let a = rnd(1, 60), b = rnd(1, 60); if (Math.random() < .5) return [`${fmt(a / 10)} + ${fmt(b / 10)}`, (a + b) / 10];
+    if (b > a) [a, b] = [b, a]; return [`${fmt(a / 10)} − ${fmt(b / 10)}`, (a - b) / 10];
+  },
+  decMul() { const a = pick([0.5, 0.2, 0.25, 1.5, 0.4, 2.5]), b = rnd(2, 12); return [`${a} × ${b}`, Math.round(a * b * 100) / 100]; },
+  equation() {
+    const x = rnd(2, 30), k = rnd(2, 40);
+    if (Math.random() < .5) return S(`□ + ${k} = ${x + k}`, x, `一个数加${k}等于${x + k}，这个数是多少？`, `一個數加${k}等於${x + k}，呢個數係幾多？`, `A number plus ${k} is ${x + k}. What is the number?`);
+    const m = rnd(2, 9), y = rnd(2, 12);
+    return S(`${m} × □ = ${m * y}`, y, `${m}乘一个数等于${m * y}，这个数是多少？`, `${m}乘一個數等於${m * y}，呢個數係幾多？`, `${m} times a number is ${m * y}. What is the number?`);
+  },
+  lcmGcd() {
+    const [a, b] = pick([[4, 6], [6, 8], [3, 4], [4, 10], [6, 9], [8, 12], [5, 6], [9, 12], [10, 15], [12, 18]]);
+    if (Math.random() < .5) return W(`${a} 和 ${b} 的最小公倍数是多少？`, `${a} 同 ${b} 嘅最小公倍數係幾多？`, `What is the least common multiple of ${a} and ${b}?`, a * b / gcd(a, b));
+    return W(`${a} 和 ${b} 的最大公因数是多少？`, `${a} 同 ${b} 嘅最大公因數係幾多？`, `What is the greatest common factor of ${a} and ${b}?`, gcd(a, b));
+  },
+  triangle() { const b = 2 * rnd(2, 10), h = rnd(3, 12); return W(`三角形底 ${b} 厘米，高 ${h} 厘米，面积是多少平方厘米？`, `三角形底 ${b} 厘米，高 ${h} 厘米，面積係幾多平方厘米？`, `A triangle has base ${b} cm and height ${h} cm. What is its area in square cm?`, b * h / 2); },
+  average() { const m = rnd(10, 90), d1 = rnd(1, 9), d2 = rnd(1, 9), n = [m - d1, m + d2, m + d1 - d2]; return W(`${n.join('、')} 的平均数是多少？`, `${n.join('、')} 嘅平均數係幾多？`, `What is the average of ${n[0]}, ${n[1]} and ${n[2]}?`, m); },
+  fraction() {
+    const den = pick([2, 3, 4, 5, 6, 8, 10]), base = den * rnd(2, 12);
+    let num = rnd(1, den - 1); while (gcd(num, den) !== 1) num = rnd(1, den - 1);   // 最简分数
+    const cn = `${CNN(den)}分之${CNN(num)}`;
+    const en = den === 2 ? 'half' : `${EN_ONES[num]} ${EN_ORD_DEN[den]}${num > 1 ? 's' : ''}`;
+    return S(ST.lang === 'en' ? `${num}/${den} of ${base}` : `${base} 的 ${num}/${den}`, base / den * num, `${base}的${cn}是多少？`, `${base}嘅${cn}係幾多？`, `What is ${en} of ${base}?`);
+  },
+  percent() { const p = pick([10, 20, 25, 30, 40, 50, 75]), base = 20 * rnd(1, 20); return S(ST.lang === 'en' ? `${p}% of ${base}` : `${base} 的 ${p}%`, base * p / 100, `${base}的百分之${p}是多少？`, `${base}嘅百分之${p}係幾多？`, `What is ${p} percent of ${base}?`); },
+  ratio() { const a = rnd(1, 4), b = rnd(1, 5), k = rnd(2, 8), t = (a + b) * k; return W(`男生和女生人数比是 ${a}:${b}，一共 ${t} 人，男生有几人？`, `男仔同女仔人數比係 ${a}:${b}，總共 ${t} 人，男仔有幾多人？`, `Boys to girls is ${a} to ${b}. There are ${t} children. How many are boys?`, a * k); },
+  discount() {
+    const p = 10 * rnd(2, 30), [z, off] = pick([['八', 20], ['九', 10], ['七', 30]]);
+    return W(`一件衣服 ${p} 元，打${z}折后是多少元？`, `一件衫 ${p} 蚊，打${z}折之後係幾多蚊？`, `A shirt costs ${p} dollars. With ${off} percent off, how much is it?`, p * (100 - off) / 100);
+  },
+  // ---- 一年级奥数 ----
+  oPattern() {
+    const t = rnd(0, 2); let s;
+    if (t === 0) { const a = rnd(1, 10), d = rnd(2, 5); s = [a, a + d, a + 2 * d, a + 3 * d, a + 4 * d]; }
+    else if (t === 1) { const a = rnd(25, 40), d = rnd(2, 4); s = [a, a - d, a - 2 * d, a - 3 * d, a - 4 * d]; }
+    else { const a = rnd(1, 5); s = [a, a + 1, a + 3, a + 6, a + 10]; }
+    const shown = s.slice(0, 4);
+    return [`${shown.join(', ')}, ?`, s[4], tr({ zh: `找规律：${shown.join('，')}，下一个数是几？`, yue: `搵規律：${shown.join('，')}，下一個數係幾多？`, en: `What comes next: ${shown.join(', ')}?` }), true];
+  },
+  oQueue() {
+    const a = rnd(2, 8), b = rnd(2, 8);
+    if (Math.random() < .5) return W(`小朋友排队，小明从前面数是第 ${a} 个，从后面数是第 ${b} 个。这一队一共有几人？`, `小朋友排隊，小明由前面數係第 ${a} 個，由後面數係第 ${b} 個。成隊一共有幾多人？`, `In a line, Tom is ${enOrd(a)} from the front and ${enOrd(b)} from the back. How many children are in the line?`, a + b - 1);
+    return W(`小红前面有 ${a} 人，后面有 ${b} 人。这一队一共几人？`, `小紅前面有 ${a} 個人，後面有 ${b} 個人。成隊一共幾多人？`, `There are ${a} children in front of Amy and ${b} behind her. How many children are in the line?`, a + b + 1);
+  },
+  oSaw() { const n = rnd(3, 9); return W(`一根木头锯成 ${n} 段，要锯几次？`, `一條木鋸成 ${n} 段，要鋸幾多次？`, `How many cuts does it take to saw a log into ${n} pieces?`, n - 1); },
+  oStairs() { const n = rnd(3, 8); return W(`从 1 楼走到 ${n} 楼，要走几层楼梯？`, `由 1 樓行到 ${n} 樓，要行幾多層樓梯？`, `How many flights of stairs from floor 1 to floor ${n}?`, n - 1); },
+  oAge() { const me = rnd(5, 8), d = rnd(2, 5), y = rnd(2, 5); return W(`我今年 ${me} 岁，哥哥比我大 ${d} 岁。${y} 年后哥哥几岁？`, `我今年 ${me} 歲，哥哥大我 ${d} 歲。${y} 年之後哥哥幾多歲？`, `I am ${me}. My brother is ${d} years older. How old will he be in ${y} years?`, me + d + y); },
+  oSweets() { const b = rnd(1, 4), x = rnd(2, 8); return W(`小红有 ${x + 2 * b} 颗糖，给小明 ${b} 颗后，两人一样多。小明原来有几颗？`, `小紅有 ${x + 2 * b} 粒糖，俾咗 ${b} 粒小明之後，兩個一樣多。小明本來有幾多粒？`, `Amy has ${x + 2 * b} sweets. After giving Tom ${b}, they have the same. How many did Tom have at first?`, x); },
+  oMakeTen() {
+    const p = rnd(1, 8), q = rnd(1, 8), A = 10 * rnd(1, 3) + (10 - p), B = 10 * rnd(1, 2) + (10 - q);
+    return S(`${A} + ${B} + ${p} + ${q}`, A + B + p + q, `巧算：${A}加${B}加${p}加${q}等于几？`, `巧算：${A}加${B}加${p}加${q}係幾多？`, `Quick sum: ${A} plus ${B} plus ${p} plus ${q}?`);
+  },
+  oLegs() {
+    const n = rnd(2, 6);
+    if (Math.random() < .5) return W(`${n} 只鸡一共有几条腿？`, `${n} 隻雞一共有幾多隻腳？`, `How many legs do ${n} chickens have?`, 2 * n);
+    return W(`${n} 只小狗一共有几条腿？`, `${n} 隻狗仔一共有幾多隻腳？`, `How many legs do ${n} dogs have?`, 4 * n);
+  },
+  oShare() { const k = rnd(2, 8); return W(`有 ${2 * k} 个苹果，每人分 2 个，可以分给几个人？`, `有 ${2 * k} 個蘋果，每人分 2 個，可以分俾幾多個人？`, `There are ${2 * k} apples. Each child gets 2. How many children get apples?`, k); },
+};
+// 混合闯关：从第 1 关（一年级）起，连对 2 题升一关、答错降一关；每 3 题插一道一年级奥数
+const TIERS = [null, ['add20', 'add10gap'], ['add100', 'times'], ['div', 'mul21'], ['div31', 'mul22', 'mixedOps', 'perim', 'time'],
+  ['decAdd', 'decMul', 'equation', 'lcmGcd'], ['triangle', 'average', 'fraction'], ['percent', 'ratio', 'discount']];
+const OLYMPIAD = ['oPattern', 'oQueue', 'oSaw', 'oStairs', 'oAge', 'oSweets', 'oMakeTen', 'oLegs', 'oShare'];
+const TIER_GRADE = ['', '一年级', '二年级', '二三年级', '三四年级', '五年级', '五六年级', '六年级'];
+// 题库（/api/qbank，可更新）：应用题、奥数题。最近出过的不重复（记最近 300 道）
+const QB = { items: [], at: 0 };
+async function loadBank() {
+  if (Date.now() - QB.at < 10 * 60e3 && QB.items.length) return;
+  try { const d = await (await fetch('/api/qbank')).json(); if (d.ok) { QB.items = d.items || []; QB.at = Date.now(); QB.version = d.version; } } catch (e) {}
 }
-function flashSpeech(expr, lang) {
-  const ops = lang === 'en' ? { '+': 'plus', '−': 'minus', '×': 'times', '÷': 'divided by' } : { '+': '加', '−': '减', '×': '乘', '÷': '除以' };
-  const s = expr.replace(/[+−×÷]/g, m => ' ' + ops[m] + ' ').replace(/\s+/g, ' ').trim();
-  return lang === 'en' ? `What is ${s}?` : lang === 'yue' ? `${s}，等于几多？` : `${s}，等于多少？`;
+const TIER_GRADE_N = [0, 1, 2, 3, 4, 5, 5, 6];
+function bankPick(pred) {
+  let seen = []; try { seen = JSON.parse(localStorage.getItem('qbSeen') || '[]'); } catch (e) {}
+  const okLang = it => ST.lang === 'en' ? it.en : (it.zh || it.yue);
+  let pool = QB.items.filter(it => pred(it) && okLang(it) && !seen.includes(it.id));
+  if (!pool.length) pool = QB.items.filter(it => pred(it) && okLang(it));       // 都出过了：允许重复
+  if (!pool.length) return null;
+  const it = pick(pool);
+  seen.push(it.id); localStorage.setItem('qbSeen', JSON.stringify(seen.slice(-300)));
+  const text = ST.lang === 'en' ? it.en : ST.lang === 'yue' ? (it.yue || it.zh) : it.zh;
+  return [text, it.answer, null, true, 'qb:' + it.id];
 }
+function fromGen(names, f) {
+  // 同一种题不连着出
+  let name = pick(names);
+  for (let k = 0; k < 5 && names.length > 1 && f && name === f.lastGen; k++) name = pick(names);
+  if (f) f.lastGen = name;
+  const q = GEN[name](); q[4] = name; return q;
+}
+function flashQuestion(level, f) {
+  if (level === 'chain') {                       // 口诀接龙：某一张表从一顺到九，念「三七」答「二十一」
+    const t = f.table, i = f.n + 1, a = Math.min(t, i), b = Math.max(t, i);
+    return [`${a} × ${b}`, a * b, CN_DIGIT[a] + CN_DIGIT[b], false];
+  }
+  if (level === 'review') { const r = f.pool[f.n % f.pool.length]; return [r.q, r.a, null, !/^\S+ [+−×÷] \S+$/.test(r.q)]; }
+  if (level === 'olympiad') return timoFlashPick(f) || fromGen(OLYMPIAD, f);
+  if (level === 'upper') {
+    return (Math.random() < .3 && bankPick(it => !it.olympiad && it.grade >= 3)) || fromGen([].concat(TIERS[4], TIERS[5], TIERS[6], TIERS[7]), f);
+  }
+  if (level === 'mixed') {
+    // 混合：每 3 题一道奥数（题库/模板各半）；其余 25% 题库应用题、20% 复习低关、其余本关
+    const g = TIER_GRADE_N[f.tier];
+    if ((f.n + 1) % 3 === 0) {                     // 第 1 关也插：一年级奥数本来就是一年级的
+      return timoFlashPick(f) || fromGen(OLYMPIAD, f);
+    }
+    const r = Math.random();
+    if (r < .25) { const q = bankPick(it => !it.olympiad && it.grade <= g && it.grade >= Math.max(1, g - 1)); if (q) return q; }
+    if (r < .45 && f.tier > 1) return fromGen(TIERS[rnd(1, f.tier - 1)], f);
+    return fromGen(TIERS[f.tier], f);
+  }
+  return GEN[level] ? GEN[level]() : GEN.add20();
+}
+function questionSpeech(q, lang) {
+  if (q[2]) return q[2];
+  if (q[3] || !/^\S+ [+−×÷] \S+$/.test(q[0])) return q[0];
+  const [x, op, y] = q[0].split(' ');
+  const w = { yue: { '+': '加', '−': '減', '×': '乘', '÷': '除以', end: '係幾多？' },
+              zh: { '+': '加', '−': '减', '×': '乘', '÷': '除以', end: '等于几？' },
+              en: { '+': 'plus', '−': 'minus', '×': 'times', '÷': 'divided by', end: '' } }[lang] || {};
+  return lang === 'en' ? `What is ${x} ${w[op]} ${y}?` : `${x}${w[op]}${y}${w.end}`;
+}
+
+/* 识别结果 → 数字。hub 给的有「21」「二十一」「廿四」「6十3」几种写法；取最后一个数（「我諗係三十二」→ 32）。 */
+const CN_VAL = { 零: 0, 〇: 0, 一: 1, 幺: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+const EN_VAL = { zero: 0, oh: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+function parseNum(text) {
+  let s = String(text || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/．/g, '.')
+    .replace(/一把|一伯|一柏/g, '一百').replace(/廿/g, '二十').replace(/卅/g, '三十').replace(/卌/g, '四十').replace(/點/g, '点');
+  const runs = s.match(/[0-9零〇一幺二两兩三四五六七八九十百千点.]+/g);
+  if (runs) {
+    for (let k = runs.length - 1; k >= 0; k--) { const v = numRun(runs[k]); if (v !== null) return v; }
+  }
+  const words = s.toLowerCase().replace(/-/g, ' ').match(/[a-z]+/g) || [];
+  let total = 0, cur = 0, any = false, dec = null;
+  for (const wd of words) {
+    if (dec !== null) { if (wd in EN_VAL && EN_VAL[wd] < 10) dec += String(EN_VAL[wd]); continue; }
+    if (wd === 'point' && any) { dec = ''; continue; }
+    if (wd === 'hundred') { cur = (cur || 1) * 100; any = true; }
+    else if (wd === 'thousand') { total += (cur || 1) * 1000; cur = 0; any = true; }
+    else if (wd in EN_VAL) { cur += EN_VAL[wd]; any = true; }
+  }
+  if (!any) return null;
+  return Number(String(total + cur) + (dec ? '.' + dec : ''));
+}
+function numRun(r) {
+  const i = r.search(/[点.]/);
+  if (i < 0) return cnRun(r);
+  const ip = r.slice(0, i), dp = r.slice(i + 1).replace(/[点.]/g, '');
+  const iv = ip ? cnRun(ip) : 0;
+  const ds = Array.from(dp).map(ch => /\d/.test(ch) ? ch : CN_VAL[ch]).filter(d => d !== undefined).join('');
+  if (iv === null) return null;
+  return ds ? Number(iv + '.' + ds) : iv;
+}
+function cnRun(r) {
+  if (/^\d+$/.test(r)) return Number(r);
+  let total = 0, cur = null, any = false;
+  for (const ch of r) {
+    const d = /\d/.test(ch) ? Number(ch) : CN_VAL[ch];
+    if (d !== undefined) { cur = cur === null ? d : cur * 10 + d; any = true; }
+    else if (ch === '十') { total += (cur === null ? 1 : cur) * 10; cur = null; any = true; }
+    else if (ch === '百') { total += (cur === null ? 1 : cur) * 100; cur = null; any = true; }
+    else if (ch === '千') { total += (cur === null ? 1 : cur) * 1000; cur = null; any = true; }
+  }
+  return any ? total + (cur || 0) : null;
+}
+function voiceCommand(text) {
+  const t = String(text || '').toLowerCase();
+  if (/(唔玩|不玩|停|结束|結束|唔做|不做了|stop|quit)/.test(t)) return 'stop';
+  if (/(唔知|不知道|唔识|唔識|不会|不會|don.?t know|no idea)/.test(t)) return 'dunno';
+  if (/(跳过|跳過|下一题|下一題|skip|next)/.test(t)) return 'skip';
+  if (/(再讲|再講|再说|再說|重复|重複|again|repeat|咩话|咩話|什么|什麼)/.test(t)) return 'repeat';
+  return null;
+}
+
+/* 音效：WebAudio 现合成，不用等网络 */
+let sfxCtx = null;
+function sfx(kind) {
+  try {
+    sfxCtx = sfxCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const notes = { good: [[880, 0], [1320, .09]], bad: [[220, 0], [196, .12]], combo: [[880, 0], [1100, .08], [1320, .16], [1760, .24]],
+                    listen: [[660, 0]] }[kind] || [];
+    const t0 = sfxCtx.currentTime + .01;
+    for (const [hz, at] of notes) {
+      const o = sfxCtx.createOscillator(), g = sfxCtx.createGain();
+      o.type = kind === 'bad' ? 'triangle' : 'sine'; o.frequency.value = hz;
+      g.gain.setValueAtTime(.0001, t0 + at); g.gain.exponentialRampToValueAtTime(.25, t0 + at + .015);
+      g.gain.exponentialRampToValueAtTime(.0001, t0 + at + (kind === 'listen' ? .12 : .22));
+      o.connect(g).connect(sfxCtx.destination); o.start(t0 + at); o.stop(t0 + at + .3);
+    }
+  } catch (e) { /* 没声音也照样判题 */ }
+}
+// 念一句并等它念完（最多 10 秒）；要是已经预取过同一句就直接用
+const ttsCache = new Map();
+function ttsAudio(text, lang) {
+  const key = lang + '|' + text;
+  let a = ttsCache.get(key);
+  if (!a) {
+    a = new Audio('/api/hw/tts?lang=' + encodeURIComponent(lang) + '&text=' + encodeURIComponent(text));
+    a.preload = 'auto';
+    ttsCache.set(key, a);
+    if (ttsCache.size > 12) ttsCache.delete(ttsCache.keys().next().value);
+  }
+  return a;
+}
+function speakWait(text, lang) {
+  return new Promise(res => {
+    if (!text) return res();
+    if (HW.audio) HW.audio.pause();
+    const a = ttsAudio(text, lang);
+    ttsCache.delete(lang + '|' + text);            // 用过就丢，下次同一句重新取（Audio 不能可靠重播）
+    HW.audio = a;
+    let done = false;
+    const fin = () => { if (!done) { done = true; clearTimeout(tm); res(); } };
+    const tm = setTimeout(fin, 10000);
+    a.addEventListener('ended', fin, { once: true });
+    a.addEventListener('error', fin, { once: true });
+    a.play().catch(fin);
+  });
+}
+const PRAISE = {
+  yue: { 3: '三连啱！', 5: '五连啱，劲呀！', 8: '八连啱，好犀利！', 10: '十连啱，冇得输！' },
+  zh: { 3: '三连对！', 5: '五连对，厉害！', 8: '八连对，太强了！', 10: '十连对，满分！' },
+  en: { 3: 'Three in a row!', 5: 'Five in a row!', 8: 'Eight in a row!', 10: 'Ten in a row!' },
+};
+const VOICE_SAY = {
+  wrong: { yue: (q, a) => `差少少！${q}係${a}`, zh: (q, a) => `差一点！${q}是${a}`, en: (q, a) => `Nice try! It's ${a}` },
+  unclear: { yue: '听唔清楚，再讲一次', zh: '没听清，再说一次', en: 'Sorry, say it again' },
+  silent: { yue: '讲个答案出嚟啦', zh: '说出你的答案吧', en: 'Say your answer' },
+  paused: { yue: '我等你，㩒继续就得', zh: '我等你，点继续就好', en: 'I will wait. Tap continue' },
+};
+const voiceOn = () => localStorage.getItem('flashVoice') !== 'off' && !document.body.classList.contains('mic-off');
+// 听孩子讲一句（听写/清单用）：客户端断句 + hub 识别，不经大模型
+function listenOnce(lang, wait) {
+  return fetch('/api/listen', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lang, wait: wait || 15 }) }).then(x => x.json()).catch(() => ({ status: 'error' }));
+}
+const listenCancel = () => fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {});
+const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+// 中文短句粗匹配：粤语/普通话常见写法统一后，按字算重合比例
+const ZH_NORM = [[/食/g, '吃'], [/咗|晒|好咗|完了|好了|完/g, ''], [/嘅/g, '的'], [/冲凉|沖涼/g, '洗澡'], [/执|執/g, '收拾'],
+                 [/书|書/g, '书'], [/喇|啦|了|呀|啊|㗎|咯|嘞|。|，|！|？|\s/g, '']];
+function zhNorm(t) { let x = String(t || ''); for (const [a, b] of ZH_NORM) x = x.replace(a, b); return x.toLowerCase(); }
+function overlap(item, heard) {
+  const a = Array.from(zhNorm(item)), h = zhNorm(heard);
+  if (!a.length) return 0;
+  return a.filter(ch => h.includes(ch)).length / a.length;
+}
+
 function flashView(body, opts) {
-  const level = FLASH_LEVELS[opts.level] ? opts.level : (ST.flashLevel || 'add20');
+  const level = FLASH_LEVELS[opts.level] ? opts.level : (ST.flashLevel || 'mixed');
   ST.flashLevel = level;
-  const names = flEN() ? FLASH_LEVELS_EN : FLASH_LEVELS;
-  body.innerHTML = `<div class="st-row">${Object.entries(names).map(([k, v]) =>
-      `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${v}</button>`).join('')}</div>
-    <div class="flash"><div class="flash-q" id="flQ">${flEN() ? 'Ready?' : '准备好就开始'}</div><div class="flash-a" id="flA"></div>
-      <div class="flash-meta" id="flMeta">${flEN() ? '10 questions. Say the answer or tap it' : '10 题一轮，说答案或者点数字'}</div>
-      <div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
-      <div class="st-row"><button class="pri st-go" id="flGo">${flEN() ? 'Start' : '开始'}</button>
-        <button id="flSay" hidden>${flEN() ? '🔊 Again' : '🔊 再念'}</button></div></div>`;
-  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => flashView(body, { level: b.dataset.lv })));
-  body.querySelectorAll('.pad button').forEach(b => b.addEventListener('click', () => flashKey(b.dataset.k)));
-  stEl('flGo').addEventListener('click', () => flashStart(level));
-  stEl('flSay').addEventListener('click', flashSay);
+  const v = localStorage.getItem('flashVoice') !== 'off';
+  const en = flEN(), names = en ? FLASH_LEVELS_EN : FLASH_LEVELS;
+  const meta = en ? (level === 'chain' ? '9 questions. I say the first half, you finish it' : level === 'mixed' ? '10 questions. 2 right in a row = level up' : '10 questions. Say or tap your answer')
+                  : (level === 'chain' ? '9 题一轮，我讲前半句，你接后半句' : level === 'mixed' ? '10 题一轮，连对两题升一关，答错降一关' : '10 题一轮');
+  body.innerHTML = `<div class="st-row">${Object.entries(names).map(([k, t]) =>
+      `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${t}</button>`).join('')}
+      <button class="st-pill voice-pill${v ? ' on' : ''}" id="flVoiceT">${v ? (en ? '🎤 Say it' : '🎤 讲答案') : (en ? '⌨ Tap it' : '⌨ 按答案')}</button></div>
+    <div class="flash"><div class="flash-q" id="flQ">${en ? 'Ready?' : '准备好就开始'}</div><div class="flash-a" id="flA"></div>
+      <div class="flash-voice" id="flV"></div>
+      <div class="flash-meta" id="flMeta">${meta}</div>
+      <div class="pad">${[1,2,3,4,5,6,7,8,9,'.',0,'⌫','✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
+      <button class="pri st-go" id="flGo">${en ? 'Start' : '开始'}</button></div>`;
+  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { flashStop(); flashView(body, { level: b.dataset.lv }); }));
   starRender();
+  body.querySelectorAll('.pad button').forEach(b => b.addEventListener('click', () => flashKey(b.dataset.k)));
+  stEl('flGo').addEventListener('click', () => {
+    const f = ST.flash;
+    if (f && f.paused && f.n <= f.total) { f.paused = false; stEl('flGo').hidden = true; flashAsk(); }
+    else flashStart(level);
+  });
+  stEl('flVoiceT').addEventListener('click', () => {
+    const on = localStorage.getItem('flashVoice') === 'off';
+    localStorage.setItem('flashVoice', on ? 'on' : 'off');
+    stEl('flVoiceT').classList.toggle('on', on); stEl('flVoiceT').textContent = on ? '🎤 讲答案' : '⌨ 按答案';
+    if (!on) { fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {}); flashVoiceLine(''); }
+    else if (ST.flash && ST.flash.q && !ST.flash.locked) flashAsk();
+  });
+  if (opts.auto) flashStart(level, true);      // 语音叫出来的：直接开始，不用再㩒
 }
-function flashStart(level) {
-  if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
-  ST.flash = { level, n: 0, total: 10, right: 0, wrong: [], input: '', started: Date.now(), q: null };
-  ST.flash.tick = setInterval(flashMeta, 500);
+function flashVoiceLine(t, cls) {
+  const el = stEl('flV'); if (!el) return;
+  el.textContent = t || ''; el.className = 'flash-voice' + (cls ? ' ' + cls : '');
+}
+function flashStop() {
+  const f = ST.flash;
+  if (f) { f.gen += 1; if (f.tick) clearInterval(f.tick); }
+  fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {});
+}
+async function flashStart(level, fromVoice) {
+  flashStop();
+  const f = ST.flash = { level, n: 0, total: level === 'chain' ? 9 : 10, right: 0, wrong: [], done: [], input: '', streak: 0, best: 0,
+                         started: Date.now(), q: null, gen: (ST.flash ? ST.flash.gen : 0) + 1, table: rnd(2, 9), pool: [],
+                         tier: Math.max(1, Math.min(7, (Number(localStorage.getItem('flashTier')) || 1) - 1)), up: 0 };
+  if (level === 'review') {
+    const d = await fetch('/api/hw/book?days=60').then(r => r.json()).catch(() => ({}));
+    const seen = new Set();
+    for (const m of (d.mistakes || [])) {
+      const q = String(m.question || '').replace(/\s*=\s*$/, '').trim(), a = Number(m.correct);
+      if (m.fixed || m.subject !== '口算' || !q || !Number.isFinite(a) || seen.has(q)) continue;
+      seen.add(q); f.pool.push({ q, a });
+    }
+    if (!f.pool.length) { toast('错题本里没有口算错题，好叻！'); return flashView(stEl('stBody'), { level: 'times' }); }
+    f.pool.sort(() => Math.random() - .5);
+    f.total = Math.min(10, f.pool.length);
+  }
+  if (['mixed', 'upper', 'olympiad'].includes(level)) await loadBank();
   QV.streak = 0; QV.roundStars = 0;
+  f.tick = setInterval(flashMeta, 500);
   stEl('flGo').hidden = true;
-  if (stEl('flSay')) stEl('flSay').hidden = false;
+  if (voiceOn()) {
+    flashVoiceLine('稍等…');
+    await fetch('/api/quiz/prepare', { method: 'POST' }).catch(() => {});   // 等小麦讲完、收起对话
+    if (f !== ST.flash || f.gen !== ST.flash.gen) return;
+  }
   flashNext();
-}
-function flashSay() {
-  const f = ST.flash; if (!f || !f.q) return;
-  quizSay(flashSpeech(f.q[0], ST.lang), ST.lang, true);
 }
 function flashNext() {
   const f = ST.flash;
   if (f.n >= f.total) return flashEnd();
-  f.q = flashQuestion(f.level); f.input = ''; f.n += 1;
-  stEl('flQ').textContent = f.q[0] + ' = ?';
+  f.q = flashQuestion(f.level, f); f.input = ''; f.n += 1; f.tries = 0;
+  stEl('flQ').textContent = f.q[3] || f.q[0].includes('=') ? f.q[0] : f.q[0] + ' = ?';   // 方程「□ + 3 = 8」本身带等号
+  stEl('flQ').className = 'flash-q' + (f.q[3] ? ' long' : '');
   stEl('flA').textContent = ''; stEl('flA').className = 'flash-a';
   flashMeta();
   studyPush();
-  flashSay();
+  if (voiceOn()) flashAsk(); else flashVoiceLine('');
+}
+async function flashAsk() {
+  const f = ST.flash, gen = f.gen, n = f.n, lang = ST.lang;
+  const stale = () => ST.flash !== f || f.gen !== gen || f.n !== n || f.locked || !voiceOn();
+  if (!stEl('stSheet').classList.contains('on')) return;
+  flashVoiceLine('🔊 读题…', 'speak');
+  await speakWait(questionSpeech(f.q, lang), lang);
+  for (let k = 0; k < 3; k++) {
+    if (stale()) return;
+    flashVoiceLine('🎤 在听…讲答案', 'listen'); sfx('listen');
+    const r = await fetch('/api/listen', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lang, wait: 7 }) }).then(x => x.json()).catch(() => ({ status: 'error' }));
+    if (stale()) return;
+    if (r.status === 'busy') { flashPause(false); return flashVoiceLine('小麦在讲嘢，㩒「继续」再答'); }
+    if (r.status === 'cancelled') return;
+    if (r.status === 'silent') {
+      // owner 2026-11-19「小朋友在点，就不要后台小麦提醒没说话了」：刚点过屏幕就安静地等键盘，不催
+      if (touchedRecently()) { flashVoiceLine(tr({ yue: '⌨ 用键盘答都得', zh: '⌨ 用键盘答也行', en: '⌨ Tap your answer' })); return; }
+      if (k === 0) { flashVoiceLine(''); await speakWait(VOICE_SAY.silent[lang], lang); continue; }
+      return flashPause(true);
+    }
+    if (r.status !== 'ok') { flashVoiceLine('听不到，可以用键盘答', ''); return; }
+    const cmd = voiceCommand(r.text), num = parseNum(r.text);
+    if (num === null && cmd === 'stop') { flashVoiceLine('听到：' + r.text); return flashEnd(true); }
+    if (num === null && cmd === 'repeat') { flashVoiceLine('听到：' + r.text); await speakWait(questionSpeech(f.q, lang), lang); continue; }
+    if (num === null && (cmd === 'dunno' || cmd === 'skip')) { flashVoiceLine('听到：' + r.text); f.input = ''; return flashCheck(true); }
+    if (num === null) {
+      flashVoiceLine('听到：' + (r.text || '（没听清）'));
+      if (k < 2) { await speakWait(VOICE_SAY.unclear[lang], lang); continue; }
+      return flashPause(true);
+    }
+    flashVoiceLine('听到：' + r.text);
+    f.input = String(num); stEl('flA').textContent = f.input;
+    return flashCheck(true);
+  }
+  flashPause(true);
+}
+function flashPause(say) {
+  const f = ST.flash; f.paused = true;
+  flashVoiceLine(flEN() ? '⏸ Tap Continue to answer' : '⏸ 㩒「继续」再答');
+  const go = stEl('flGo'); go.hidden = false; go.textContent = flEN() ? 'Continue' : '继续';
+  if (say && !touchedRecently()) speakText(VOICE_SAY.paused[ST.lang], ST.lang);
 }
 function flashMeta() {
   const f = ST.flash; if (!f) return;
   const sec = Math.round((Date.now() - f.started) / 1000);
-  const m = stEl('flMeta'); if (!m) return;
-  m.textContent = flEN() ? `Question ${f.n}/${f.total} · ${f.right} right · ${sec} s${QV.streak >= 2 ? ` · 🔥 ${QV.streak}` : ''}`
-                         : `第 ${f.n}/${f.total} 题 · 答对 ${f.right} · ${sec} 秒${QV.streak >= 2 ? ` · 🔥 连对 ${QV.streak}` : ''}`;
+  const m = stEl('flMeta');
+  const tier = f.level === 'mixed' ? ` · 第 ${f.tier} 关（${TIER_GRADE[f.tier]}）` : '';
+  if (m) m.textContent = `第 ${f.n}/${f.total} 题${tier} · 答对 ${f.right}${f.streak >= 2 ? ` · 🔥连对 ${f.streak}` : ''} · ${sec} 秒`;
 }
 function flashKey(k) {
   const f = ST.flash; if (!f || !f.q || f.locked) return;
   if (k === '⌫') f.input = f.input.slice(0, -1);
-  else if (k === '✓') { if (f.input) flashCheck(); return; }
-  else if (f.input.length < 4) f.input += k;
+  else if (k === '✓') { if (f.input) { fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {}); flashCheck(false); } return; }
+  else if (k === '.') { if (!f.input.includes('.')) f.input = (f.input || '0') + '.'; }
+  else if (f.input.length < 6) f.input += k;
   stEl('flA').textContent = f.input;
 }
-async function flashCheck(skipped) {
-  const f = ST.flash, ok = !skipped && Number(f.input) === f.q[1], a = stEl('flA');
+async function flashCheck(byVoice) {
+  const f = ST.flash, ok = f.input !== '' && Math.abs(Number(f.input) - f.q[1]) < 1e-6, a = stEl('flA'), lang = ST.lang;
+  if (f.level === 'mixed') {
+    if (ok) { f.up += 1; if (f.up >= 2 && f.tier < 7) { f.tier += 1; f.up = 0; f.levelUp = true; } }
+    else { f.tier = Math.max(1, f.tier - 1); f.up = 0; }
+    localStorage.setItem('flashTier', String(f.tier));
+  }
   f.locked = true;
-  let say;
-  if (ok) { f.right += 1; a.className = 'flash-a good'; a.textContent = f.input + ' ✓'; say = quizRight(1); }
-  else { QV.streak = 0;
-         f.wrong.push({ question: f.q[0] + ' =', child_answer: skipped ? '' : f.input, correct: String(f.q[1]), ok: false });
-         a.className = 'flash-a bad'; a.textContent = `${skipped ? '' : f.input + ' ✗  '}= ${f.q[1]}`;
-         const expr = flashSpeech(f.q[0], ST.lang).replace(/^What is |[，,]?(等于几多|等于多少)？$|\?$/g, '');
-         say = pickOne(KIND_WRONG[ST.lang] || KIND_WRONG.en) + (ST.lang === 'en' ? ` ${expr} is ${f.q[1]}.` : ` ${expr}等于${f.q[1]}。`); }
-  flashMeta(); studyPush();
-  const q = f.q;
-  await quizSay(say, ST.lang, false);
-  if (ST.flash !== f || f.q !== q) return;
-  f.locked = false; flashNext();
-}
-function flashEnd() {
-  const f = ST.flash; clearInterval(f.tick);
-  const sec = Math.round((Date.now() - f.started) / 1000);
-  f.q = null;
-  stEl('flQ').textContent = flEN() ? `${f.right} / ${f.total} right · ${sec} s` : `答对 ${f.right} / ${f.total}，用了 ${sec} 秒`;
-  stEl('flA').textContent = f.right === f.total ? (flEN() ? 'All correct! ⭐⭐⭐' : '全对！⭐⭐⭐')
-                          : (flEN() ? 'Missed ones went into your mistake book' : '错的题已放进错题本');
-  stEl('flA').className = 'flash-a';
-  const go = stEl('flGo'); go.hidden = false; go.textContent = flEN() ? 'Play again' : '再来一轮';
-  if (stEl('flSay')) stEl('flSay').hidden = true;
+  const item = { question: f.q[3] ? f.q[0] : f.q[0] + ' =', child_answer: f.input || '（不知道）', correct: fmt(f.q[1]), ok };
+  f.done.push(item);
+  if (ok) {
+    f.right += 1; f.streak += 1; f.best = Math.max(f.best, f.streak); QV.streak = f.streak;
+    a.className = 'flash-a good'; a.textContent = f.input + ' ✓';
+    starGain(1);                                                        // 小星星（2026-11-19）：答对 +1
+    if (f.streak % 3 === 0) setTimeout(() => starGain(1, STREAK[ST.lang](f.streak)), 600);   // 每连对 3 题再 +1
+    if (f.levelUp) setTimeout(() => starGain(1, tr({ yue: `升级！第${f.tier}关`, zh: `升级！第${f.tier}关`, en: `Level up! Level ${f.tier}` })), 1100);
+    let p = PRAISE[lang][f.streak];
+    if (f.levelUp) { f.levelUp = false; p = tr({ yue: `升级！第${f.tier}关`, zh: `升级！第${f.tier}关`, en: `Level up! Level ${f.tier}` }); }
+    sfx(p ? 'combo' : 'good');
+    flashMeta();
+    if (byVoice && p) await speakWait(p, lang);
+    else await new Promise(r => setTimeout(r, byVoice ? 350 : 500));
+  } else {
+    f.streak = 0; QV.streak = 0; f.wrong.push(item);
+    a.className = 'flash-a bad'; a.textContent = `${f.input || '?'} ✗  = ${fmt(f.q[1])}`;
+    sfx('bad'); flashMeta();
+    const ans = fmt(f.q[1]);
+    const say = f.q[3] || /[□(]/.test(f.q[0]) ? tr({ yue: `差少少！答案係${ans}`, zh: `差一点！答案是${ans}`, en: `Nice try! The answer is ${ans}` })
+      : VOICE_SAY.wrong[lang](questionSpeech([f.q[0], f.q[1], f.q[2]], lang).replace(/(係幾多？|等于几？|^What is |\?$)/g, ''), ans);
+    if (byVoice) await speakWait(say, lang);
+    else await new Promise(r => setTimeout(r, 1600));
+  }
+  if (ST.flash !== f) return;
+  f.locked = false;
   studyPush();
-  quizSay(quizRoundEnd('flash', f.level, f.right, f.total, sec), ST.lang, false);
-  if (f.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subject: '口算', source: 'flash', items: f.wrong.map((w, i) => ({ no: i + 1, ...w })) }) }).catch(() => {});
+  flashNext();
+}
+function flashEnd(early) {
+  const f = ST.flash; clearInterval(f.tick); f.gen += 1; f.q = null;
+  fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {});
+  const sec = Math.round((Date.now() - f.started) / 1000), asked = f.done.length || 1;
+  const stars = f.right === asked && asked >= f.total ? 3 : f.right / asked >= .7 ? 2 : f.right > 0 ? 1 : 0;
+  const en = flEN();
+  stEl('flQ').textContent = `${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}  ${en ? `${f.right} / ${f.done.length} right` : `答对 ${f.right} / ${f.done.length}`}`;
+  stEl('flA').textContent = en
+    ? `${sec} s · ⭐ +${QV.roundStars}${f.best >= 3 ? ` · best streak ${f.best}` : ''}${f.wrong.length ? ' · misses saved to your mistake book' : ''}`
+    : `${sec} 秒 · ⭐ +${QV.roundStars}${f.best >= 3 ? ` · 最多连对 ${f.best}` : ''}${f.wrong.length ? ' · 错的已放进错题本' : ''}`;
+  stEl('flA').className = 'flash-a end';
+  flashVoiceLine('');
+  const go = stEl('flGo'); go.hidden = false; go.textContent = flEN() ? 'Play again' : '再来一轮';
+  const all = f.right === f.done.length && f.done.length >= f.total;
+  const say = { yue: all ? '全部啱晒，三粒星，好叻！' : `啱咗${f.right}题，攞到${stars}粒星${f.wrong.length ? '，错咗嘅放咗入错题本' : ''}`,
+                en: all ? 'All correct, three stars!' : `${f.right} right, ${stars} stars`,
+                zh: all ? '全对了，三颗星，真棒！' : `对了${f.right}题，得了${stars}颗星${f.wrong.length ? '，错的放进错题本了' : ''}` }[ST.lang];
+  studyPush();
+  const sayStars = f.done.length ? quizRoundEnd('flash', f.level, f.right, f.done.length, sec) : '';   // 记一轮 + 讲今轮攞了几粒星
+  if (!early || f.done.length) speakText(sayStars || say, ST.lang);
+  // 对的也记：错题本据此把以前错过、这次答对的题标成「改对了」，本周小结的正确率也才准
+  if (f.done.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subject: '口算', source: f.level === 'review' ? 'review' : 'flash',
+                           items: f.done.map((w, i) => ({ no: i + 1, ...w })) }) }).catch(() => {});
 }
 
 /* -- 听写 -- */
@@ -2793,20 +3202,44 @@ function dictView(body, opts) {
     <div class="dict"><div class="dict-n" id="dcN">共 ${words.length} 个词</div>
       <div class="dict-w" id="dcW">准备好纸笔</div>
       <div class="st-row center"><button class="pri st-go" id="dcNext">开始</button><button id="dcAgain" hidden>再念一次</button></div>
-      <div class="st-row center"><button id="dcShoot" hidden>写完了，拍照批改</button></div></div>`;
+      <div class="st-row center"><button id="dcShoot" hidden>写完了，拍照批改</button></div>
+      <div class="flash-voice" id="dcV"></div></div>`;
   stEl('dcNext').addEventListener('click', dictNext);
   stEl('dcAgain').addEventListener('click', dictSay);
-  stEl('dcShoot').addEventListener('click', () => { stClose(); hwOpen(true, false); hwCapture({ expected: ST.dict.words }); });
+  stEl('dcShoot').addEventListener('click', dictShoot);
   stEl('dcBook').addEventListener('click', async () => { const w = await dictFromBook();
     if (!w.length) return toast('错题本里没有可以听写的词');
     dictView(body, { words: w }); });
   stEl('dcSample').addEventListener('click', () => dictView(body, { words: DICT_SAMPLE[ST.lang] }));
+  if (opts.auto && opts.words && opts.words.length) dictNext();
 }
-function dictSay() {
+function dictShoot() { if (ST.dict) ST.dict.gen = (ST.dict.gen || 0) + 1; listenCancel(); stClose(); hwOpen(true, false); hwCapture({ expected: ST.dict.words }); }
+const dictLine = t => { const el = stEl('dcV'); if (el) { el.textContent = t || ''; el.className = 'flash-voice' + (/在听/.test(t || '') ? ' listen' : ''); } };
+// 念两遍，念完一直听孩子的口令（写字要时间，每次等 15 秒，最多约 2 分钟）：
+// 「下一个/写好了」→ 下一个；「再念一次」→ 重念；「写完了」→ 拍照批改。孩子边写边念词这些别的话一律不理。
+async function dictSay() {
   const d = ST.dict, w = d.words[d.i];
   if (w == null) return;
-  speakText(w, isLatin(w) ? 'en' : ST.lang);
-  setTimeout(() => speakText(w, isLatin(w) ? 'en' : ST.lang), 3500);   // 念两遍
+  const gen = d.gen = (d.gen || 0) + 1, lang = isLatin(w) ? 'en' : ST.lang;
+  const stale = () => ST.dict !== d || d.gen !== gen || ST.mode !== 'dictation' || !stEl('stSheet').classList.contains('on');
+  listenCancel();
+  dictLine('🔊 念词…');
+  await speakWait(w, lang); await sleepMs(1500); if (stale()) return;
+  await speakWait(w, lang); if (stale()) return;
+  if (!voiceOn()) return dictLine('');
+  const last = d.i + 1 >= d.words.length;
+  for (let k = 0; k < 8; k++) {
+    dictLine(`🎤 在听…写好讲「${last ? '写完了' : '下一个'}」，听唔清讲「再念一次」`);
+    const r = await listenOnce(ST.lang, 15);
+    if (stale()) return;
+    if (r.status === 'silent') continue;
+    if (r.status !== 'ok') break;
+    const t = r.text || '';
+    if (/(再念|再讲|再講|再说|再說|重复|重複|听唔清|聽唔清|没听清|again|repeat)/i.test(t)) return dictSay();
+    if (/(写完|寫完|拍照|影相|批改|finished)/i.test(t)) return last ? dictShoot() : dictNext();
+    if (/(下一个|下一個|下个|下個|好咗|好了|写好|寫好|next|done|ok)/i.test(t)) return dictNext();
+  }
+  if (!stale()) dictLine('🎤 停咗听，㩒按钮继续');
 }
 function dictNext() {
   const d = ST.dict;
@@ -2814,6 +3247,7 @@ function dictNext() {
   const n = stEl('dcN'), w = stEl('dcW'), next = stEl('dcNext');
   stEl('dcAgain').hidden = false;
   if (d.i >= d.words.length) {
+    d.gen = (d.gen || 0) + 1; listenCancel(); dictLine('');
     n.textContent = '听写完了'; w.textContent = '检查一下，再拍照批改';
     next.hidden = true; stEl('dcAgain').hidden = true; stEl('dcShoot').hidden = false;
     speakText({ yue: '写完喇，检查下再影相', en: 'All done. Check your work, then take a photo', zh: '写完了，检查一下再拍照' }[ST.lang], ST.lang);
@@ -2872,7 +3306,10 @@ async function readToggle() {
     stLive(false);
     await fetch('/api/rec/start', { method: 'POST' });
     r.recording = true; go.textContent = '读完了'; go.classList.add('rec');
-    stEl('rdScore').textContent = '在听… 读完点「读完了」';
+    stEl('rdScore').textContent = '在听… 读完停一停就得，或者点「读完了」';
+    // 读完静 2.5 秒自动收尾（不用再点）
+    fetch('/api/rec/wait', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ silence: 2.5 }) })
+      .then(x => x.json()).then(w => { if (w.status === 'ended' && ST.read === r && r.recording) readToggle(); }).catch(() => {});
     return;
   }
   r.recording = false; go.textContent = '在听写…'; go.disabled = true; go.classList.remove('rec');
@@ -2903,8 +3340,27 @@ function readCompare(ref, heard) {
   stEl('rdText').innerHTML = html;
   const pct = n ? Math.round(hit.filter(Boolean).length * 100 / n) : 0;
   stEl('rdScore').textContent = heard ? `读对 ${pct}%，红色是读漏或读错的` : '没听到声音，靠近一点再读';
-  if (heard) speakText({ yue: pct >= 90 ? '读得好好！' : '红色嗰啲再读多次', en: pct >= 90 ? 'Great reading!' : 'Try the red words again',
-                         zh: pct >= 90 ? '读得很好！' : '红色的再读一遍' }[ST.lang], ST.lang);
+  if (!heard) return;
+  // 语音点评：百分比 + 星星 + 点名最多两处读漏的（连着漏的算一处）
+  const miss = [];
+  { let cur = '', k2 = 0;
+    for (const piece of refRaw) {
+      const isTok = latin ? /^[A-Za-z0-9']+$/.test(piece) : /[一-鿿0-9a-zA-Z]/.test(piece);
+      if (!isTok) { if (!latin && cur) { miss.push(cur); cur = ''; } continue; }
+      if (!hit[k2]) cur += (latin && cur ? ' ' : '') + piece; else if (cur) { miss.push(cur); cur = ''; }
+      k2++;
+    }
+    if (cur) miss.push(cur); }
+  const stars = pct >= 95 ? 3 : pct >= 80 ? 2 : pct >= 50 ? 1 : 0;
+  stEl('rdScore').textContent = `${'★'.repeat(stars)}${'☆'.repeat(3 - stars)} 读对 ${pct}%` + (miss.length ? '，红色是读漏或读错的' : '');
+  const top = miss.sort((a, b) => b.length - a.length).slice(0, 2).map(x => x.slice(0, 8));
+  const L = ST.lang;
+  const head = { yue: `读对${pct}%，${stars}粒星。`, zh: `读对了${pct}%，${stars}颗星。`, en: `${pct} percent, ${stars} stars. ` }[L];
+  const tail = !top.length ? { yue: '全部读啱，好叻！', zh: '全都读对了，真棒！', en: 'Perfect reading!' }[L]
+    : pct >= 90 ? { yue: `好叻！就差「${top.join('」同「')}」`, zh: `很棒！只差「${top.join('」和「')}」`, en: `Great! Just check: ${top.join(', ')}` }[L]
+    : { yue: `「${top.join('」同「')}」再读多次`, zh: `「${top.join('」和「')}」再读一遍`, en: `Try again: ${top.join(', ')}` }[L];
+  if (stars === 3) sfx('combo'); else if (stars >= 1) sfx('good');
+  speakText(head + tail, L);
 }
 
 /* -- TIMO 奥数练习（2026-11-19）--
@@ -2939,73 +3395,137 @@ function timoView(body, opts) {
       <span class="st-note">${esc(note)}</span></div>
     <div class="timo"><div class="timo-q" id="tqQ">${esc(t.ready)}</div>
       <div class="timo-a" id="tqA"></div>
+      <div class="flash-voice" id="tqV"></div>
       <div class="timo-meta" id="tqMeta">${esc(t.meta)}</div>
       <div id="tqPad"></div>
       <div class="st-row"><button class="pri st-go" id="tqGo">${esc(t.start)}</button>
-        <button id="tqSay" hidden>${esc(t.again)}</button><button id="tqHint" hidden>${esc(t.hint)}</button></div></div>`;
-  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => timoView(body, { level: b.dataset.lv })));
+        <button id="tqSay" hidden>🔊 ${esc(t.again)}</button><button id="tqHint" hidden>💡 ${esc(t.hint)}</button>
+        <button class="pri" id="tqNext" hidden>${timoUI() ? 'Next ▶' : '下一题 ▶'}</button></div></div>`;
+  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { timoStop(); timoView(body, { level: b.dataset.lv }); }));
   stEl('tqGo').addEventListener('click', () => timoStart(level, opts));
   stEl('tqSay').addEventListener('click', timoSay);
   stEl('tqHint').addEventListener('click', timoHint);
+  stEl('tqNext').addEventListener('click', () => { quizCancel(); listenCancel(); TIMO.n = Math.max(TIMO.n, TIMO.answered || 0); timoNext(); });
+  starRender();
 }
-function timoStart(level, opts) {
+function timoStop() { TIMO.gen = (TIMO.gen || 0) + 1; TIMO.q = null; listenCancel(); }
+async function timoStart(level, opts) {
   const B = timoBank();
   const n = Number(opts && opts.count) || 8;
+  timoStop();
+  TIMO.level = level;
   TIMO.list = B.pick(level, n);
-  TIMO.n = 0; TIMO.right = 0; TIMO.wrong = []; TIMO.input = ''; TIMO.hintUsed = 0;
+  TIMO.n = 0; TIMO.right = 0; TIMO.wrong = []; TIMO.input = ''; TIMO.hintUsed = 0; TIMO.answered = 0;
   QV.streak = 0; QV.roundStars = 0;
   TIMO.total = TIMO.list.length; TIMO.started = Date.now();
   stEl('tqGo').hidden = true;
   stEl('tqSay').hidden = false; stEl('tqHint').hidden = false;
+  if (voiceOn()) await fetch('/api/quiz/prepare', { method: 'POST' }).catch(() => {});   // 等小麦讲完、收起对话再念题
   timoNext();
 }
 function timoText(q) {
   return ST.lang === 'en' ? q.qe : ST.lang === 'yue' ? q.qy : q.q;
 }
-function timoSay() {
-  const q = TIMO.q; if (!q) return;
-  const opts = q.ans === 'choice' && q.opts ? (ST.lang === 'en' ? ' Is it ' + q.opts.join(', or ') + '?' : ' 选：' + q.opts.join('，')) : '';
-  quizSay(timoText(q) + opts, ST.lang, true);
+function timoOptsSpeech(q) {
+  if (q.ans !== 'choice' || !q.opts) return '';
+  return ST.lang === 'en' ? ' Is it ' + q.opts.join(', or ') + '?' : ' 选：' + q.opts.join('，');
 }
+function tqVoice(t, cls) { const el = stEl('tqV'); if (el) { el.textContent = t || ''; el.className = 'flash-voice' + (cls ? ' ' + cls : ''); } }
+/* 选择题口头作答：字母 A-D、选项原文、或数字等于某个选项 */
+function timoMatchChoice(q, text) {
+  const t = timoNorm(text);
+  const letter = (String(text || '').trim().match(/^[a-dA-D][.。!！]?$/) || [''])[0][0];
+  if (letter) return q.opts[letter.toUpperCase().charCodeAt(0) - 65] || null;
+  const hit = q.opts.find(o => timoNorm(o) && t.includes(timoNorm(o)));
+  if (hit) return hit;
+  const v = parseNum(text);
+  return v === null ? null : (q.opts.find(o => timoNorm(o) === String(v)) || null);
+}
+/* 念题 → 本机断句听一句（/api/listen，hub 只做识别，不进大模型）→ 判。和闪卡 flashAsk 同一套 */
+async function timoAsk(readQuestion, prefix) {
+  const q = TIMO.q, gen = TIMO.gen, lang = ST.lang;
+  const stale = () => TIMO.q !== q || TIMO.gen !== gen || TIMO.locked || !stEl('stSheet').classList.contains('on');
+  if (!q) return;
+  const text = [prefix || '', readQuestion ? timoText(q) + timoOptsSpeech(q) : ''].filter(Boolean).join(' ');
+  if (text) { tqVoice(timoUI() ? '🔊 Reading…' : '🔊 读题…', 'speak'); await quizSay(text, lang, false); }
+  if (stale() || !voiceOn()) { if (!stale()) tqVoice(''); return; }
+  for (let k = 0; k < 3; k++) {
+    if (stale()) return;
+    tqVoice(timoUI() ? '🎤 Listening… say your answer' : '🎤 在听…讲答案', 'listen'); sfx('listen');
+    const r = await listenOnce(lang, 8);
+    if (stale()) return;
+    if (r.status === 'cancelled') return;
+    if (r.status === 'busy') return tqVoice(timoUI() ? 'Tap 🔊 to hear it again' : '㩒 🔊 再听一次');
+    if (r.status === 'silent') {
+      if (touchedRecently() || k > 0) return tqVoice(timoUI() ? '⌨ Tap your answer, or 🔊 to hear it again' : '⌨ 点答案，或者 🔊 再听一次');
+      tqVoice(''); await speakWait(VOICE_SAY.silent[lang], lang); continue;
+    }
+    if (r.status !== 'ok') return tqVoice(timoUI() ? 'Tap your answer' : '点答案就行');
+    tqVoice((timoUI() ? 'Heard: ' : '听到：') + (r.text || ''));
+    const cmd = voiceCommand(r.text), low = String(r.text || '').toLowerCase();
+    if (cmd === 'stop') return stClose();
+    if (cmd === 'repeat') { await speakWait(timoText(q) + timoOptsSpeech(q), lang); continue; }
+    if (cmd === 'skip') return timoAnswer('__skip__', '—');
+    if (cmd === 'dunno' || /提示|hint|help|clue/.test(low)) return timoHint();
+    const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (() => { const v = parseNum(r.text); return v === null ? null : String(v); })();
+    if (ans !== null && ans !== undefined) return timoAnswer(ans, ans);
+    if (k < 2) await speakWait(q.ans === 'choice' ? (timoUI() ? 'Which one? Say one of the choices.' : '选边个？讲一个选项') : VOICE_SAY.unclear[lang], lang);
+  }
+  tqVoice(timoUI() ? '⌨ Tap your answer' : '⌨ 点答案');
+}
+function timoSay() { const q = TIMO.q; if (!q) return; listenCancel(); timoAsk(true); }
 function timoHint() {
-  const q = TIMO.q; if (!q) return;
+  const q = TIMO.q; if (!q || TIMO.locked) return;
   TIMO.hintUsed += 1;
   const t = ST.lang === 'en' ? q.hinte : ST.lang === 'yue' ? q.hinty : q.hint;
   const note = stEl('tqA');
   if (note) { note.textContent = '💡 ' + t; note.className = 'timo-a'; }
-  quizSay(t, ST.lang, true);
+  listenCancel();
+  timoAsk(false, t);
 }
 function timoNext() {
-  const q = TIMO.list[TIMO.n];
+  const q = TIMO.list && TIMO.list[TIMO.n];
   if (!q) return timoEnd();
+  TIMO.gen = (TIMO.gen || 0) + 1;
   TIMO.q = q; TIMO.input = ""; TIMO.locked = false; TIMO.hintUsed = 0; TIMO.tries = 0;
   const n = stEl('tqQ'), a = stEl('tqA'), pad = stEl('tqPad');
   // owner 2026-11-19「出题的时候，题目在屏幕也要有」：题面整句显示，不只念；题号和题型放到下面一行
   n.textContent = timoText(q);
   a.className = 'timo-a'; a.textContent = '';
+  stEl('tqNext').hidden = true;
   stEl('tqMeta').textContent = timoUI()
     ? `Question ${TIMO.n + 1} / ${TIMO.total} · say or tap your answer · ⭐ ${QV.roundStars}`
     : `第 ${TIMO.n + 1} / ${TIMO.total} 题（${q.sec}）· 说答案或点 · ⭐ ${QV.roundStars}`;
   pad.innerHTML = q.ans === 'choice'
-    ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${esc(o)}</button>`).join('')}</div>`
+    ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(o)}</button>`).join('')}</div>`
     : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`;
   if (q.ans === 'choice') {
-    pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => timoAnswer(q.opts[Number(b.dataset.o)], b.textContent)));
+    pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => { listenCancel(); timoAnswer(q.opts[Number(b.dataset.o)], q.opts[Number(b.dataset.o)]); }));
   } else {
     pad.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => timoKey(b.dataset.k)));
   }
   studyPush();
-  setTimeout(timoSay, 250);
+  setTimeout(() => { if (TIMO.q === q) timoAsk(true); }, 250);
 }
 function timoKey(k) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
   if (k === '⌫') TIMO.input = TIMO.input.slice(0, -1);
-  else if (k === '✓') { if (TIMO.input) timoAnswer(TIMO.input, TIMO.input); return; }
+  else if (k === '✓') { if (TIMO.input) { listenCancel(); timoAnswer(TIMO.input, TIMO.input); } return; }
   else if (TIMO.input.length < 6) TIMO.input += k;
   stEl('tqA').textContent = TIMO.input;
   stEl('tqA').className = 'timo-a';
 }
 function timoNorm(s) { return String(s == null ? "" : s).replace(/[\s,，、。.元蚊$]/g, "").toLowerCase(); }
+/* 选项按钮的状态要看得见（11-19 09:06 孩子在讲解时连点「P」30 多下，按钮锁了却没任何样子）：
+   错的那个变红并禁用；揭晓/答对后正确项变绿、其余全部禁用，出「下一题 ▶」 */
+function timoMarkOpts(q, wrongOpt, reveal) {
+  document.querySelectorAll('#tqPad [data-o]').forEach(b => {
+    const o = q.opts[Number(b.dataset.o)];
+    if (wrongOpt !== undefined && timoNorm(o) === timoNorm(wrongOpt)) { b.classList.add('bad'); b.disabled = true; }
+    if (reveal) { b.disabled = true; if (timoNorm(o) === timoNorm(q.a)) b.classList.add('good'); }
+  });
+  if (reveal) document.querySelectorAll('#tqPad [data-k]').forEach(b => { b.disabled = true; });
+}
 async function timoAnswer(given, shown) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
   TIMO.locked = true;
@@ -3014,20 +3534,24 @@ async function timoAnswer(given, shown) {
   const a = stEl('tqA');
   const exp = ST.lang === 'en' ? q.expe : (q.exp || q.expe);
   let say;
+  tqVoice('');
   if (ok) {
     TIMO.right += 1;
     a.className = 'timo-a good';
     a.textContent = `${shown} ✓  ${exp}`;
     say = quizRight(TIMO.tries || TIMO.hintUsed ? 1 : 2) + ' ' + exp;   // 自己第一次就对 2 颗，提示/再想之后对 1 颗
+    sfx('good');
   } else if (!skipped && !TIMO.tries) {
     // 第一次错：先鼓励，给提示，再想一次（不揭答案）
     TIMO.tries = 1; QV.streak = 0;
     const hint = ST.lang === 'en' ? q.hinte : ST.lang === 'yue' ? q.hinty : q.hint;
     a.className = 'timo-a bad';
     a.textContent = `${shown} ✗  💡 ${hint}`;
+    if (q.ans === 'choice') timoMarkOpts(q, given, false);
+    sfx('bad');
     TIMO.locked = false; TIMO.input = '';
     studyPush();
-    quizSay(pickOne(TRY_AGAIN[ST.lang] || TRY_AGAIN.en) + ' ' + hint, ST.lang, true);
+    timoAsk(false, pickOne(TRY_AGAIN[ST.lang] || TRY_AGAIN.en) + ' ' + hint);
     return;
   } else {
     QV.streak = 0;
@@ -3036,8 +3560,11 @@ async function timoAnswer(given, shown) {
     const reveal = { yue: '答案系', en: 'The answer is', zh: '答案是' }[ST.lang];
     a.textContent = `${skipped ? '' : shown + ' ✗  '}${reveal} ${q.a}. ${exp}`;
     say = pickOne(KIND_WRONG[ST.lang] || KIND_WRONG.en) + ' ' + reveal + ' ' + q.a + '. ' + exp;
+    if (!skipped) sfx('bad');
   }
-  TIMO.n += 1;
+  if (q.ans === 'choice') timoMarkOpts(q, ok ? undefined : given, true); else timoMarkOpts(q, undefined, true);
+  TIMO.n += 1; TIMO.answered = TIMO.n;
+  stEl('tqNext').hidden = false;
   studyPush();
   await quizSay(say, ST.lang, false);
   if (TIMO.q !== q) return;
@@ -3053,7 +3580,8 @@ function timoEnd() {
   stEl('tqA').className = 'timo-a';
   stEl('tqA').textContent = TIMO.right === TIMO.total ? t.allRight : t.inBook;
   stEl('tqPad').innerHTML = '';
-  stEl('tqSay').hidden = true; stEl('tqHint').hidden = true;
+  tqVoice('');
+  stEl('tqSay').hidden = true; stEl('tqHint').hidden = true; stEl('tqNext').hidden = true;
   const go = stEl('tqGo'); go.hidden = false; go.textContent = t.retry;
   studyPush();
   quizSay(quizRoundEnd('timo', TIMO.level, TIMO.right, TIMO.total, sec), ST.lang, false);
@@ -3073,12 +3601,68 @@ function routineView(body, opts) {
       || '<div class="st-note">还没有，可以说「早上清单：刷牙、吃早餐」</div>'}</div>`;
   };
   body.innerHTML = `<div class="rt">${col('morning', '早上')}${col('evening', '晚上')}</div>
-    <div class="st-note">改清单直接说，例如「晚上清单加冲凉」。每天自动清零。</div>`;
+    <div class="flash-voice" id="rtV"></div>
+    <div class="st-note">做完一样直接讲，例如「刷完牙了」；讲「仲有咩」听剩低嘅。改清单也直接说，例如「晚上清单加冲凉」。每天自动清零。</div>`;
+  if (opts && opts.which) ST.rtWhich = opts.which;
+  if (voiceOn() && !ST.rtLoop) routineListen();
+  else if (ST.rtLoop) { const v = stEl('rtV'); if (v) { v.textContent = ST.rtLine || ''; v.className = 'flash-voice listen'; } }
   body.querySelectorAll('.rt-item').forEach(b => b.addEventListener('click', async () => {
     const on = !b.classList.contains('on');
     await fetch('/api/routine/tick', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ list: b.dataset.list, index: Number(b.dataset.i), done: on }) });
   }));
+}
+
+// 清单语音打勾：面板开着就一直听（每次 15 秒），2 分钟没人讲话就停
+function rtLists() {
+  const r = (FAM.state && FAM.state.routine) || {};
+  const pref = ST.rtWhich || (new Date().getHours() < 14 ? 'morning' : 'evening');
+  return [pref, pref === 'morning' ? 'evening' : 'morning'].map(k => ({ key: k, items: (r[k] || {}).items || [], done: new Set((r[k] || {}).done || []) }));
+}
+function rtSay(text) { return speakWait(text, ST.lang); }
+const rtLine = t => { ST.rtLine = t; const v = stEl('rtV'); if (v) { v.textContent = t || ''; v.className = 'flash-voice' + (/在听/.test(t || '') ? ' listen' : ''); } };
+async function routineListen() {
+  const gen = ST.rtLoop = (ST.rtGen = (ST.rtGen || 0) + 1);
+  const stale = () => ST.rtGen !== gen || ST.mode !== 'routine' || !stEl('stSheet').classList.contains('on') || !voiceOn();
+  const L = ST.lang;
+  let idleSince = Date.now();
+  try {
+    await fetch('/api/quiz/prepare', { method: 'POST' }).catch(() => {});   // 等小麦讲完「清单喺屏幕上」再听
+    while (!stale() && Date.now() - idleSince < 120000) {
+      rtLine('🎤 在听…做完一样就讲，例如「刷完牙了」');
+      const r = await listenOnce(L, 15);
+      if (stale()) return;
+      if (r.status === 'silent') continue;
+      if (r.status === 'cancelled') break;                      // 别的地方叫停（关面板、换功能）
+      if (r.status !== 'ok') { await sleepMs(1500); continue; }   // busy：小麦在讲嘢，等一下再听
+      idleSince = Date.now();
+      const t = r.text || '', lists = rtLists();
+      const left = lists[0].items.filter((_, i) => !lists[0].done.has(i));
+      if (/(仲有咩|仲有乜|还有什么|還有什麼|还要做|剩低|剩下|下一样|下一樣|what.?s left|next)/i.test(t)) {
+        rtLine('听到：' + t);
+        await rtSay(left.length ? { yue: `仲有${left.length}样：${left.join('，')}`, zh: `还有${left.length}项：${left.join('，')}`, en: `${left.length} left: ${left.join(', ')}` }[L]
+                                : { yue: '全部做晒喇', zh: '全部做完了', en: 'All done' }[L]);
+        continue;
+      }
+      let best = null;
+      for (const l of lists) l.items.forEach((it, i) => {
+        if (l.done.has(i)) return;
+        const sc = overlap(it, t);
+        if (sc >= 0.5 && (!best || sc > best.sc)) best = { key: l.key, i, it, sc, l };
+      });
+      if (!best) { rtLine('听到：' + t + '（清单入面冇呢样）'); continue; }
+      rtLine('✓ ' + best.it);
+      await fetch('/api/routine/tick', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ list: best.key, index: best.i, done: true }) }).catch(() => {});
+      best.l.done.add(best.i);
+      const rest = best.l.items.filter((_, i) => !best.l.done.has(i));
+      if (!rest.length) { sfx('combo'); await rtSay({ yue: '全部搞掂，好叻！', zh: '全部完成，真棒！', en: 'All done. Well done!' }[L]); }
+      else { sfx('good'); await rtSay({ yue: `${best.it}，搞掂！下一样：${rest[0]}`, zh: `${best.it}，完成！下一项：${rest[0]}`, en: `${best.it}, done! Next: ${rest[0]}` }[L]); }
+    }
+    if (!stale()) rtLine('🎤 停咗听，再开清单或者㩒一下就得');
+  } finally {
+    if (ST.rtGen === gen) ST.rtLoop = 0;
+  }
 }
 
 /* -- 家庭状态：留言横幅、电视限时 -- */
@@ -3099,7 +3683,7 @@ function famApply(f) {
     bar.hidden = !html;
     FAM.tvEnd = tv ? Date.now() + tv.left * 1000 : null;
   }
-  if (ST.mode === 'routine' && stEl('stSheet').classList.contains('on')) routineView(stEl('stBody'));
+  if (ST.mode === 'routine' && stEl('stSheet').classList.contains('on')) routineView(stEl('stBody'), {});
 }
 setInterval(() => { const el = stEl('famTvLeft'); if (el && FAM.tvEnd) el.textContent = Math.max(0, Math.ceil((FAM.tvEnd - Date.now()) / 60000)); }, 15000);
 if (stEl('famBar')) stEl('famBar').addEventListener('click', async ev => {

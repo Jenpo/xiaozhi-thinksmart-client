@@ -143,10 +143,22 @@ PAGE_JS = r"""
     stLive(false);
     window.__step='flash';
     // 闪卡：开一轮、答一题、键盘可用
-    stOpen('flash'); await sleep(50); flashStart('add20'); const q = ST.flash.q;
-    String(q[1]).split('').forEach(k => flashKey(k)); flashKey('✓'); await sleep(50);
-    C('flash:correct counted', ST.flash.right === 1);
-    clearInterval(ST.flash.tick); stClose();
+    // 2026-11-19：flashStart 从 11-17 起是 async（先 /api/quiz/prepare），要 await；测试关掉语音答题（不出声），
+    // 也不往真客户端记星星/做题现场/错题本（孩子的积分不能被回归测试加分）
+    const realFetch = window.fetch, prevVoice = localStorage.getItem('flashVoice');
+    window.fetch = (u, o) => /\/api\/(stars\/add|study\/|hw\/record|quiz\/prepare|listen)/.test(String(u))
+      ? Promise.resolve(new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } })) : realFetch(u, o);
+    localStorage.setItem('flashVoice', 'off');
+    try {
+      stOpen('flash'); await sleep(50); await flashStart('add20'); const q = ST.flash.q;
+      String(q[1]).split('').forEach(k => flashKey(k)); flashKey('✓'); await sleep(50);
+      C('flash:correct counted', ST.flash.right === 1);
+      C('flash:star given', QV.roundStars >= 1);
+      clearInterval(ST.flash.tick); stClose();
+    } finally {
+      window.fetch = realFetch;
+      if (prevVoice === null) localStorage.removeItem('flashVoice'); else localStorage.setItem('flashVoice', prevVoice);
+    }
     // 朗读对齐
     const el = document.createElement('div');
     C('read:compare fn', typeof readCompare === 'function');

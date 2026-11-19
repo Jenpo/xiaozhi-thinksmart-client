@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import time
 import uuid
 
@@ -44,6 +45,15 @@ REC_CHUNK = 9.0              # hub /kiosk/asr 一次最多 10 s
 UI_EVENTS = ('card', 'study', 'say', 'study_answer')
 MAX_ROUNDS = 30
 QUIZ_STALE = 600            # 页面 10 分钟没推做题现场：当作没在做
+# 语音答题（口算闪卡等，2026-11-17）：页面念完题后 POST /api/listen，这里录一句、自动断句、交 hub 识别。
+# 不经大模型：语音回合首句 p50 3 s，每题等 3 s 节奏全断；hub /kiosk/asr 一句 ~0.4-0.9 s。
+LISTEN_WAIT = 7.0            # 念完题后等开口
+LISTEN_MAX = 6.0             # 一句最长
+LISTEN_END = 0.5             # 说完后静这么久算答完（设备实测：答完到判定 ≈ 这个 + hub 识别 1.1-1.4 s）
+LISTEN_PRE = 0.2             # 开口前多留一点，第一个字不被切
+# 单个短音节（七、九、一百）hub 识别常错成「3」「じ」「一把」：前面垫一句同语言的「答案係」锁住语种，
+# TTS 实测 12/12 全对（不垫 9/12）。识别完再把垫话剥掉。
+CARRIER = {'yue': '答案係', 'zh': '答案是', 'en': 'The answer is'}
 LISTS = ('morning', 'evening')
 DEFAULT_ROUTINE = {'morning': ['刷牙洗脸', '吃早餐', '执好书包'], 'evening': ['做功课', '冲凉', '执好听日嘅书包']}
 
@@ -75,6 +85,9 @@ class Family:
         self.quiz = None             # 页面推来的做题现场（只在内存，重启就没了）
         self.rec = None              # 录音中：[float32 块...]
         self.rec_started = 0.0
+        self.lis = None              # 语音答题在听：[float32 块...]
+        self.lis_gen = 0             # 每次 listen/cancel 加一，旧的那次自己退出
+        self.carriers = {}           # lang -> int16 PCM（含尾部 0.15 s 静音）
         self._load()
 
     # ---- 存取 ----
@@ -276,6 +289,9 @@ class Family:
         rec = self.rec
         if rec is not None and time.monotonic() - self.rec_started < REC_MAX:
             rec.append(np.array(block, dtype=np.float32).reshape(-1))
+        lis = self.lis
+        if lis is not None:
+            lis.append(np.array(block, dtype=np.float32).reshape(-1))
 
     def rec_start(self):
         self.rec = []
@@ -297,12 +313,161 @@ class Family:
                 log.warning('reading check: recognition failed: %s', e)
         return ''.join(t for t in texts if t), len(pcm) / 16000
 
+    async def rec_wait(self, silence=2.5, max_wait=REC_MAX):
+        """朗读检查自动收尾：读过一阵之后静了 silence 秒就返回 ended（页面再调 rec_stop）。
+        返回 ended | timeout | stopped（录音已被停掉）| silent（一直没出声，max_wait 到）。"""
+        rec = self.rec
+        if rec is None:
+            return 'stopped'
+        lvl, spoke, t0 = [], 0, time.monotonic()
+        while True:
+            await asyncio.sleep(0.1)
+            if self.rec is not rec:
+                return 'stopped'
+            for b in rec[len(lvl):]:
+                lvl.append(20 * np.log10(float(np.sqrt(np.mean(b * b))) + 1e-9))
+            if not lvl:
+                if time.monotonic() - t0 > 3:
+                    return 'stopped'
+                continue
+            bs = len(rec[0]) / 16000
+            floor = min(float(np.percentile(lvl[:max(5, min(len(lvl), 15))], 30)), -44.0)
+            on, off = max(floor + 10, -42.0), max(floor + 6, -46.0)
+            spoke = spoke or sum(1 for v in lvl[-50:] if v >= on) >= 10      # 有过 0.2 s 以上的人声
+            quiet = 0
+            for v in reversed(lvl):
+                if v >= off:
+                    break
+                quiet += 1
+            if spoke and quiet * bs >= silence:
+                return 'ended'
+            if time.monotonic() - t0 > max_wait:
+                return 'timeout' if spoke else 'silent'
+
     async def _asr(self, pcm_bytes):
         import aiohttp
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
             async with s.post(self.client.cfg['hub_http'] + '/kiosk/asr', data=pcm_bytes) as r:
                 d = await r.json(content_type=None)
         return (d.get('text') or '').strip()
+
+    # ---- 语音答题 ----
+
+    async def quiz_prepare(self, wait=12.0):
+        """开始语音答题前：等小麦把这句（「好，口算开始」）讲完，再结束对话。不结束的话孩子答的数字
+        会被 hub 当成新问题交给大模型（2026-11-17 11:59：模型回「屏幕上的题在做吗？」）。"""
+        c = self.client
+        t = time.monotonic()
+        while c.state in ('thinking', 'speaking') and time.monotonic() - t < wait:
+            await asyncio.sleep(0.1)
+        if c.hub.connected or c.uploading:
+            await c.end()
+        return c.state
+
+    def listen_cancel(self):
+        self.lis_gen += 1
+        self.lis = None
+
+    async def listen(self, lang, wait=LISTEN_WAIT):
+        """录孩子的一句回答：等开口（最多 wait 秒）、说完静 LISTEN_END 秒收尾，交 hub 识别。
+        返回 {'status': ok|silent|busy|cancelled|error, 'text', 'raw', 'speech', 'asr_ms'}。"""
+        c = self.client
+        if c.uploading or c.state in ('thinking', 'speaking'):
+            return {'status': 'busy'}
+        self.lis_gen += 1
+        gen = self.lis_gen
+        self.lis = buf = []
+        blocks = []                    # 已经看过的块
+        lvl = []                       # 每块 dBFS
+        start = end = None
+        quiet = 0
+        t0 = time.monotonic()
+        try:
+            while True:
+                await asyncio.sleep(0.04)
+                if gen != self.lis_gen:
+                    return {'status': 'cancelled'}
+                if c.uploading:        # 孩子叫了「小麦小麦」：让给对话
+                    return {'status': 'busy'}
+                while len(blocks) < len(buf):
+                    b = buf[len(blocks)]
+                    blocks.append(b)
+                    lvl.append(20 * np.log10(float(np.sqrt(np.mean(b * b))) + 1e-9))
+                if not blocks:
+                    if time.monotonic() - t0 > 2:
+                        return {'status': 'error', 'error': '麦克风没有声音'}
+                    continue
+                bs = len(blocks[0]) / 16000                    # 一块多少秒（20 ms）
+                # 底噪取开头 0.3 s 的偏低值；封顶 -44：孩子一念完就抢答时开头已经是人声，门限不能跟着抬上去
+                floor = min(float(np.percentile(lvl[:max(5, min(len(lvl), 15))], 30)), -44.0)
+                on, off = max(floor + 10, -42.0), max(floor + 6, -46.0)
+                if start is None:
+                    run = 0
+                    for i in range(max(0, len(lvl) - 3), len(lvl)):
+                        run = run + 1 if lvl[i] >= on else 0
+                    if run >= 3 and len(lvl) > 5:
+                        start = len(lvl) - 3
+                    elif len(lvl) * bs > wait:
+                        return {'status': 'silent'}
+                    continue
+                quiet = 0
+                for i in range(len(lvl) - 1, start, -1):
+                    if lvl[i] >= off:
+                        break
+                    quiet += 1
+                if quiet * bs >= LISTEN_END or (len(lvl) - start) * bs >= LISTEN_MAX:
+                    end = len(lvl) - quiet + int(0.15 / bs)
+                    break
+        finally:
+            if gen == self.lis_gen:
+                self.lis = None
+        pre = int(LISTEN_PRE / bs)
+        audio = np.concatenate(blocks[max(0, start - pre):end])
+        pcm = (np.clip(audio, -1, 1) * 32767).astype('<i2')
+        lang = _lang(lang)
+        carrier = await self._carrier(lang)
+        t1 = time.monotonic()
+        try:
+            raw = await self._asr(carrier + pcm.tobytes())
+        except Exception as e:
+            log.warning('quiz: recognition failed: %s', e)
+            return {'status': 'error', 'error': '识别失败'}
+        asr_ms = round((time.monotonic() - t1) * 1000)
+        text = strip_carrier(raw, lang) if carrier else raw
+        if gen != self.lis_gen:        # 识别途中被取消（孩子按了键盘、关了面板）
+            return {'status': 'cancelled'}
+        log.info('quiz heard %.1f s (waited %.1f s), asr %d ms: %r -> %r',
+                 len(pcm) / 16000, start * bs, asr_ms, raw, text)
+        return {'status': 'ok', 'text': text, 'raw': raw, 'speech': round(len(pcm) / 16000, 2), 'asr_ms': asr_ms}
+
+    async def _carrier(self, lang):
+        """「答案係」的 PCM（hub 同一个 TTS 合成，ffmpeg 解码，掐头去尾）。失败就不垫，返回 b''。"""
+        if lang in self.carriers:
+            return self.carriers[lang]
+        import urllib.parse
+        import aiohttp
+        pcm = b''
+        try:
+            url = self.client.cfg['hub_http'] + '/kiosk/hw/tts?' + urllib.parse.urlencode(
+                {'text': CARRIER[lang], 'lang': lang})
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                async with s.get(url) as r:
+                    mp3 = await r.read() if r.status == 200 else b''
+            if mp3:
+                p = await asyncio.create_subprocess_exec(
+                    'ffmpeg', '-loglevel', 'quiet', '-i', '-', '-ac', '1', '-ar', '16000', '-f', 's16le', '-',
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+                out, _ = await p.communicate(mp3)
+                a = np.frombuffer(out, dtype='<i2')
+                loud = np.nonzero(np.abs(a) > 300)[0]
+                if len(loud):
+                    a = a[max(0, loud[0] - 1600):loud[-1] + 1600]
+                    pcm = a.tobytes() + bytes(int(0.15 * 16000) * 2)
+        except Exception as e:
+            log.warning('quiz: no carrier for %s: %s', lang, e)
+        if pcm:                        # 失败不缓存，下次再试
+            self.carriers[lang] = pcm
+        return pcm
 
     # ---- 循环 ----
 
@@ -315,6 +480,23 @@ class Family:
             except Exception:
                 log.exception('family loop')
             await asyncio.sleep(2)
+
+
+_CARRIER_RX = {
+    'yue': re.compile(r'^\s*[答达搭]?[案按岸暗]?[，,。、\s]*[系係是喺啊]?[，,。、\s]*'),
+    'zh': re.compile(r'^\s*[答达搭]?[案按岸暗]?[，,。、\s]*[是事试市系]?[，,。、\s]*'),
+    'en': re.compile(r'^\s*(the\s+)?answers?\s*(is|was|\'s)?[\s,.]*', re.I),
+}
+
+
+def strip_carrier(text, lang):
+    """去掉识别结果开头的垫话「答案係」（识别器可能写成「答案系」「答按是」），剩下孩子说的。"""
+    text = (text or '').strip()
+    rx = _CARRIER_RX.get(lang, _CARRIER_RX['yue'])
+    m = rx.match(text)
+    if m and m.end() >= 2:
+        return text[m.end():].strip()
+    return text
 
 
 def _split(pcm, rate, chunk=REC_CHUNK):
@@ -450,7 +632,31 @@ def install(client):
         text, seconds = await fam.rec_stop()
         return ok(text=text, seconds=round(seconds, 1))
 
-    return [('/api/family', get_all), ('/api/ui', ui), ('/api/tv-timer', tv_timer),
+    async def quiz_prepare(_r):
+        return ok(state=await fam.quiz_prepare())
+
+    async def listen(request):
+        b = await body_of(request)
+        try:
+            wait = max(2.0, min(15.0, float(b.get('wait') or LISTEN_WAIT)))
+        except (TypeError, ValueError):
+            wait = LISTEN_WAIT
+        return ok(**await fam.listen(b.get('lang') or b.get('language'), wait))
+
+    async def rec_wait(request):
+        b = await body_of(request)
+        try:
+            silence = max(1.0, min(8.0, float(b.get('silence') or 2.5)))
+        except (TypeError, ValueError):
+            silence = 2.5
+        return ok(status=await fam.rec_wait(silence))
+
+    async def listen_cancel(_r):
+        fam.listen_cancel()
+        return ok()
+
+    return [('/api/rec/wait', rec_wait), ('/api/quiz/prepare', quiz_prepare), ('/api/listen', listen), ('/api/listen/cancel', listen_cancel),
+            ('/api/family', get_all), ('/api/ui', ui), ('/api/tv-timer', tv_timer),
             ('/api/notes/add', note_add), ('/api/notes/done', note_done),
             ('/api/routine/set', routine_set), ('/api/routine/tick', routine_tick),
             ('/api/bedtime', bedtime), ('/api/rec/start', rec_start), ('/api/rec/stop', rec_stop),

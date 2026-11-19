@@ -549,6 +549,12 @@ def test_the_page_and_the_script_agree_on_the_ids():
     assert not missing, f'app.js writes to ids the page lacks: {missing}'
     # the API paths the page posts to must exist in web.py
     routes = set(re.findall(r"add_(?:get|post)\('([^']+)'", read_web()))
+    # family / homework / qbank hang their routes on the app from install()'s returned (path, handler) list
+    for mod in ('family.py', 'homework.py', 'qbank.py'):
+        f = ROOT / 'thinksmart_client' / mod
+        if f.exists():
+            routes |= set(re.findall(r"\('(/api/[^']+)',\s*[a-z_]+\)", f.read_text(encoding='utf-8')))
+    routes |= set(re.findall(r"add_route\('\*', '([^']+)'", read_web()))
     # a path built at runtime ("/api/alarms/" + id) is checked by its prefix
     posted = set(re.findall(r"['\"](/api/[A-Za-z0-9/_-]*[A-Za-z0-9_-])['\"]", js))
     unknown = sorted(p for p in posted
@@ -569,7 +575,9 @@ def test_the_page_keeps_no_settings_of_its_own():
     """
     js = read('v2/app.js')
     keys = set(re.findall(r"localStorage\.(?:get|set)Item\(['\"]([^'\"]+)['\"]", js))
-    assert keys <= {'updShown'}, keys
+    # 2026-11-19: the study panel's own memory, all safe to lose on a reload/new build —
+    #   flashTier (last level reached in the challenge), flashVoice (say vs tap answers), qbSeen (recently asked bank ids)
+    assert keys <= {'updShown', 'flashTier', 'flashVoice', 'qbSeen'}, keys
     assert 'sessionStorage' not in js
 
 

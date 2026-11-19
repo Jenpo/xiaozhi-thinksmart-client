@@ -97,12 +97,12 @@ INTRO_FULL = ('你好，我是小麦。你可以叫我放歌、看作业、做�
               '也可以讲故事。粤语、普通话、英文都听得懂。现在想做什么？')
 INTRO_TIPS = ('我在。想听歌，可以说：放点轻音乐。',
               '我在。拿作业到镜头前，说：看作业。',
-              '我在。想练口算，可以说：考考我乘法表。',
+              '我在。想做算术题，可以说：出几道算术题。',
               '我在。拿个东西到镜头前，问我：这是什么。',
               '我在。看电视可以说：电视再看三十分钟就关。',
               '我在。想听故事，说：讲个睡前故事。',
               '我在。可以说：明天天气怎么样。')
-INTRO_CARD = ['放点轻音乐 / 放首周杰伦', '睇作业 / 看看作业', '考考我乘法表', '帮我听写：太阳、朋友',
+INTRO_CARD = ['放点轻音乐 / 放首周杰伦', '睇作业 / 看看作业', '出几道算术题 / 考考我除法', '帮我听写：太阳、朋友',
               '这是什么（拿东西到镜头前）', '明天天气怎么样', '电视再看三十分钟就关', '讲个睡前故事']
 CLIP_GAP = 0.8           # seconds of silence after each spoken reminder in a ring
 
@@ -350,7 +350,7 @@ class Client:
         # wake word hears (during a reply, echo-cancelled without suppressing the voice; audio.py)
         # (after the hub's VAD said the user stopped, the wake word interrupts the recognition)
         fam = getattr(self, 'family', None)   # 朗读检查在录音时，原样留一份（family.py）
-        if fam is not None and fam.rec is not None:
+        if fam is not None and (fam.rec is not None or fam.lis is not None):   # 语音答题在听也要
             fam.on_block(block)
         hit = None if self.uploading and not self.vad_ended else self.kws.feed(wake_block)
         backlog = self.backlog
