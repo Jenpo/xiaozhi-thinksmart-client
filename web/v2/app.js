@@ -148,7 +148,7 @@ function renderChips() {
 /* ---- 看作业：内置摄像头拍照 → 网关看图 → 逐题卡片 + 粤语/英文朗读 ---- */
 const HW = { lang: 'en', data: null,   // owner 2026-11-19：学习默认英文交互（看作业也是），语言按钮可临时切
             busy: false, audio: null, tick: null, view: 'result', live: false };
-const HW_COUNTDOWN = 3;   // 点「拍」或说「睇作业」后先倒数，给孩子把作业纸摆到镜头前
+const HW_COUNTDOWN = 5;   // 点「拍」或说「睇作业」后先倒数（3→5 s，11-19 12:14 连拍 4 张都只有头没纸：来不及举）
 
 function hwEl(id) { return document.getElementById(id); }
 
@@ -374,6 +374,7 @@ function hwSpeechText(d) {
 
 function hwSpeakText(text) {
   if (!text) return;
+  quietMic();
   if (HW.audio) { HW.audio.pause(); HW.audio = null; }
   const url = '/api/hw/tts?lang=' + encodeURIComponent(HW.lang) + '&text=' + encodeURIComponent(text);
   const a = new Audio(url);
@@ -2444,8 +2445,12 @@ if (demo) demo.start();
 else connectEvents();
 
 /* ======== 学习 · 家庭（2026-11-15）：口算闪卡、听写、这是什么、朗读检查、作息清单、屏幕卡片、留言、电视限时 ======== */
+/* 页面自己念的话（HTML Audio）不进回声消除参考：对话麦克风开着就会把它当成孩子说话
+   （11-19 12:15:18「Please take a new photo of your homework」被识别后又触发一次看作业）。念之前先收起正在听的麦。 */
+const quietMic = () => fetch('/api/study/quiet', { method: 'POST' }).catch(() => {});
 function speakText(text, lang) {
   if (!text) return;
+  quietMic();
   if (HW.audio) { HW.audio.pause(); HW.audio = null; }
   const a = new Audio('/api/hw/tts?lang=' + encodeURIComponent(lang || 'yue') + '&text=' + encodeURIComponent(text));
   HW.audio = a;
@@ -3003,7 +3008,7 @@ function flashView(body, opts) {
       <div class="flash-voice" id="flV"></div>
       <div class="flash-meta" id="flMeta">${meta}</div>
       <div class="pad">${[1,2,3,4,5,6,7,8,9,'.',0,'⌫','✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
-      <button class="pri st-go" id="flGo">${en ? 'Start' : '开始'}</button></div>`;
+      <div class="st-row flash-go-row"><button class="pri st-go" id="flGo">${en ? 'Start' : '开始'}</button></div></div>`;
   // 点档位直接开始（11-19 10:47 孩子连点 Times tables / Division 各 5 下：以前只换档、还要再找「开始」，像点不动）
   body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { flashStop(); flashView(body, { level: b.dataset.lv, auto: true }); }));
   starRender();
@@ -3031,11 +3036,15 @@ function flashStop() {
   if (f) { f.gen += 1; if (f.tick) clearInterval(f.tick); }
   fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {});
 }
+// 混合闯关最高到第 3 关（一到三年级）：家里是 K2 和小一，升到 5–6 年级的百分数/比例就一路错（11-19 12:18 5/10、11:07 一轮 372 s）；
+// 想做难的用「高年级」档
+const MIXED_TOP = 3;
 async function flashStart(level, fromVoice) {
   flashStop();
+  if (stEl('flUp')) stEl('flUp').hidden = true;
   const f = ST.flash = { level, n: 0, total: level === 'chain' ? 9 : 10, right: 0, wrong: [], done: [], input: '', streak: 0, best: 0,
                          started: Date.now(), q: null, gen: (ST.flash ? ST.flash.gen : 0) + 1, table: rnd(2, 9), pool: [],
-                         tier: Math.max(1, Math.min(7, (Number(localStorage.getItem('flashTier')) || 1) - 1)), up: 0 };
+                         tier: Math.max(1, Math.min(MIXED_TOP, (Number(localStorage.getItem('flashTier')) || 1) - 1)), up: 0 };
   if (level === 'review') {
     const d = await fetch('/api/hw/book?days=60').then(r => r.json()).catch(() => ({}));
     const seen = new Set();
@@ -3063,6 +3072,7 @@ function flashNext() {
   const f = ST.flash;
   if (f.n >= f.total) return flashEnd();
   f.q = flashQuestion(f.level, f); f.input = ''; f.n += 1; f.tries = 0;
+  stEl('flQ').classList.remove('end-score');
   stEl('flQ').textContent = f.q[3] || f.q[0].includes('=') ? f.q[0] : f.q[0] + ' = ?';   // 方程「□ + 3 = 8」本身带等号
   stEl('flQ').className = 'flash-q' + (f.q[3] ? ' long' : '');
   stEl('flA').textContent = ''; stEl('flA').className = 'flash-a';
@@ -3136,7 +3146,8 @@ function flashPadWait(on) { const p = document.querySelector('.flash .pad'); if 
 function flashKey(k) {
   const f = ST.flash;
   if (!f || !f.q) { flashStart(ST.flashLevel || 'mixed'); return; }
-  if (f.locked) return;
+  // 讲解时点任何键 = 跳过讲解直接下一题（11-19 12:17:04 答错后 5 秒内连点 ✓ 13 下）
+  if (f.locked) { if (f.skip) { if (HW.audio) HW.audio.pause(); f.skip(); } return; }
   if (k === '⌫') f.input = f.input.slice(0, -1);
   else if (k === '✓') {
     if (f.input) { fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {}); flashCheck(false); }
@@ -3150,7 +3161,7 @@ function flashKey(k) {
 async function flashCheck(byVoice) {
   const f = ST.flash, ok = f.input !== '' && Math.abs(Number(f.input) - f.q[1]) < 1e-6, a = stEl('flA'), lang = ST.lang;
   if (f.level === 'mixed') {
-    if (ok) { f.up += 1; if (f.up >= 2 && f.tier < 7) { f.tier += 1; f.up = 0; f.levelUp = true; } }
+    if (ok) { f.up += 1; if (f.up >= 2 && f.tier < MIXED_TOP) { f.tier += 1; f.up = 0; f.levelUp = true; } }
     else { f.tier = Math.max(1, f.tier - 1); f.up = 0; }
     localStorage.setItem('flashTier', String(f.tier));
   }
@@ -3167,8 +3178,8 @@ async function flashCheck(byVoice) {
     if (f.levelUp) { f.levelUp = false; p = tr({ yue: `升级！第${f.tier}关`, zh: `升级！第${f.tier}关`, en: `Level up! Level ${f.tier}` }); }
     sfx(p ? 'combo' : 'good');
     flashMeta();
-    if (byVoice && p) await speakWait(p, lang);
-    else await new Promise(r => setTimeout(r, byVoice ? 350 : 500));
+    await Promise.race([byVoice && p ? speakWait(p, lang) : sleepMs(byVoice ? 350 : 500), new Promise(r => { f.skip = r; })]);
+    f.skip = null;
   } else {
     f.streak = 0; QV.streak = 0; f.wrong.push(item);
     a.className = 'flash-a bad'; a.textContent = `${f.input || '?'} ✗  = ${fmt(f.q[1])}`;
@@ -3176,8 +3187,9 @@ async function flashCheck(byVoice) {
     const ans = fmt(f.q[1]);
     const say = f.q[3] || /[□(]/.test(f.q[0]) ? tr({ yue: `差少少！答案係${ans}`, zh: `差一点！答案是${ans}`, en: `Nice try! The answer is ${ans}` })
       : VOICE_SAY.wrong[lang](questionSpeech([f.q[0], f.q[1], f.q[2]], lang).replace(/(係幾多？|等于几？|^What is |\?$)/g, ''), ans);
-    if (byVoice) await speakWait(say, lang);
-    else await new Promise(r => setTimeout(r, 1600));
+    // 讲解可以点任何键跳过
+    await Promise.race([byVoice ? speakWait(say, lang) : sleepMs(1600), new Promise(r => { f.skip = r; })]);
+    f.skip = null;
   }
   if (ST.flash !== f) return;
   f.locked = false; flashPadWait(false);
@@ -3191,12 +3203,23 @@ function flashEnd(early) {
   const stars = f.right === asked && asked >= f.total ? 3 : f.right / asked >= .7 ? 2 : f.right > 0 ? 1 : 0;
   const en = flEN();
   stEl('flQ').textContent = `${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}  ${en ? `${f.right} / ${f.done.length} right` : `答对 ${f.right} / ${f.done.length}`}`;
+  stEl('flQ').className = 'flash-q end-score';   // 结果一行放得下（104 px 题面字号会折两行，把「升一级」挤出屏）
   stEl('flA').textContent = en
     ? `${sec} s · ⭐ +${QV.roundStars}${f.best >= 3 ? ` · best streak ${f.best}` : ''}${f.wrong.length ? ' · misses saved to your mistake book' : ''}`
     : `${sec} 秒 · ⭐ +${QV.roundStars}${f.best >= 3 ? ` · 最多连对 ${f.best}` : ''}${f.wrong.length ? ' · 错的已放进错题本' : ''}`;
   stEl('flA').className = 'flash-a end';
   flashVoiceLine('');
   const go = stEl('flGo'); go.hidden = false; go.textContent = flEN() ? 'Play again' : '再来一轮';
+  // 固定档全对：一键升到下一档（11-19「Up to 20」一再 10/10、40 秒做完）
+  const NEXT_LV = { add20: 'add100', add100: 'times', times: 'div', div: 'mixed' };
+  const up = f.right === f.done.length && f.done.length >= f.total && NEXT_LV[f.level];
+  let nb = stEl('flUp');
+  if (!nb) { nb = document.createElement('button'); nb.id = 'flUp'; nb.className = 'pri st-go'; go.after(nb); }
+  nb.hidden = !up;
+  if (up) {
+    nb.textContent = (flEN() ? 'Next level ▶ ' : '升一级 ▶ ') + (flEN() ? FLASH_LEVELS_EN : FLASH_LEVELS)[up];
+    nb.onclick = () => { flashStop(); flashView(stEl('stBody'), { level: up, auto: true }); };
+  }
   const all = f.right === f.done.length && f.done.length >= f.total;
   const say = { yue: all ? '全部啱晒，三粒星，好叻！' : `啱咗${f.right}题，攞到${stars}粒星${f.wrong.length ? '，错咗嘅放咗入错题本' : ''}`,
                 en: all ? 'All correct, three stars!' : `${f.right} right, ${stars} stars`,

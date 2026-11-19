@@ -204,6 +204,9 @@ def _capture_sync(width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT, timeout=CAPTURE_TI
 WB_TRIGGER = 1.06          # 三通道均值最大/最小超过这个比例才校正
 WB_GAIN = (0.6, 1.8)
 WB_STRENGTH = 0.85
+BRIGHT_TARGET = 110        # 平均亮度低于 BRIGHT_LOW 时拉到这么亮（11-19 12:14 第一张均值约 23/255，模型判「太暗」）
+BRIGHT_LOW = 70
+BRIGHT_MAX_GAIN = 2.6
 
 
 def _white_balance(jpeg, width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT):
@@ -230,9 +233,13 @@ def _white_balance(jpeg, width=CAPTURE_WIDTH, height=CAPTURE_HEIGHT):
             return jpeg
         px = a.reshape(-1, 3)
         m = px[::61].astype(np.float32).mean(0)
-        if m.min() < 8 or m.max() / m.min() < WB_TRIGGER:
+        cast = m.min() >= 3 and m.max() / max(m.min(), 1e-3) >= WB_TRIGGER
+        dark = m.mean() < BRIGHT_LOW
+        if not cast and not dark:
             return jpeg
-        gains = np.clip((m.mean() / m) ** WB_STRENGTH, *WB_GAIN).astype(np.float32)   # 全量灰世界实测偏品红，收一点
+        gains = (np.clip((m.mean() / np.maximum(m, 1e-3)) ** WB_STRENGTH, *WB_GAIN) if cast else np.ones(3)).astype(np.float32)   # 全量灰世界实测偏品红，收一点
+        if dark:                                       # 太暗：整体提亮（先白平衡后的均值算）
+            gains = gains * np.float32(min(BRIGHT_MAX_GAIN, BRIGHT_TARGET / max(float((m * gains).mean()), 1.0)))
         np.clip(px * gains, 0, 255).astype(np.uint8).tofile(raw)
         subprocess.run(['gst-launch-1.0', '-q', 'filesrc', 'location=' + raw, 'blocksize=%d' % (width * height * 3),
                         '!', 'rawvideoparse', 'width=%d' % width, 'height=%d' % height, 'format=rgb', 'framerate=1/1',

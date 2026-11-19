@@ -969,3 +969,6 @@ body.ptt-off .hint::after { content: none; }
   60% { transform: translateX(-8px); } 80% { transform: translateX(5px); } }
 /* 语音开关挪到行首（2026-11-19）：钉在左边，不再盖住最后一个档位 */
 .st-pill.voice-pill { margin-left: 0; left: 0; right: auto; box-shadow: 14px 0 14px #0b1027; z-index: 1; }
+/* 一轮结束（2026-11-19）：结果一行；「再来一轮」「升一级」并排 */
+.flash-q.end-score { font-size: 60px; letter-spacing: 0; }
+.flash .flash-go-row { grid-column: 1; flex-wrap: nowrap; }
