@@ -967,3 +967,5 @@ body.ptt-off .hint::after { content: none; }
 .shake { animation: shakeX .38s ease-in-out; }
 @keyframes shakeX { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-14px); } 40% { transform: translateX(12px); }
   60% { transform: translateX(-8px); } 80% { transform: translateX(5px); } }
+/* 语音开关挪到行首（2026-11-19）：钉在左边，不再盖住最后一个档位 */
+.st-pill.voice-pill { margin-left: 0; left: 0; right: auto; box-shadow: 14px 0 14px #0b1027; z-index: 1; }

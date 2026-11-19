@@ -2995,9 +2995,10 @@ function flashView(body, opts) {
   const en = flEN(), names = en ? FLASH_LEVELS_EN : FLASH_LEVELS;
   const meta = en ? (level === 'chain' ? '9 questions. I say the first half, you finish it' : level === 'mixed' ? '10 questions. 2 right in a row = level up' : '10 questions. Say or tap your answer')
                   : (level === 'chain' ? '9 题一轮，我讲前半句，你接后半句' : level === 'mixed' ? '10 题一轮，连对两题升一关，答错降一关' : '10 题一轮');
-  body.innerHTML = `<div class="st-row">${Object.entries(names).map(([k, t]) =>
-      `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${t}</button>`).join('')}
-      <button class="st-pill voice-pill${v ? ' on' : ''}" id="flVoiceT">${v ? (en ? '🎤 Say it' : '🎤 讲答案') : (en ? '⌨ Tap it' : '⌨ 按答案')}</button></div>
+  // 语音/键盘开关放行首（钉在左边）：放行尾时盖住最后一个档位「Retry mistakes」（owner 2026-11-19）
+  body.innerHTML = `<div class="st-row"><button class="st-pill voice-pill${v ? ' on' : ''}" id="flVoiceT">${v ? (en ? '🎤 Say it' : '🎤 讲答案') : (en ? '⌨ Tap it' : '⌨ 按答案')}</button>
+      ${Object.entries(names).map(([k, t]) =>
+      `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${t}</button>`).join('')}</div>
     <div class="flash"><div class="flash-q" id="flQ">${en ? 'Tap Start or any key' : '点「开始」或任何数字'}</div><div class="flash-a" id="flA"></div>
       <div class="flash-voice" id="flV"></div>
       <div class="flash-meta" id="flMeta">${meta}</div>
