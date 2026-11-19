@@ -14,7 +14,7 @@
  *   q/qy/qe  题面（普通话 / 粤语口语 / 英文）
  *   a    正确答案（字符串，比较时归一化）
  *   ans  答案类型：'num' 数字 | 'choice' 从 opts 里选
- *   opts 选项（choice 用）
+ *   opts 选项（choice 用）；optse 英文界面显示/口答用的选项（可选，和 opts 一一对应）
  *   hint/hinty/hinte  提示（不给答案）
  *   exp 讲解
  *   src  出处
@@ -294,7 +294,7 @@
       q: '艾美、宾利、云妮各有一只宠物：猫、狗或兔。艾美养的不是猫，宾利养的是兔子，云妮养的是什么？',
       qy: '艾美、宾利、云妮各有一只宠物：猫、狗或者兔。艾美养嘅唔系猫，宾利养嘅系兔，云妮养嘅系咩？',
       qe: 'Amy, Benny and Winnie each have a cat, a dog or a bunny. Amy does not have a cat, Benny has a bunny. What does Winnie have?',
-      a: '猫', ans: 'choice', opts: ['猫', '狗', '兔'], hint: '宾利占了兔，剩下猫和狗。', hinty: '宾利要咗兔，剩低猫同狗。', hinte: 'Benny has the bunny. Cat and dog are left.',
+      a: '猫', ans: 'choice', opts: ['猫', '狗', '兔'], optse: ['cat', 'dog', 'bunny'], hint: '宾利占了兔，剩下猫和狗。', hinty: '宾利要咗兔，剩低猫同狗。', hinte: 'Benny has the bunny. Cat and dog are left.',
       expe: 'Benny has the bunny. Amy is not the cat, so Amy has the dog and Winnie has the cat.',
     },
     { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q3',

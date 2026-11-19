@@ -3110,8 +3110,14 @@ function flashMeta() {
   const f = ST.flash; if (!f) return;
   const sec = Math.round((Date.now() - f.started) / 1000);
   const m = stEl('flMeta');
+  if (!m) return;
+  if (flEN()) {
+    const tier = f.level === 'mixed' ? ` · Level ${f.tier}` : '';
+    m.textContent = `Question ${f.n}/${f.total}${tier} · ${f.right} right${f.streak >= 2 ? ` · 🔥 ${f.streak} in a row` : ''} · ⭐ ${QV.roundStars} · ${sec} s`;
+    return;
+  }
   const tier = f.level === 'mixed' ? ` · 第 ${f.tier} 关（${TIER_GRADE[f.tier]}）` : '';
-  if (m) m.textContent = `第 ${f.n}/${f.total} 题${tier} · 答对 ${f.right}${f.streak >= 2 ? ` · 🔥连对 ${f.streak}` : ''} · ${sec} 秒`;
+  m.textContent = `第 ${f.n}/${f.total} 题${tier} · 答对 ${f.right}${f.streak >= 2 ? ` · 🔥连对 ${f.streak}` : ''} · ⭐ ${QV.roundStars} · ${sec} 秒`;
 }
 function flashKey(k) {
   const f = ST.flash; if (!f || !f.q || f.locked) return;
@@ -3426,9 +3432,13 @@ async function timoStart(level, opts) {
 function timoText(q) {
   return ST.lang === 'en' ? q.qe : ST.lang === 'yue' ? q.qy : q.q;
 }
+/* 选项在英文界面用 optse（有的题原卷选项是中文：猫/狗/兔），判题仍按 opts/a */
+const timoOptLabel = (q, i) => (ST.lang === 'en' && q.optse && q.optse[i]) || q.opts[i];
+const timoAnsLabel = q => { const i = (q.opts || []).findIndex(o => timoNorm(o) === timoNorm(q.a)); return i >= 0 ? timoOptLabel(q, i) : q.a; };
 function timoOptsSpeech(q) {
   if (q.ans !== 'choice' || !q.opts) return '';
-  return ST.lang === 'en' ? ' Is it ' + q.opts.join(', or ') + '?' : ' 选：' + q.opts.join('，');
+  const labels = q.opts.map((o, i) => timoOptLabel(q, i));
+  return ST.lang === 'en' ? ' Is it ' + labels.join(', or ') + '?' : ' 选：' + labels.join('，');
 }
 function tqVoice(t, cls) { const el = stEl('tqV'); if (el) { el.textContent = t || ''; el.className = 'flash-voice' + (cls ? ' ' + cls : ''); } }
 /* 选择题口头作答：字母 A-D、选项原文、或数字等于某个选项 */
@@ -3438,6 +3448,8 @@ function timoMatchChoice(q, text) {
   if (letter) return q.opts[letter.toUpperCase().charCodeAt(0) - 65] || null;
   const hit = q.opts.find(o => timoNorm(o) && t.includes(timoNorm(o)));
   if (hit) return hit;
+  const ie = (q.optse || []).findIndex(o => timoNorm(o) && t.includes(timoNorm(o)));
+  if (ie >= 0) return q.opts[ie];
   const v = parseNum(text);
   return v === null ? null : (q.opts.find(o => timoNorm(o) === String(v)) || null);
 }
@@ -3468,7 +3480,10 @@ async function timoAsk(readQuestion, prefix) {
     if (cmd === 'skip') return timoAnswer('__skip__', '—');
     if (cmd === 'dunno' || /提示|hint|help|clue/.test(low)) return timoHint();
     const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (() => { const v = parseNum(r.text); return v === null ? null : String(v); })();
-    if (ans !== null && ans !== undefined) return timoAnswer(ans, ans);
+    if (ans !== null && ans !== undefined) {
+      const i = q.ans === 'choice' ? q.opts.findIndex(o => timoNorm(o) === timoNorm(ans)) : -1;
+      return timoAnswer(ans, i >= 0 ? timoOptLabel(q, i) : ans);
+    }
     if (k < 2) await speakWait(q.ans === 'choice' ? (timoUI() ? 'Which one? Say one of the choices.' : '选边个？讲一个选项') : VOICE_SAY.unclear[lang], lang);
   }
   tqVoice(timoUI() ? '⌨ Tap your answer' : '⌨ 点答案');
@@ -3497,10 +3512,10 @@ function timoNext() {
     ? `Question ${TIMO.n + 1} / ${TIMO.total} · say or tap your answer · ⭐ ${QV.roundStars}`
     : `第 ${TIMO.n + 1} / ${TIMO.total} 题（${q.sec}）· 说答案或点 · ⭐ ${QV.roundStars}`;
   pad.innerHTML = q.ans === 'choice'
-    ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(o)}</button>`).join('')}</div>`
+    ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(timoOptLabel(q, i))}</button>`).join('')}</div>`
     : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`;
   if (q.ans === 'choice') {
-    pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => { listenCancel(); timoAnswer(q.opts[Number(b.dataset.o)], q.opts[Number(b.dataset.o)]); }));
+    pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => { listenCancel(); timoAnswer(q.opts[Number(b.dataset.o)], timoOptLabel(q, Number(b.dataset.o))); }));
   } else {
     pad.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => timoKey(b.dataset.k)));
   }
@@ -3558,8 +3573,8 @@ async function timoAnswer(given, shown) {
     TIMO.wrong.push({ question: timoText(q), child_answer: skipped ? '' : String(given), correct: String(q.a), ok: false });
     a.className = 'timo-a bad';
     const reveal = { yue: '答案系', en: 'The answer is', zh: '答案是' }[ST.lang];
-    a.textContent = `${skipped ? '' : shown + ' ✗  '}${reveal} ${q.a}. ${exp}`;
-    say = pickOne(KIND_WRONG[ST.lang] || KIND_WRONG.en) + ' ' + reveal + ' ' + q.a + '. ' + exp;
+    a.textContent = `${skipped ? '' : shown + ' ✗  '}${reveal} ${timoAnsLabel(q)}. ${exp}`;
+    say = pickOne(KIND_WRONG[ST.lang] || KIND_WRONG.en) + ' ' + reveal + ' ' + timoAnsLabel(q) + '. ' + exp;
     if (!skipped) sfx('bad');
   }
   if (q.ans === 'choice') timoMarkOpts(q, ok ? undefined : given, true); else timoMarkOpts(q, undefined, true);

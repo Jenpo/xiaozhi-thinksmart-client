@@ -919,3 +919,40 @@ body.ptt-off .hint::after { content: none; }
 .timo .timo-opts button[disabled]:not(.good) { opacity: .45; }
 .timo .pad button[disabled] { opacity: .45; }
 .timo .flash-voice { grid-column: 1; }
+
+/* ===== 字大一些（owner 2026-11-19「布局可以字大一些」）=====
+ * 屏 1280x800，孩子隔一臂远看；学习面板、看作业、家庭横幅整体放大 25–40%。
+ * 只在这里覆盖（后写的同优先级规则生效），回滚删掉这一段即可。闪卡键盘 5 行要放得下 800 高：键 80 px、✓ 64 px；标签/语言按钮不许折行。 */
+.sheet h2 { font-size: 40px; }
+.st-tab { height: 56px; padding: 0 18px; font-size: 22px; white-space: nowrap; }
+.st-lang, .hw-lang { white-space: nowrap; }
+.st-stars { white-space: nowrap; padding: 6px 14px; }
+.st-body button { height: 62px; padding: 0 26px; font-size: 24px; }
+.st-pill { height: 50px !important; font-size: 20px !important; padding: 0 18px !important; white-space: nowrap; }
+.st-note { font-size: 21px; }
+.st-stars { font-size: 24px; } .st-stars b { font-size: 30px; } .st-stars span { font-size: 16px; }
+.flash, .timo { grid-template-columns: 1fr 400px; column-gap: 34px; }
+.flash-q { font-size: 104px; }
+.flash-q.long { font-size: 46px; line-height: 1.3; }
+.flash-a { min-height: 84px; font-size: 72px; } .flash-a.bad { font-size: 54px; } .flash-a.end { font-size: 32px; }
+.flash-meta, .timo-meta { font-size: 23px; }
+.flash-voice { min-height: 36px; font-size: 27px; }
+.flash .pad, .timo .pad { gap: 10px; }
+.flash .pad button, .timo .pad button { height: 80px; font-size: 40px; }
+.flash .pad button[data-k="✓"] { height: 64px; }
+.timo-q { font-size: 44px; line-height: 1.28; }
+.timo-a { min-height: 56px; font-size: 36px; } .timo-a.bad { font-size: 32px; }
+.timo .timo-opts { gap: 14px; }
+.timo .timo-opts button { height: 92px; font-size: 38px; }
+.dict-n { font-size: 25px; } .dict-w { font-size: 76px; }
+.id-row b { font-size: 42px; } .id-row span { font-size: 21px; } .id-row em { font-size: 19px; } .id-sent { font-size: 25px; }
+.read-text { font-size: 32px; }
+.rt-col h3 { font-size: 32px; } .rt-item { height: 76px !important; font-size: 27px !important; }
+.st-cam-msg { font-size: 28px; }
+.hw-head b { font-size: 32px; } .hw-head span { font-size: 21px; }
+.hw-tip { font-size: 22px; }
+.hw-item .q { font-size: 27px; } .hw-item .q em { font-size: 18px; }
+.hw-item .a, .hw-item .hint { font-size: 22px; } .hw-item .explain { font-size: 20px; } .hw-item .mark { font-size: 26px; }
+.hw-item .reveal { height: 52px; font-size: 20px; }
+.fam-chip { font-size: 22px; } .fam-chip button { height: 46px; font-size: 19px; } .fam-chip span { font-size: 17px; }
+.star-fly { font-size: 80px; } .star-fly em { font-size: 34px; }
