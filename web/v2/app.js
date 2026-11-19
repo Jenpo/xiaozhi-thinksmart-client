@@ -146,7 +146,8 @@ function renderChips() {
 }
 
 /* ---- 看作业：内置摄像头拍照 → 网关看图 → 逐题卡片 + 粤语/英文朗读 ---- */
-const HW = { lang: 'yue', data: null, busy: false, audio: null, tick: null, view: 'result', live: false };
+const HW = { lang: 'en', data: null,   // owner 2026-11-19：学习默认英文交互（看作业也是），语言按钮可临时切
+            busy: false, audio: null, tick: null, view: 'result', live: false };
 const HW_COUNTDOWN = 3;   // 点「拍」或说「睇作业」后先倒数，给孩子把作业纸摆到镜头前
 
 function hwEl(id) { return document.getElementById(id); }
@@ -2453,6 +2454,7 @@ const isLatin = s => /^[\x00-\x7f\s]+$/.test(String(s || ''));
 const stEl = id => document.getElementById(id);
 const ST = { mode: 'flash', lang: 'en', flash: null, dict: null, read: null, ident: null, live: false };
 
+const STUDY_EN = ['flash', 'timo', 'dictation', 'read', 'identify'];   // 学习类标签（清单不算）一律英文开
 function stOpen(mode, opts) {
   opts = opts || {};
   const sheet = stEl('stSheet');
@@ -2465,7 +2467,7 @@ function stOpen(mode, opts) {
   const sameLevel = () => !opts.level || (mode === 'flash' ? opts.level === ST.flash.level : opts.level === TIMO.level);
   if (sheet.classList.contains('on') && ST.mode === mode && running && sameLevel()) return;
   if (opts.language) ST.lang = opts.language;
-  if (mode === 'timo' || mode === 'flash') ST.lang = 'en';   // owner 2026-11-19：出题默认英文交互
+  if (STUDY_EN.includes(mode)) ST.lang = 'en';   // owner 2026-11-19：TIMO 与所有学习默认英文交互（语言按钮可临时切）
   stLangPills();
   sheet.classList.add('on');
   stTab(mode || ST.mode, opts);
@@ -2492,7 +2494,7 @@ function stTab(mode, opts) {
   if (ST.flash && mode !== 'flash') flashStop();
   if (mode !== ST.mode) { listenCancel(); ST.rtGen = (ST.rtGen || 0) + 1; if (ST.dict) ST.dict.gen = (ST.dict.gen || 0) + 1; }
   ST.mode = mode;
-  if (mode === 'timo' || mode === 'flash') ST.lang = 'en';   // owner 2026-11-19：出题默认英文交互
+  if (STUDY_EN.includes(mode)) ST.lang = 'en';   // owner 2026-11-19：TIMO 与所有学习默认英文交互
   if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
   if (ST.flash) ST.flash.q = null;
   timoStop();
@@ -2826,7 +2828,7 @@ function fromGen(names, f) {
 function flashQuestion(level, f) {
   if (level === 'chain') {                       // 口诀接龙：某一张表从一顺到九，念「三七」答「二十一」
     const t = f.table, i = f.n + 1, a = Math.min(t, i), b = Math.max(t, i);
-    return [`${a} × ${b}`, a * b, CN_DIGIT[a] + CN_DIGIT[b], false];
+    return [`${a} × ${b}`, a * b, ST.lang === 'en' ? `${a} times ${b}?` : CN_DIGIT[a] + CN_DIGIT[b], false];   // 英文界面念 3 times 7
   }
   if (level === 'review') { const r = f.pool[f.n % f.pool.length]; return [r.q, r.a, null, !/^\S+ [+−×÷] \S+$/.test(r.q)]; }
   if (level === 'olympiad') return timoFlashPick(f) || fromGen(OLYMPIAD, f);
@@ -3203,12 +3205,12 @@ async function dictFromBook() {
 function dictView(body, opts) {
   const words = (opts.words && opts.words.length) ? opts.words : (ST.dict && ST.dict.words) || DICT_SAMPLE[ST.lang];
   ST.dict = { words, i: -1 };
-  body.innerHTML = `<div class="st-row"><button class="st-pill" id="dcBook">用错题本的词</button>
-      <button class="st-pill" id="dcSample">示例词</button><span class="st-note">也可以说「帮我听写：苹果、香蕉……」</span></div>
-    <div class="dict"><div class="dict-n" id="dcN">共 ${words.length} 个词</div>
-      <div class="dict-w" id="dcW">准备好纸笔</div>
-      <div class="st-row center"><button class="pri st-go" id="dcNext">开始</button><button id="dcAgain" hidden>再念一次</button></div>
-      <div class="st-row center"><button id="dcShoot" hidden>写完了，拍照批改</button></div>
+  body.innerHTML = `<div class="st-row"><button class="st-pill" id="dcBook">${LX('用错题本的词', 'Words from my mistake book')}</button>
+      <button class="st-pill" id="dcSample">${LX('示例词', 'Sample words')}</button><span class="st-note">${LX('也可以说「帮我听写：苹果、香蕉……」', 'You can also say "dictation: apple, banana…"')}</span></div>
+    <div class="dict"><div class="dict-n" id="dcN">${LX(`共 ${words.length} 个词`, `${words.length} words`)}</div>
+      <div class="dict-w" id="dcW">${LX('准备好纸笔', 'Get your pencil and paper')}</div>
+      <div class="st-row center"><button class="pri st-go" id="dcNext">${LX('开始', 'Start')}</button><button id="dcAgain" hidden>${LX('再念一次', 'Say it again')}</button></div>
+      <div class="st-row center"><button id="dcShoot" hidden>${LX('写完了，拍照批改', 'Done — take a photo to check')}</button></div>
       <div class="flash-voice" id="dcV"></div></div>`;
   stEl('dcNext').addEventListener('click', dictNext);
   stEl('dcAgain').addEventListener('click', dictSay);
@@ -3226,7 +3228,8 @@ const dictLine = t => { const el = stEl('dcV'); if (el) { el.textContent = t || 
 async function dictSay() {
   const d = ST.dict, w = d.words[d.i];
   if (w == null) return;
-  const gen = d.gen = (d.gen || 0) + 1, lang = isLatin(w) ? 'en' : ST.lang;
+  // 中文词不让英文声音念（学习默认英文后 ST.lang 常是 en）
+  const gen = d.gen = (d.gen || 0) + 1, lang = isLatin(w) ? 'en' : (ST.lang === 'en' ? 'yue' : ST.lang);
   const stale = () => ST.dict !== d || d.gen !== gen || ST.mode !== 'dictation' || !stEl('stSheet').classList.contains('on');
   listenCancel();
   dictLine('🔊 念词…');
@@ -3254,22 +3257,25 @@ function dictNext() {
   stEl('dcAgain').hidden = false;
   if (d.i >= d.words.length) {
     d.gen = (d.gen || 0) + 1; listenCancel(); dictLine('');
-    n.textContent = '听写完了'; w.textContent = '检查一下，再拍照批改';
+    n.textContent = LX('听写完了', 'All done'); w.textContent = LX('检查一下，再拍照批改', 'Check your work, then take a photo');
     next.hidden = true; stEl('dcAgain').hidden = true; stEl('dcShoot').hidden = false;
     speakText({ yue: '写完喇，检查下再影相', en: 'All done. Check your work, then take a photo', zh: '写完了，检查一下再拍照' }[ST.lang], ST.lang);
     return;
   }
-  n.textContent = `第 ${d.i + 1} / ${d.words.length} 个`;
+  n.textContent = LX(`第 ${d.i + 1} / ${d.words.length} 个`, `Word ${d.i + 1} / ${d.words.length}`);
   w.textContent = '🔊 ' + '＿'.repeat(Math.min(6, String(d.words[d.i]).length));
-  next.textContent = d.i + 1 === d.words.length ? '写完了' : '下一个';
+  next.textContent = d.i + 1 === d.words.length ? LX('写完了', 'Done') : LX('下一个', 'Next');
   dictSay();
 }
 
+/* 学习面板固定文案：英文界面用英文（owner 2026-11-19「题目也是英文默认」） */
+const LX = (zh, en) => ST.lang === 'en' ? en : zh;
+
 /* -- 这是什么 -- */
 function identView(body) {
-  body.innerHTML = `<div class="st-split">${camBox('拿一样东西到镜头前')}<div class="st-side" id="idOut">
-      <div class="st-note">拿一样东西到镜头前，点「认一认」，我会讲粤语、普通话、英文点叫。</div></div></div>
-    <div class="st-row"><button class="pri" id="idGo">认一认</button></div>`;
+  body.innerHTML = `<div class="st-split">${camBox(LX('拿一样东西到镜头前', 'Hold something up to the camera'))}<div class="st-side" id="idOut">
+      <div class="st-note">${LX('拿一样东西到镜头前，点「认一认」，我会讲粤语、普通话、英文点叫。', 'Hold something up to the camera and tap "What is it?". I will tell you its name in English, Cantonese and Mandarin.')}</div></div></div>
+    <div class="st-row"><button class="pri" id="idGo">${LX('认一认', 'What is it?')}</button></div>`;
   stLive(true);
   stEl('idGo').addEventListener('click', async () => { const d = await stShoot('identify'); if (d) identShow(d, true); });
 }
@@ -3278,10 +3284,11 @@ function identShow(d, speak) {
   if (!out) return;
   const shot = stEl('stShot');
   if (shot && d.thumb) { shot.src = d.thumb; shot.hidden = false; }
-  if (d.sure === false) { out.innerHTML = `<div class="st-note">${esc((d.speech || {}).zh || '没看清，拿近一点再试')}</div>`; return; }
+  if (d.sure === false) { out.innerHTML = `<div class="st-note">${esc((d.speech || {})[ST.lang] || (d.speech || {}).zh || LX('没看清，拿近一点再试', 'I could not see it. Bring it closer and try again'))}</div>`; return; }
   const row = (label, word, sub, lang) => `<div class="id-row" data-say="${esc(word)}" data-lang="${lang}"><em>${label}</em>
       <b>${esc(word || '')}</b><span>${esc(sub || '')}</span><i>🔊</i></div>`;
-  out.innerHTML = row('粤语', d.yue, d.jyutping, 'yue') + row('普通话', d.zh, d.pinyin, 'zh') + row('English', d.en, '', 'en')
+  const rows = [row('English', d.en, '', 'en'), row('粤语', d.yue, d.jyutping, 'yue'), row('普通话', d.zh, d.pinyin, 'zh')];
+  out.innerHTML = (ST.lang === 'en' ? rows.join('') : rows[1] + rows[2] + rows[0])   // 英文界面英文排第一
     + (d.en_sentence ? `<div class="id-sent" data-say="${esc(d.en_sentence)}" data-lang="en">🔊 ${esc(d.en_sentence)}</div>` : '')
     + (d.fact ? `<div class="st-note">💡 ${esc(d.fact)}</div>` : '');
   out.querySelectorAll('[data-say]').forEach(el => el.addEventListener('click', () => speakText(el.dataset.say, el.dataset.lang)));
@@ -3291,16 +3298,16 @@ function identShow(d, speak) {
 /* -- 朗读检查 -- */
 function readView(body) {
   ST.read = ST.read || { text: '' };
-  body.innerHTML = `<div class="st-split">${camBox('把课文放到镜头前')}<div class="st-side">
-      <div class="read-text" id="rdText">${ST.read.text ? esc(ST.read.text) : '<span class="st-note">先拍下要读的课文</span>'}</div>
+  body.innerHTML = `<div class="st-split">${camBox(LX('把课文放到镜头前', 'Hold the page up to the camera'))}<div class="st-side">
+      <div class="read-text" id="rdText">${ST.read.text ? esc(ST.read.text) : `<span class="st-note">${LX('先拍下要读的课文', 'First take a photo of the page to read')}</span>`}</div>
       <div class="st-note" id="rdScore"></div></div></div>
-    <div class="st-row"><button id="rdShoot">拍课文</button><button class="pri" id="rdGo" ${ST.read.text ? '' : 'disabled'}>开始读</button></div>`;
+    <div class="st-row"><button id="rdShoot">${LX('拍课文', 'Take a photo')}</button><button class="pri" id="rdGo" ${ST.read.text ? '' : 'disabled'}>${LX('开始读', 'Start reading')}</button></div>`;
   stLive(true);
   stEl('rdShoot').addEventListener('click', async () => {
     const d = await stShoot('ocr');
     if (!d) return;
     ST.read.text = (d.text || '').trim();
-    stEl('rdText').textContent = ST.read.text || '没抄到字，放正一点再拍';
+    stEl('rdText').textContent = ST.read.text || LX('没抄到字，放正一点再拍', 'No words found. Hold it straight and try again');
     stEl('rdGo').disabled = !ST.read.text;
     stLive(true);
   });
@@ -3311,17 +3318,17 @@ async function readToggle() {
   if (!r.recording) {
     stLive(false);
     await fetch('/api/rec/start', { method: 'POST' });
-    r.recording = true; go.textContent = '读完了'; go.classList.add('rec');
-    stEl('rdScore').textContent = '在听… 读完停一停就得，或者点「读完了」';
+    r.recording = true; go.textContent = LX('读完了', 'Done'); go.classList.add('rec');
+    stEl('rdScore').textContent = LX('在听… 读完停一停就得，或者点「读完了」', 'Listening… pause when you finish, or tap Done');
     // 读完静 2.5 秒自动收尾（不用再点）
     fetch('/api/rec/wait', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ silence: 2.5 }) })
       .then(x => x.json()).then(w => { if (w.status === 'ended' && ST.read === r && r.recording) readToggle(); }).catch(() => {});
     return;
   }
-  r.recording = false; go.textContent = '在听写…'; go.disabled = true; go.classList.remove('rec');
+  r.recording = false; go.textContent = LX('在听写…', 'Checking…'); go.disabled = true; go.classList.remove('rec');
   let d = {};
   try { d = await (await fetch('/api/rec/stop', { method: 'POST' })).json(); } catch (e) {}
-  go.disabled = false; go.textContent = '再读一次';
+  go.disabled = false; go.textContent = LX('再读一次', 'Read again');
   readCompare(r.text, d.text || '');
 }
 function readCompare(ref, heard) {
@@ -3345,7 +3352,7 @@ function readCompare(ref, heard) {
   }
   stEl('rdText').innerHTML = html;
   const pct = n ? Math.round(hit.filter(Boolean).length * 100 / n) : 0;
-  stEl('rdScore').textContent = heard ? `读对 ${pct}%，红色是读漏或读错的` : '没听到声音，靠近一点再读';
+  stEl('rdScore').textContent = heard ? LX(`读对 ${pct}%，红色是读漏或读错的`, `${pct}% read right. Red words were missed`) : LX('没听到声音，靠近一点再读', 'I could not hear you. Come closer and read again');
   if (!heard) return;
   // 语音点评：百分比 + 星星 + 点名最多两处读漏的（连着漏的算一处）
   const miss = [];
@@ -3358,7 +3365,7 @@ function readCompare(ref, heard) {
     }
     if (cur) miss.push(cur); }
   const stars = pct >= 95 ? 3 : pct >= 80 ? 2 : pct >= 50 ? 1 : 0;
-  stEl('rdScore').textContent = `${'★'.repeat(stars)}${'☆'.repeat(3 - stars)} 读对 ${pct}%` + (miss.length ? '，红色是读漏或读错的' : '');
+  stEl('rdScore').textContent = `${'★'.repeat(stars)}${'☆'.repeat(3 - stars)} ` + LX(`读对 ${pct}%`, `${pct}% right`) + (miss.length ? LX('，红色是读漏或读错的', '. Red words were missed') : '');
   const top = miss.sort((a, b) => b.length - a.length).slice(0, 2).map(x => x.slice(0, 8));
   const L = ST.lang;
   const head = { yue: `读对${pct}%，${stars}粒星。`, zh: `读对了${pct}%，${stars}颗星。`, en: `${pct} percent, ${stars} stars. ` }[L];
@@ -3395,9 +3402,10 @@ function timoView(body, opts) {
   const B = timoBank(), t = timoT();
   if (!B) { body.innerHTML = `<div class="st-note">${t.loading}</div>`; return; }
   const level = opts.level && B.LEVELS.some(l => l.id === opts.level) ? opts.level : (TIMO.level || 'k2');  TIMO.level = level;
-  const note = (B.LEVELS.find(l => l.id === level) || {}).note || '';
+  const en = timoUI(), lv = B.LEVELS.find(l => l.id === level) || {};
+  const note = (en && lv.note_en) || lv.note || '';
   body.innerHTML = `<div class="st-row">${B.LEVELS.map(l =>
-      `<button class="st-pill${l.id === level ? ' on' : ''}" data-lv="${l.id}">${esc(l.name)}</button>`).join('')}
+      `<button class="st-pill${l.id === level ? ' on' : ''}" data-lv="${l.id}">${esc((en && l.name_en) || l.name)}</button>`).join('')}
       <span class="st-note">${esc(note)}</span></div>
     <div class="timo"><div class="timo-q" id="tqQ">${esc(t.ready)}</div>
       <div class="timo-a" id="tqA"></div>

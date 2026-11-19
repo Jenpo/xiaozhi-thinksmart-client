@@ -420,8 +420,10 @@
 
   /* 分档（页面上的按钮顺序） */
   const LEVELS = [
-    { id: 'k2', name: '幼稚园 K2', note: 'TIMO 幼稚园组 2017/2018 卷，能听懂题就会做' },
-    { id: 'p1', name: '小一 P1', note: 'TIMO Primary 1 2018/2020-2021 卷' },
+    { id: 'k2', name: '幼稚园 K2', note: 'TIMO 幼稚园组 2017/2018 卷，能听懂题就会做',
+      name_en: 'Kindergarten (K2)', note_en: 'TIMO Kindergarten papers 2017 / 2018' },
+    { id: 'p1', name: '小一 P1', note: 'TIMO Primary 1 2018/2020-2021 卷',
+      name_en: 'Primary 1 (P1)', note_en: 'TIMO Primary 1 papers 2018 / 2020-2021' },
   ];
 
   /* 按档位取题；打乱顺序 */
