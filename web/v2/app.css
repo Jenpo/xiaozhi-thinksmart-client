@@ -972,3 +972,12 @@ body.ptt-off .hint::after { content: none; }
 /* 一轮结束（2026-11-19）：结果一行；「再来一轮」「升一级」并排 */
 .flash-q.end-score { font-size: 60px; letter-spacing: 0; }
 .flash .flash-go-row { grid-column: 1; flex-wrap: nowrap; }
+/* 星星里程碑（2026-11-19）：胶囊下的进度条 + 达成时的大庆祝 */
+.st-stars { position: relative; padding-bottom: 10px; }
+.st-goal { position: absolute; left: 16px; right: 16px; bottom: 4px; height: 4px; border-radius: 4px; background: #ffd54a33; overflow: hidden; }
+.st-goal em { display: block; height: 100%; background: linear-gradient(90deg, #ffd54a, #ffb347); border-radius: 4px; }
+.star-milestone { position: fixed; inset: 0; z-index: 90; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(circle, #ffd54a33 0, #0b1027cc 70%); animation: msIn 4.2s ease-out forwards; }
+.star-milestone b { font-size: 150px; color: #ffe27a; text-shadow: 0 6px 30px #000c; }
+.star-milestone span { margin-top: 10px; font-size: 48px; font-weight: 700; color: #fff; text-shadow: 0 4px 16px #000c; }
+@keyframes msIn { 0% { opacity: 0; transform: scale(.6); } 12% { opacity: 1; transform: scale(1.08); } 20% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }

@@ -209,7 +209,8 @@ function hwRender(d, fresh = false) {   // fresh=刚拍出来的结果：收掉�
     const bad = (d.items || []).filter(i => i.ok === false).length;
     const fixed = (d.fixed || []).length;
     head.innerHTML = `<b>${esc(d.subject || '作业')}</b><span>${esc(d.grade_guess || '')}`
-      + (d.readable === false ? ' · 看不清，请再拍一张' : ` · ${n} 题，${bad} 题要再看一次`) + '</span>'
+      + (d.readable === false ? (HW.lang === 'en' ? " · Can't see it — try another photo" : ' · 看不清，请再拍一张')
+         : (HW.lang === 'en' ? ` · ${n} questions, ${bad} to look at again` : ` · ${n} 题，${bad} 题要再看一次`)) + '</span>'
       + (fixed ? `<span class="hw-fixed">🎉 改对了 ${fixed} 题</span>` : '');
   }
   if (list) {
@@ -439,7 +440,10 @@ function hwStars(d) {
   const n = (d.fixed || []).length + (items.length && items.every(i => i.ok !== false) ? 2 : 0);
   if (!n) return;
   HW_STARRED.add(d.id);
+  const before = STARS.total;
   STARS.today += n; STARS.total += n; starRender();
+  const hit = STAR_GOALS.filter(g => before < g && STARS.total >= g).pop();
+  if (hit) setTimeout(() => starMilestone(hit), 800);
   const allOk = items.every(i => i.ok !== false);
   toast(`⭐ +${n} ` + ({ en: allOk ? 'All correct, well done!' : 'You fixed it, great job!', yue: allOk ? '全对，好叻！' : '改对咗，好叻！',
                          zh: allOk ? '全对，真棒！' : '改对了，真棒！' }[HW.lang] || 'Well done!'));
@@ -447,22 +451,66 @@ function hwStars(d) {
     body: JSON.stringify({ stars: n, why: 'homework' }) }).catch(() => {});
 }
 
+/* 镜头前有没有纸（2026-11-19：12:14 连拍 4 张只有头）：从实时画面取中间一块，数「亮、颜色淡」的像素占比。
+   白纸举在脸前时中间大片发白；只有脸/房间时很少。取不到画面（还没出帧、出错）返回 null，不拦。 */
+const PAPER_FRAC = 0.30;
+function hwPaperScore() {
+  const v = hwEl('hwLive');
+  if (!v || v.hidden || !v.naturalWidth) return null;
+  try {
+    const c = HW.paperCanvas || (HW.paperCanvas = document.createElement('canvas'));
+    c.width = 64; c.height = 48;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(v, 0, 0, 64, 48);
+    const px = g.getImageData(16, 12, 32, 24).data;     // 中间一半
+    let white = 0, n = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], gg = px[i + 1], b = px[i + 2], mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+      n += 1;
+      if (mx > 120 && (mx - mn) / mx < 0.35) white += 1;   // 亮且颜色淡（实时画面白平衡没校正，偏绿也算进）
+    }
+    return white / n;
+  } catch (e) { return null; }
+}
+const HW_SAY = {
+  hold: { yue: '将份功课举高，挡住块面', en: 'Hold your homework up in front of your face', zh: '把作业纸举起来，挡住你的脸' },
+  more: { yue: '我未见到纸，举高啲', en: "I can't see the paper yet. Hold it up close", zh: '还没看到作业纸，举高一点' },
+};
+/* 页面自己倒数（5 s）。纸张分数只记日志、不拦：实测白沙发/白墙也有 0.6，像素规则分不清纸和房间（18 张样本只有 1 张真有作业），
+   积累样本后再定阈值。真正的「没看到作业」交给看图结果：readable=false 时自动提醒并重拍一次（hwCapture） */
+async function hwCountdownGate() {
+  const show = t => { const el = hwEl('hwBusyText'); if (el) el.textContent = t; };
+  const lbl = { yue: '📄 举起份功课… ', en: '📄 Hold your homework up… ', zh: '📄 把作业纸举起来… ' }[HW.lang] || '📄 ';
+  hwSetBusy(true, lbl + HW_COUNTDOWN);
+  const b0 = hwEl('hwBusy'); if (b0) b0.classList.add('cd');
+  for (let k = HW_COUNTDOWN; k > 0; k--) { show(lbl + k); await sleepMs(1000); }
+  const sc = hwPaperScore();
+  pageLog('note', `看作业纸张分数 ${sc === null ? 'n/a' : sc.toFixed(2)}`);
+}
 async function hwCapture(extra) {
   if (HW.busy) { pageLog('note', 'hwCapture 跳过：HW.busy'); return; }
   extra = (extra && typeof extra === 'object' && !(extra instanceof Event)) ? extra : {};
   hwLiveOn();
   hwSetBusy(true, '准备拍照…');
-  hwSpeakText({ yue: '将份功课举高，挡住块面', en: 'Hold your homework up in front of your face', zh: '把作业纸举起来，挡住你的脸' }[HW.lang] || '把作业纸举起来，挡住你的脸');
-  const b0 = hwEl('hwBusy'); if (b0) b0.classList.add('cd');
+  hwSpeakText(HW_SAY.hold[HW.lang] || HW_SAY.hold.en);
   try {
+    await hwCountdownGate();
     const r = await fetch('/api/hw/capture', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ language: HW.lang, countdown: HW_COUNTDOWN, source: 'page', ...extra }),
+      body: JSON.stringify({ language: HW.lang, countdown: 0, source: 'page', ...extra }),
     });
     const d = await r.json().catch(() => ({ ok: false, error: '网关没有回话' }));
     if (!d.ok) { toast(d.code === 'busy' ? '正在拍，等一下' : (d.error || '没拍成，再试一次'), 'error'); return; }
     hwRender(d, true);
     hwStars(d);
+    if (d.readable === false && !extra.retry) {
+      // 没看到作业：不等孩子找「再拍一张」，直接提醒并自动重拍一次（11-19 12:14 连拍 4 张只有头）
+      hwSetBusy(false);
+      hwSpeakText(HW_SAY.more[HW.lang] || HW_SAY.more.en);
+      await sleepMs(2500);
+      if (hwEl('hwSheet') && hwEl('hwSheet').classList.contains('on')) return await hwCapture({ ...extra, retry: true });   // await：外层 finally 要等重拍完再收实时画面
+      return;
+    }
     const text = hwSpeechText(d);
     if (text) hwSpeakText(text);
   } catch (e) {
@@ -504,6 +552,8 @@ function hwSetLang(lang) {
 for (const el of document.querySelectorAll('.hw-lang')) {
   el.addEventListener('click', () => hwSetLang(el.dataset.lang));
 }
+// 看作业的语言按钮一开始就按 HW.lang 亮（默认英文，以前写死亮粤语）
+document.querySelectorAll('#hwSheet .hw-lang').forEach(el => el.classList.toggle('on', el.dataset.lang === HW.lang));
 if (hwEl('hwShoot')) hwEl('hwShoot').addEventListener('click', hwCapture);
 if (hwEl('hwAgain')) hwEl('hwAgain').addEventListener('click', hwCapture);
 if (hwEl('hwClose')) hwEl('hwClose').addEventListener('click', () => hwOpen(false));
@@ -2612,11 +2662,27 @@ function studyPush() {
 }
 
 /* 星星：页面上立刻加、飘一颗星，同时记到设备（family.json），主屏横幅也显示今天的星星 */
+/* 星星里程碑（2026-11-19：一天就攒了 273 颗，星星要有奔头）：总数到 50/100/200/300/500/1000… 大庆祝 + 念一句；
+   星星胶囊下面一条进度条，写着下一个目标 */
+const STAR_GOALS = [50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000];
+const nextGoal = t => STAR_GOALS.find(g => g > t) || (Math.floor(t / 1000) + 1) * 1000;
+const prevGoal = t => [0, ...STAR_GOALS].filter(g => g <= t).pop() || 0;
 function starRender() {
   let el = stEl('stStars');
   const bar = document.querySelector('#stSheet .st-bar-r');
   if (!el && bar) { bar.insertAdjacentHTML('afterbegin', '<div class="st-stars" id="stStars"></div>'); el = stEl('stStars'); }
-  if (el) el.innerHTML = `⭐ <b>${STARS.today}</b><span>${ST.lang === 'en' ? 'today' : '今天'} · ${STARS.total}</span>`;
+  const g = nextGoal(STARS.total), g0 = prevGoal(STARS.total), pct = Math.round(100 * (STARS.total - g0) / Math.max(1, g - g0));
+  if (el) el.innerHTML = `⭐ <b>${STARS.today}</b><span>${STARS.total}/${g}🏆</span>`
+    + `<i class="st-goal"><em style="width:${pct}%"></em></i>`;
+}
+function starMilestone(goal) {
+  const box = document.createElement('div');
+  box.className = 'star-milestone';
+  box.innerHTML = `<b>🏆 ${goal}</b><span>${ST.lang === 'en' || HW.lang === 'en' ? `${goal} stars! You're a superstar!` : `${goal} 颗星！你是小明星！`}</span>`;
+  document.body.appendChild(box);
+  setTimeout(() => box.remove(), 4200);
+  try { sfx('combo'); setTimeout(() => sfx('combo'), 300); } catch (e) {}
+  QV.milestone = goal;                               // 一轮结束时念出来（现在念会打断题目）
 }
 function starFly(n, label) {
   const sheet = stEl('stSheet'); if (!sheet) return;
@@ -2629,7 +2695,10 @@ function starFly(n, label) {
 }
 function starGain(n, label) {
   if (!n) return;
+  const before = STARS.total;
   QV.roundStars += n; STARS.today += n; STARS.total += n;
+  const hit = STAR_GOALS.filter(g => before < g && STARS.total >= g).pop();
+  if (hit) setTimeout(() => starMilestone(hit), 1200);
   starRender(); starFly(n, label);
   fetch('/api/stars/add', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ stars: n, why: label || '', streak: QV.streak }) })
@@ -2645,6 +2714,8 @@ function quizRight(base) {
 }
 function quizRoundEnd(mode, level, right, total, sec) {
   const perfect = right === total && total > 0;
+  const ms = QV.milestone; QV.milestone = null;
+  const msSay = ms ? { en: ` And you reached ${ms} stars! Superstar!`, yue: ` 仲有，你够 ${ms} 粒星喇！`, zh: ` 而且你攒够 ${ms} 颗星啦！` } : null;
   if (perfect) setTimeout(() => starGain(3, ST.lang === 'en' ? 'Perfect round!' : '全对奖励'), 900);
   const s = QV.roundStars + (perfect ? 3 : 0);
   fetch('/api/stars/add', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2656,7 +2727,7 @@ function quizRoundEnd(mode, level, right, total, sec) {
         : `Good effort! ${right} out of ${total}, and ${s} stars. Practice makes you stronger!`,
     yue: perfect ? `全部啱晒！攞咗${s}粒星，好叻！` : `啱咗${right}题，攞咗${s}粒星！错嘅入咗错题本，下次再练`,
     zh: perfect ? `全对了！得了${s}颗星，真棒！` : `对了${right}题，得了${s}颗星！错的放进错题本，下次再练`,
-  }[ST.lang] || '';
+  }[ST.lang] + (msSay ? msSay[ST.lang] || msSay.en : '') || '';
 }
 /* hub 认出来的口头回答：{cmd: repeat|hint|skip|stop|mute, value?: 数字, text} */
 function studyVoice(d) {
@@ -3463,7 +3534,7 @@ function timoView(body, opts) {
   stEl('tqNext').addEventListener('click', () => { quizCancel(); listenCancel(); TIMO.n = Math.max(TIMO.n, TIMO.answered || 0); timoNext(); });
   starRender();
 }
-function timoStop() { TIMO.gen = (TIMO.gen || 0) + 1; TIMO.q = null; listenCancel(); }
+function timoStop() { TIMO.gen = (TIMO.gen || 0) + 1; TIMO.q = null; clearTimeout(TIMO.idle); listenCancel(); }
 async function timoStart(level, opts) {
   const B = timoBank();
   const n = Number(opts && opts.count) || 8;
@@ -3570,9 +3641,20 @@ function timoNext() {
   }
   studyPush();
   setTimeout(() => { if (TIMO.q === q) timoAsk(true); }, 250);
+  timoIdle();
+}
+/* 25 s 没作答也没提示过：自动给提示（念 + 上屏），算用过提示（答对 1 颗）。11-19 小一两轮 2/8、4/8，卡住就干等 */
+const TIMO_IDLE_MS = 25000;
+function timoIdle() {
+  clearTimeout(TIMO.idle);
+  const q = TIMO.q;
+  TIMO.idle = setTimeout(() => {
+    if (TIMO.q === q && !TIMO.locked && !TIMO.hintUsed && !TIMO.input && stEl('stSheet').classList.contains('on')) timoHint();
+  }, TIMO_IDLE_MS);
 }
 function timoKey(k) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
+  timoIdle();
   if (k === '⌫') TIMO.input = TIMO.input.slice(0, -1);
   else if (k === '✓') {
     if (TIMO.input) { listenCancel(); timoAnswer(TIMO.input, TIMO.input); }
@@ -3651,6 +3733,13 @@ function timoEnd() {
   tqVoice('');
   stEl('tqSay').hidden = true; stEl('tqHint').hidden = true; stEl('tqNext').hidden = true;
   const go = stEl('tqGo'); go.hidden = false; go.textContent = t.retry;
+  clearTimeout(TIMO.idle);
+  // 小一不到一半：一键换幼稚园组（11-19 小一 2/8、4/8，幼稚园 6/8）
+  let k2 = stEl('tqK2');
+  if (!k2) { k2 = document.createElement('button'); k2.id = 'tqK2'; k2.className = 'pri'; go.after(k2); }
+  k2.hidden = !(TIMO.level === 'p1' && TIMO.right * 2 < TIMO.total);
+  k2.textContent = timoUI() ? 'Try Kindergarten (K2) ▶' : '换幼稚园组 ▶';
+  k2.onclick = () => { timoStop(); timoView(stEl('stBody'), { level: 'k2' }); timoStart('k2', {}); };
   studyPush();
   quizSay(quizRoundEnd('timo', TIMO.level, TIMO.right, TIMO.total, sec), ST.lang, false);
   if (TIMO.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
