@@ -926,6 +926,9 @@ body.ptt-off .hint::after { content: none; }
 .timo .timo-opts button.bad { background: #ff8b8b22; border-color: #ff8b8b; color: #ffb0b0; }
 .timo .timo-opts button[disabled]:not(.good) { opacity: .45; }
 .timo .pad button[disabled] { opacity: .45; }
+/* 揭晓后不再 disabled（disabled 的键收不到点按，孩子连点没反应）：只变暗，点任何键 = 下一题 */
+.timo .timo-opts button.off:not(.good) { opacity: .45; }
+.timo .pad button.off { opacity: .45; }
 .timo .flash-voice { grid-column: 1; }
 
 /* ===== 字大一些（owner 2026-11-19「布局可以字大一些」）=====

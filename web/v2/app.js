@@ -29,13 +29,23 @@ for (const type of ['touchstart', 'click']) {
 /* 卡顿探针：主线程被堵住 800 ms 以上记一条（kiosk 没有控制台，只能落进 journal）。
    setInterval 在阻塞时会漂移，正好当判据；每 500 ms 一次的开销可以忽略。 */
 (() => {
-  let last = Date.now(), lastLog = 0;
+  let last = Date.now(), lastLog = 0, big = [];
   setInterval(() => {
     const now = Date.now(), gap = now - last;
     last = now;
+    const where = (document.querySelector('.sheet.on') || {}).id || 'home';
     if (gap > 800 && now - lastLog > 3000) {
       lastLog = now;
-      pageLog('jank', `main thread stalled ${gap} ms (${(document.querySelector('.sheet.on') || {}).id || 'home'})`);
+      pageLog('jank', `main thread stalled ${gap} ms (${where})`);
+    }
+    // 兜底：2 分钟里 3 次 >5 s 的卡顿 = 页面已经坏了（11-19 19:20 卡到 35 s，只能靠转屏重启才恢复）。
+    // 只在没开面板时重载，不把孩子做到一半的题清掉；面板一收起就会走到这里
+    if (gap > 5000) big.push(now);
+    big = big.filter(t => now - t < 120000);
+    if (big.length >= 3 && where === 'home' && !location.search.includes('demo')) {
+      pageLog('jank', `reload: ${big.length} stalls >5 s in 2 min`);
+      big = [];
+      setTimeout(() => location.reload(), 300);
     }
   }, 500);
 })();
@@ -50,6 +60,15 @@ document.addEventListener('pointerdown', () => {
   lastTouchPost = now;
   fetch('/api/study/touch', { method: 'POST' }).catch(() => {});
 }, { capture: true, passive: true });
+
+/* 念完/打断的 Audio 一定要拆掉（2026-11-19 19:20 学习板 30 s 点不动的根因）：
+   WebKitGTK 每个 new Audio 是一条 GStreamer 管线（source/typefind/mpegaudioparse/aqueue… 5 个以上线程），
+   只 pause() 不放 src，管线一直挂在 PAUSED，主线程还要替它们处理总线消息。孩子讲解中点 Next 就漏一条：
+   渲染进程 2 h 涨到 632 线程，主线程卡顿从 0.8 s 一路涨到 35 s。pause + 去掉 src + load() 才会真正拆管线。 */
+function audioDrop(a) {
+  if (!a) return;
+  try { a.pause(); a.removeAttribute('src'); a.load(); } catch (e) { /* 已经拆了 */ }
+}
 
 // 曲名/歌手来自 NAS 与后台，直接拼 innerHTML 会把 & < > 吃掉或注入标签
 function escapeHtml(s) {
@@ -396,14 +415,15 @@ function hwSpeechText(d) {
 function hwSpeakText(text) {
   if (!text) return;
   quietMic();
-  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  if (HW.audio) { audioDrop(HW.audio); HW.audio = null; }
   const url = '/api/hw/tts?lang=' + encodeURIComponent(HW.lang) + '&text=' + encodeURIComponent(text);
   const a = new Audio(url);
   HW.audio = a;
   const stop = hwEl('hwStop');
   if (stop) stop.hidden = false;
-  a.addEventListener('ended', () => { if (HW.audio === a) HW.audio = null; if (stop) stop.hidden = true; });
-  a.addEventListener('error', () => { if (stop) stop.hidden = true; });
+  const fin = () => { if (HW.audio === a) HW.audio = null; if (stop) stop.hidden = true; audioDrop(a); };
+  a.addEventListener('ended', fin, { once: true });
+  a.addEventListener('error', fin, { once: true });
   a.play().catch(() => toast('朗读没播出来', 'error'));
 }
 
@@ -551,7 +571,7 @@ function hwOpen(on, shoot = true) {
     if (!shoot && !HW.busy) hwLiveOn();
     if (shoot) hwCapture();
   } else if (HW.audio) {
-    HW.audio.pause(); HW.audio = null;
+    audioDrop(HW.audio); HW.audio = null;
   }
 }
 
@@ -583,7 +603,7 @@ if (hwEl('hwBook')) hwEl('hwBook').addEventListener('click', () => {
 });
 if (hwEl('hwSpeak')) hwEl('hwSpeak').addEventListener('click', () => hwSpeakText(hwSpeechText(HW.data)));
 if (hwEl('hwStop')) hwEl('hwStop').addEventListener('click', () => {
-  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  if (HW.audio) { audioDrop(HW.audio); HW.audio = null; }
   hwEl('hwStop').hidden = true;
 });
 
@@ -2537,9 +2557,13 @@ const quietMic = () => fetch('/api/study/quiet', { method: 'POST' }).catch(() =>
 function speakText(text, lang) {
   if (!text) return;
   quietMic();
-  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  if (HW.audio) { audioDrop(HW.audio); HW.audio = null; }
   const a = new Audio('/api/hw/tts?lang=' + encodeURIComponent(lang || 'yue') + '&text=' + encodeURIComponent(text));
   HW.audio = a;
+  // 念完也拆管线；放在下一拍，让 quizSay 等 ended 的监听先跑完
+  const fin = () => setTimeout(() => { if (HW.audio === a) HW.audio = null; audioDrop(a); }, 0);
+  a.addEventListener('ended', fin, { once: true });
+  a.addEventListener('error', fin, { once: true });
   a.play().catch(() => {});
   return a;
 }
@@ -2684,7 +2708,7 @@ async function quizSay(text, lang, listen) {
 }
 function quizCancel() {
   QV.token += 1;
-  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  if (HW.audio) { audioDrop(HW.audio); HW.audio = null; }
   fetch('/api/study/quiet', { method: 'POST' }).catch(() => {});
 }
 function studyPush() {
@@ -3059,19 +3083,19 @@ function ttsAudio(text, lang) {
     a = new Audio('/api/hw/tts?lang=' + encodeURIComponent(lang) + '&text=' + encodeURIComponent(text));
     a.preload = 'auto';
     ttsCache.set(key, a);
-    if (ttsCache.size > 12) ttsCache.delete(ttsCache.keys().next().value);
+    if (ttsCache.size > 12) { const k0 = ttsCache.keys().next().value; audioDrop(ttsCache.get(k0)); ttsCache.delete(k0); }
   }
   return a;
 }
 function speakWait(text, lang) {
   return new Promise(res => {
     if (!text) return res();
-    if (HW.audio) HW.audio.pause();
+    if (HW.audio) { audioDrop(HW.audio); HW.audio = null; }
     const a = ttsAudio(text, lang);
     ttsCache.delete(lang + '|' + text);            // 用过就丢，下次同一句重新取（Audio 不能可靠重播）
     HW.audio = a;
     let done = false;
-    const fin = () => { if (!done) { done = true; clearTimeout(tm); res(); } };
+    const fin = () => { if (!done) { done = true; clearTimeout(tm); if (HW.audio === a) HW.audio = null; audioDrop(a); res(); } };
     const tm = setTimeout(fin, 10000);
     a.addEventListener('ended', fin, { once: true });
     a.addEventListener('error', fin, { once: true });
@@ -3261,7 +3285,7 @@ function flashKey(k) {
   const f = ST.flash;
   if (!f || !f.q) { flashStart(ST.flashLevel || 'mixed'); return; }
   // 讲解时点任何键 = 跳过讲解直接下一题（11-19 12:17:04 答错后 5 秒内连点 ✓ 13 下）
-  if (f.locked) { if (f.skip) { if (HW.audio) HW.audio.pause(); f.skip(); } return; }
+  if (f.locked) { if (f.skip) { if (HW.audio) { audioDrop(HW.audio); HW.audio = null; } f.skip(); } return; }
   if (k === '⌫') f.input = f.input.slice(0, -1);
   else if (k === '✓') {
     if (f.input) { fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {}); flashCheck(false); }
@@ -3682,7 +3706,10 @@ function timoNext() {
     ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(timoOptLabel(q, i))}</button>`).join('')}</div>`
     : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`;
   if (q.ans === 'choice') {
-    pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => { listenCancel(); timoAnswer(q.opts[Number(b.dataset.o)], timoOptLabel(q, Number(b.dataset.o))); }));
+    pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => {
+      if (TIMO.locked) return timoKey('next');      // 讲解中点选项 = 下一题
+      listenCancel(); timoAnswer(q.opts[Number(b.dataset.o)], timoOptLabel(q, Number(b.dataset.o)));
+    }));
   } else {
     pad.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => timoKey(b.dataset.k)));
   }
@@ -3744,9 +3771,11 @@ function timoMarkOpts(q, wrongOpt, reveal) {
   document.querySelectorAll('#tqPad [data-o]').forEach(b => {
     const o = q.opts[Number(b.dataset.o)];
     if (wrongOpt !== undefined && timoNorm(o) === timoNorm(wrongOpt)) { b.classList.add('bad'); b.disabled = true; }
-    if (reveal) { b.disabled = true; if (timoNorm(o) === timoNorm(q.a)) b.classList.add('good'); }
+    // 揭晓后只变暗（.off），不 disabled：disabled 的按钮收不到点按，19:00 前后孩子对着灰掉的 ✓ 连点 14 次没反应。
+    // 现在讲解时点任何键/选项 = 下一题（timoKey / 选项点按里判 TIMO.locked）
+    if (reveal) { b.classList.add('off'); if (timoNorm(o) === timoNorm(q.a)) b.classList.add('good'); }
   });
-  if (reveal) document.querySelectorAll('#tqPad [data-k]').forEach(b => { b.disabled = true; });
+  if (reveal) document.querySelectorAll('#tqPad [data-k]').forEach(b => b.classList.add('off'));
 }
 async function timoAnswer(given, shown) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
@@ -3945,5 +3974,16 @@ if (stEl('cardClose')) stEl('cardClose').addEventListener('click', () => stEl('c
 
 document.querySelectorAll('.st-tab').forEach(t => t.addEventListener('click', () => stTab(t.dataset.mode)));
 if (stEl('stClose')) stEl('stClose').addEventListener('click', stClose);
+/* 语言按钮要立刻看得见变化（11-19 晚孩子在 TIMO 里连点「普通话」9 次：以前只改 ST.lang，屏幕上的题到下一题才换） */
 document.querySelectorAll('.st-lang').forEach(b => b.addEventListener('click', () => {
-  ST.lang = b.dataset.lang; document.querySelectorAll('.st-lang').forEach(x => x.classList.toggle('on', x === b)); }));
+  const same = ST.lang === b.dataset.lang;
+  ST.lang = b.dataset.lang; document.querySelectorAll('.st-lang').forEach(x => x.classList.toggle('on', x === b));
+  toast({ en: 'English', yue: '粤语', zh: '普通话' }[ST.lang] + (same ? '' : ' ✓'));
+  if (same) return;
+  if (ST.mode === 'timo' && TIMO.q) {
+    const q = TIMO.q;
+    stEl('tqQ').textContent = timoText(q);
+    document.querySelectorAll('#tqPad [data-o]').forEach(o => { const i = Number(o.dataset.o); o.textContent = `${String.fromCharCode(65 + i)}. ${timoOptLabel(q, i)}`; });
+    if (!TIMO.locked) { listenCancel(); timoAsk(true); }   // 换了语言就用新语言再念一遍（和「再听一次」同一条路）
+  } else if (ST.mode === 'flash' && ST.flash) flashMeta();
+}));
