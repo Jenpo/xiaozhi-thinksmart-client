@@ -592,7 +592,50 @@ class Client:
             return
         self.heard = False
         self.wake_fresh = True        # 这次唤醒后还一个字都没听到：超时就自我介绍（stop_uploading）
+        self.quiet_miss = False
         self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
+
+    async def listen_answer(self, seconds=12):
+        """学习面板读完一题就开麦等孩子说答案（2026-11-19）：不响唤醒音、不自我介绍、没说话也不报「没听清」。
+        hub 的 studyFastPath 认出答案后转回页面判题，不走大模型。正在对话/放闹钟/麦克风关着时什么都不做。"""
+        if self.ring or self.in_turn() or self.uploading or not self.keys.mic_on:
+            return False
+        if not await self.ensure_connected():
+            return False
+        if not await self.start_listening('realtime'):
+            return False
+        self.heard = False
+        self.wake_fresh = False
+        self.quiet_miss = True
+        self.deadline = time.monotonic() + max(4, min(30, float(seconds)))
+        return True
+
+    def study_answered(self):
+        """hub 的 studyFastPath 把孩子的口头答案转给了学习面板（/api/ui study_answer），这一轮 hub 不会再回话：
+        别停在「思考中」、别放「想一想」提示音、也别报「没收到回答」。stt 和这条消息谁先到不一定，收两次尾。"""
+        async def settle():
+            for _ in range(3):
+                if getattr(self, 'think_task', None):
+                    self.think_task.cancel()
+                    self.think_task = None
+                if self.question is not None or self.state == 'thinking':
+                    self.question = None
+                    self.listen_after_reply = False
+                    self.hold_open = False
+                    self.deadline = None
+                    if not self.uploading:
+                        self.set_state('idle')
+                await asyncio.sleep(0.35)
+        asyncio.create_task(settle())
+
+    async def listen_quiet_stop(self):
+        """页面要念题/念讲解了：先把还开着的等答案麦克风收掉，免得把喇叭里的讲解当成孩子的回答。"""
+        if self.uploading and self.state == 'listening' and not self.vad_ended and self.listen_mode == 'realtime':
+            self.quiet_miss = True
+            await self.hub.send({'type': 'listen', 'state': 'stop'})
+            await self.stop_uploading(missed=False)
+            return True
+        return False
 
     async def start_listening(self, mode):
         # 通道刚断（hub 侧超时/重启）：发送会静默失败，本地却以为在听，麦克风一直上传、
@@ -637,6 +680,10 @@ class Client:
     async def stop_uploading(self, missed=False):
         fresh, self.wake_fresh = getattr(self, 'wake_fresh', False), False
         after_intro, self.after_intro = getattr(self, 'after_intro', False), False
+        if getattr(self, 'quiet_miss', False):
+            self.quiet_miss = False
+            missed = False                               # 学习面板等答案：没说也不报「没听清」
+            fresh = False
         # 唤醒后没说话：hub 的 VAD 一句都没断出来（家里有电视/走动声，本机音量门会误判成有人说话，
         # 2026-11-16 实测第二次唤醒就因此没介绍）；hub 不发 VAD 事件时退回本机音量判断
         if self.hub.features.get('vad_end'):

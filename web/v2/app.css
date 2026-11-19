@@ -885,3 +885,18 @@ body.ptt-off .hint::after { content: none; }
   font-size: 18px; color: #08122c; background: var(--accent); }
 .card-items.list li::before { content: '• '; color: var(--accent); }
 .card-items.words li { display: flex; justify-content: space-between; }
+
+/* 小星星积分（2026-11-19）：学习面板右上角今天的星星 + 答对时飘一颗星；主屏横幅今天的星星 */
+.st-stars { display: flex; align-items: baseline; gap: 8px; padding: 6px 16px; border-radius: 999px; font-size: 22px;
+  background: #ffd54a1f; border: 1px solid #ffd54a88; color: #ffe27a; }
+.st-stars b { font-size: 26px; }
+.st-stars span { font-size: 14px; color: var(--ink3); }
+.st-stars.pop { animation: starPop .5s ease-out; }
+@keyframes starPop { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 100% { transform: scale(1); } }
+.star-fly { position: absolute; left: 50%; top: 42%; transform: translate(-50%, 0); z-index: 50; pointer-events: none;
+  font-size: 64px; font-weight: 700; color: #ffe27a; text-shadow: 0 4px 18px #000a; text-align: center;
+  animation: starFly 1.5s ease-out forwards; }
+.star-fly em { display: block; font-style: normal; font-size: 28px; color: #fff; }
+@keyframes starFly { 0% { opacity: 0; transform: translate(-50%, 30px) scale(.6); } 20% { opacity: 1; transform: translate(-50%, 0) scale(1.1); }
+  70% { opacity: 1; transform: translate(-50%, -40px) scale(1); } 100% { opacity: 0; transform: translate(-50%, -120px) scale(.8); } }
+.fam-chip.stars { border-color: #ffd54a88; color: #ffe27a; padding-right: 18px; }

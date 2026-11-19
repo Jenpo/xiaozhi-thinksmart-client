@@ -10,6 +10,10 @@
   hub 推屏幕  POST /api/ui {event: card|study|say, data}    （hub 插件 family_tools 用）
   朗读录音    POST /api/rec/start  POST /api/rec/stop → {text}  麦克风原样录下，切成 ≤9 s 交 hub 本机识别。
   全部状态    GET  /api/family
+  星星积分    POST /api/stars/add {stars, why?, round?: {mode, level, right, total, seconds}}   每天另记「今天」，round 留最近 30 轮
+  做题现场    POST /api/study/state {active, mode, n, total, right, streak, ans, opts, lang}（页面推）
+              GET  /api/study/state → {quiz, stars}（hub studyFastPath 读：在做题就把口说的答案转回页面）
+  等答案开麦  POST /api/study/listen {seconds}   POST /api/study/quiet   （页面念完题开麦 / 念讲解前收麦）
 
 说话都交给页面（事件 say → /api/hw/tts，粤语/英文/普通话各用各的声音），和看作业的朗读同一套。
 状态存 ~/.local/share/thinksmart-client/family.json（临时文件 + rename，防断电写坏）。
@@ -36,7 +40,9 @@ MAX_NOTES = 20
 MAX_ROUTINE = 15
 REC_MAX = 120                # 朗读最多录 2 分钟
 REC_CHUNK = 9.0              # hub /kiosk/asr 一次最多 10 s
-UI_EVENTS = ('card', 'study', 'say')
+UI_EVENTS = ('card', 'study', 'say', 'study_answer')
+MAX_ROUNDS = 30
+QUIZ_STALE = 600            # 页面 10 分钟没推做题现场：当作没在做
 LISTS = ('morning', 'evening')
 DEFAULT_ROUTINE = {'morning': ['刷牙洗脸', '吃早餐', '执好书包'], 'evening': ['做功课', '冲凉', '执好听日嘅书包']}
 
@@ -63,7 +69,9 @@ class Family:
     def __init__(self, client):
         self.client = client
         self.state = {'notes': [], 'routine': {k: {'items': list(v), 'done': [], 'date': ''} for k, v in DEFAULT_ROUTINE.items()},
-                      'tv': None, 'bedtime': None}
+                      'tv': None, 'bedtime': None,
+                      'stars': {'total': 0, 'today': 0, 'date': '', 'best_streak': 0, 'rounds': []}}
+        self.quiz = None             # 页面推来的做题现场（只在内存，重启就没了）
         self.rec = None              # 录音中：[float32 块...]
         self.rec_started = 0.0
         self._load()
@@ -92,12 +100,55 @@ class Family:
         except OSError as e:
             log.warning('family state not saved: %s', e)
 
+    # ---- 星星积分（2026-11-19 owner「对小朋友鼓励，有小星星什么的积分」）----
+
+    def _stars(self):
+        st = self.state.get('stars')
+        if not isinstance(st, dict):
+            st = self.state['stars'] = {}
+        for k, v in (('total', 0), ('today', 0), ('date', ''), ('best_streak', 0), ('rounds', [])):
+            st.setdefault(k, v)
+        if st['date'] != _today():
+            st['date'], st['today'] = _today(), 0
+        return st
+
+    def stars_add(self, n, why='', round_=None, streak=0):
+        n = int(n)
+        if not 0 <= n <= 20:
+            raise ValueError('一次加 0-20 颗星')
+        st = self._stars()
+        st['total'] += n
+        st['today'] += n
+        if int(streak or 0) > st['best_streak']:
+            st['best_streak'] = int(streak)
+        if isinstance(round_, dict):
+            r = {k: round_.get(k) for k in ('mode', 'level', 'right', 'total', 'seconds', 'stars')}
+            r['at'] = int(time.time())
+            st['rounds'] = (st['rounds'] + [r])[-MAX_ROUNDS:]
+        self._save()
+        self.publish()
+        return self.stars_view()
+
+    def stars_view(self):
+        st = self._stars()
+        today = [r for r in st['rounds'] if datetime.date.fromtimestamp(r.get('at', 0)).isoformat() == _today()]
+        return {'total': st['total'], 'today': st['today'], 'best_streak': st['best_streak'],
+                'last_round': st['rounds'][-1] if st['rounds'] else None,
+                'today_rounds': len(today), 'today_right': sum(int(r.get('right') or 0) for r in today),
+                'today_questions': sum(int(r.get('total') or 0) for r in today)}
+
+    def quiz_view(self):
+        q = self.quiz
+        if not q or time.time() - q.get('at', 0) > QUIZ_STALE:
+            return None
+        return q
+
     def view(self):
         self._roll_routine()
         tv = self.state['tv']
         return {'notes': self.state['notes'], 'routine': self.state['routine'],
                 'tv': tv and {'end': tv['end'], 'left': max(0, int(tv['end'] - time.time())), 'language': tv.get('language')},
-                'bedtime': self.state['bedtime'], 'recording': self.rec is not None}
+                'bedtime': self.state['bedtime'], 'recording': self.rec is not None, 'stars': self.stars_view()}
 
     def publish(self):
         self.client.events.publish('family', self.view())
@@ -309,6 +360,8 @@ def install(client):
         if ev not in UI_EVENTS or not isinstance(b.get('data'), dict):
             return bad('event 只能是 %s，data 要是对象' % '/'.join(UI_EVENTS))
         client.events.publish(ev, b['data'])
+        if ev == 'study_answer' and hasattr(client, 'study_answered'):
+            client.study_answered()
         return ok()
 
     async def tv_timer(request):
@@ -355,6 +408,34 @@ def install(client):
         except (TypeError, ValueError) as e:
             return bad(str(e))
 
+    async def stars_add(request):
+        b = await body_of(request)
+        try:
+            return ok(stars=fam.stars_add(b.get('stars', 0), b.get('why', ''), b.get('round'), b.get('streak', 0)))
+        except (TypeError, ValueError) as e:
+            return bad(str(e))
+
+    async def study_state(request):
+        if request.method == 'GET':
+            return ok(quiz=fam.quiz_view(), stars=fam.stars_view())
+        b = await body_of(request)
+        keep = ('active', 'mode', 'level', 'n', 'total', 'right', 'streak', 'ans', 'opts', 'lang', 'question', 'speaking')
+        fam.quiz = {k: b.get(k) for k in keep} if b.get('active') else None
+        if fam.quiz:
+            fam.quiz['at'] = time.time()
+        return ok()
+
+    async def study_listen(request):
+        b = await body_of(request)
+        try:
+            seconds = float(b.get('seconds') or 12)
+        except (TypeError, ValueError):
+            seconds = 12
+        return ok(listening=await client.listen_answer(seconds))
+
+    async def study_quiet(_r):
+        return ok(stopped=await client.listen_quiet_stop())
+
     async def rec_start(_r):
         fam.rec_start()
         return ok()
@@ -366,4 +447,6 @@ def install(client):
     return [('/api/family', get_all), ('/api/ui', ui), ('/api/tv-timer', tv_timer),
             ('/api/notes/add', note_add), ('/api/notes/done', note_done),
             ('/api/routine/set', routine_set), ('/api/routine/tick', routine_tick),
-            ('/api/bedtime', bedtime), ('/api/rec/start', rec_start), ('/api/rec/stop', rec_stop)]
+            ('/api/bedtime', bedtime), ('/api/rec/start', rec_start), ('/api/rec/stop', rec_stop),
+            ('/api/stars/add', stars_add), ('/api/study/state', study_state),
+            ('/api/study/listen', study_listen), ('/api/study/quiet', study_quiet)]

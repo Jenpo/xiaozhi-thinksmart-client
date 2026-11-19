@@ -2105,6 +2105,7 @@ const handlers = {
   say: x => { speakText(x.text, x.language); toast(x.text); },
   card: c => cardShow(c),
   study: x => stOpen(x.mode, x),
+  study_answer: d => studyVoice(d),
   music: m => { if (hubTarget(MP.target)) applyMusicStatus(m); },
   toast: t => toast(t.text, t.kind),
   volume(v) {
@@ -2416,15 +2417,26 @@ function stOpen(mode, opts) {
   const sheet = stEl('stSheet');
   if (!sheet) return;
   if (mode === 'book') { hwOpen(true, false); hwShowBook(); return; }
+  // 已经在做同一种题（模型一句话里常连调两三次 study_open，11-18 20:50 / 11-19 08:19 每次都把题重开）：不重开
+  const running = (mode === 'flash' && ST.flash && ST.flash.q) || (mode === 'timo' && TIMO.q);
+  const sameLevel = () => !opts.level || (mode === 'flash' ? opts.level === ST.flash.level : opts.level === TIMO.level);
+  if (sheet.classList.contains('on') && ST.mode === mode && running && sameLevel()) return;
   if (opts.language) ST.lang = opts.language;
-  if (mode === 'timo') ST.lang = 'en';   // owner 2026-11-19：奥数练习用英文交互
+  if (mode === 'timo' || mode === 'flash') ST.lang = 'en';   // owner 2026-11-19：出题默认英文交互
   stLangPills();
   sheet.classList.add('on');
   stTab(mode || ST.mode, opts);
+  // 语音打开的：不用再点「开始」，小麦那句说完就念第一题
+  if (opts.autostart && mode === 'flash') flashStart(ST.flashLevel || 'add20');
+  if (opts.autostart && mode === 'timo') timoStart(TIMO.level || 'k2', opts);
 }
 function stClose() {
   const sheet = stEl('stSheet');
   if (sheet) sheet.classList.remove('on');
+  quizCancel();
+  if (ST.flash) ST.flash.q = null;
+  TIMO.q = null;
+  studyPush();
   stLive(false);
   if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
   if (ST.read && ST.read.recording) fetch('/api/rec/stop', { method: 'POST' }).catch(() => {});
@@ -2435,7 +2447,11 @@ function stLangPills() {
 }
 function stTab(mode, opts) {
   ST.mode = mode;
-  if (mode === 'timo') ST.lang = 'en';   // owner 2026-11-19：奥数练习用英文交互
+  if (mode === 'timo' || mode === 'flash') ST.lang = 'en';   // owner 2026-11-19：出题默认英文交互
+  if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
+  if (ST.flash) ST.flash.q = null;
+  TIMO.q = null;
+  quizCancel();
   stLangPills();
   document.querySelectorAll('.st-tab').forEach(t => t.classList.toggle('on', t.dataset.mode === mode));
   stLive(false);
@@ -2482,8 +2498,152 @@ function stCamEvent(e) {
   if (e.phase === 'done' && e.source === 'voice' && e.mode === 'identify') identShow(e.data, false);
 }
 
+/* -- 做题语音闭环 + 小星星（2026-11-19）--
+ * smartview 实际对话（11-18 20:23–20:58）：小麦说「我读题，你直接说答案」，可闪卡从来不念题、要点「开始」才出题，
+ * 孩子说的答案（「5个5」「2468」）全进了大模型，模型答「我不知道题目是什么」；孩子问「我对了几道题」模型也看不到。
+ * 现在：念题（默认英文）→ 念完不响铃开麦（/api/study/listen）→ hub studyFastPath 认出答案/「再读一次」/「提示」/「跳过」
+ * → 事件 study_answer 回到这里判题。页面把做题现场推给 /api/study/state，hub 用它答「几颗星、对了几道」。
+ * 鼓励：答对 +1 星（奥数第一次就对 +2），连对 3 题再奖 1 颗，全对一轮奖 3 颗；答错先鼓励，奥数给一次再想的机会。
+ */
+const QV = { token: 0, streak: 0, roundStars: 0, mute: false };
+const STARS = { total: 0, today: 0 };
+const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+const pickOne = a => a[Math.floor(Math.random() * a.length)];
+const CHEER = {
+  en: ['Great job!', 'Awesome!', 'You got it!', 'Super!', 'Brilliant!', 'Well done!', 'Fantastic!'],
+  yue: ['好叻！', '啱晒！', '劲呀！', '好犀利！', '做得好！'],
+  zh: ['真棒！', '答对了！', '好厉害！', '太好了！', '做得好！'],
+};
+const TRY_AGAIN = { en: ['Good try! Think again.', 'Almost! Have another go.', 'Nice try! One more time.'],
+                    yue: ['差少少！再谂下。', '唔紧要，再试一次。'], zh: ['差一点！再想想。', '没关系，再试一次。'] };
+const KIND_WRONG = { en: ['Nice try!', 'Good effort!', 'That was a tricky one!'], yue: ['唔紧要！', '好努力喇！'], zh: ['没关系！', '很努力了！'] };
+const STREAK = { en: n => `${n} in a row! Bonus star!`, yue: n => `连续啱${n}题！加多粒星！`, zh: n => `连对${n}题！奖励一颗星！` };
+
+/* 等小麦自己那句说完 → 收起等答案的麦克风 → 念 → 念完（listen 时）开麦等答案。返回念完的 Promise */
+async function quizSay(text, lang, listen) {
+  const token = ++QV.token;
+  await sleepMs(150);
+  for (let i = 0; i < 60 && ui.status && (ui.status.state === 'speaking' || ui.status.state === 'thinking'); i++) await sleepMs(200);
+  if (token !== QV.token) return;
+  await fetch('/api/study/quiet', { method: 'POST' }).catch(() => {});
+  const openMic = () => { if (listen && token === QV.token) fetch('/api/study/listen', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ seconds: 14 }) }).catch(() => {}); };
+  if (!text || (QV.mute && listen)) { openMic(); return; }
+  const a = speakText(text, lang);
+  if (!a) { openMic(); return; }
+  await new Promise(res => {
+    const t = setTimeout(res, 12000);
+    const done = () => { clearTimeout(t); res(); };
+    a.addEventListener('ended', done, { once: true });
+    a.addEventListener('error', done, { once: true });
+    a.addEventListener('pause', done, { once: true });
+  });
+  openMic();
+}
+function quizCancel() {
+  QV.token += 1;
+  if (HW.audio) { HW.audio.pause(); HW.audio = null; }
+  fetch('/api/study/quiet', { method: 'POST' }).catch(() => {});
+}
+function studyPush() {
+  const open = stEl('stSheet') && stEl('stSheet').classList.contains('on');
+  let d = { active: false };
+  const f = ST.flash;
+  if (open && ST.mode === 'flash' && f && f.q && f.n <= f.total)
+    d = { active: true, mode: 'flash', level: f.level, n: f.n, total: f.total, right: f.right, streak: QV.streak,
+          ans: 'num', lang: ST.lang, question: f.q[0] };
+  else if (open && ST.mode === 'timo' && TIMO.q)
+    d = { active: true, mode: 'timo', level: TIMO.level, n: TIMO.n + 1, total: TIMO.total, right: TIMO.right, streak: QV.streak,
+          ans: TIMO.q.ans || 'num', opts: TIMO.q.opts || null, lang: ST.lang, question: timoText(TIMO.q) };
+  fetch('/api/study/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }).catch(() => {});
+}
+
+/* 星星：页面上立刻加、飘一颗星，同时记到设备（family.json），主屏横幅也显示今天的星星 */
+function starRender() {
+  let el = stEl('stStars');
+  const bar = document.querySelector('#stSheet .st-bar-r');
+  if (!el && bar) { bar.insertAdjacentHTML('afterbegin', '<div class="st-stars" id="stStars"></div>'); el = stEl('stStars'); }
+  if (el) el.innerHTML = `⭐ <b>${STARS.today}</b><span>${ST.lang === 'en' ? 'today' : '今天'} · ${STARS.total}</span>`;
+}
+function starFly(n, label) {
+  const sheet = stEl('stSheet'); if (!sheet) return;
+  const x = document.createElement('div');
+  x.className = 'star-fly';
+  x.innerHTML = `${'⭐'.repeat(Math.min(n, 3))} +${n}${label ? `<em>${esc(label)}</em>` : ''}`;
+  sheet.appendChild(x);
+  setTimeout(() => x.remove(), 1600);
+  const el = stEl('stStars'); if (el) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+}
+function starGain(n, label) {
+  if (!n) return;
+  QV.roundStars += n; STARS.today += n; STARS.total += n;
+  starRender(); starFly(n, label);
+  fetch('/api/stars/add', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stars: n, why: label || '', streak: QV.streak }) })
+    .then(r => r.json()).then(d => { if (d.ok && d.stars) { STARS.total = d.stars.total; STARS.today = d.stars.today; starRender(); } }).catch(() => {});
+}
+/* 答对：+base 星；每连对 3 题再奖 1 颗。返回要念的鼓励话 */
+function quizRight(base) {
+  QV.streak += 1;
+  starGain(base);
+  let say = pickOne(CHEER[ST.lang] || CHEER.en);
+  if (QV.streak % 3 === 0) { setTimeout(() => starGain(1, STREAK[ST.lang](QV.streak)), 700); say += ' ' + STREAK[ST.lang](QV.streak); }
+  return say;
+}
+function quizRoundEnd(mode, level, right, total, sec) {
+  const perfect = right === total && total > 0;
+  if (perfect) setTimeout(() => starGain(3, ST.lang === 'en' ? 'Perfect round!' : '全对奖励'), 900);
+  const s = QV.roundStars + (perfect ? 3 : 0);
+  fetch('/api/stars/add', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stars: 0, round: { mode, level, right, total, seconds: sec, stars: s } }) }).catch(() => {});
+  const half = right * 2 >= total;
+  return {
+    en: perfect ? `Perfect! All ${total} right! You earned ${s} stars!`
+        : half ? `Well done! ${right} out of ${total}. You earned ${s} stars!`
+        : `Good effort! ${right} out of ${total}, and ${s} stars. Practice makes you stronger!`,
+    yue: perfect ? `全部啱晒！攞咗${s}粒星，好叻！` : `啱咗${right}题，攞咗${s}粒星！错嘅入咗错题本，下次再练`,
+    zh: perfect ? `全对了！得了${s}颗星，真棒！` : `对了${right}题，得了${s}颗星！错的放进错题本，下次再练`,
+  }[ST.lang] || '';
+}
+/* hub 认出来的口头回答：{cmd: repeat|hint|skip|stop|mute, value?: 数字, text} */
+function studyVoice(d) {
+  if (!stEl('stSheet') || !stEl('stSheet').classList.contains('on')) return;
+  const cmd = d.cmd;
+  if (cmd === 'mute') { QV.mute = true; toast(ST.lang === 'en' ? 'OK, I will stop reading. Look at the screen' : '好，不念题了，看屏幕'); }
+  if (cmd === 'unmute') QV.mute = false;
+  if (cmd === 'stop') { quizCancel(); stClose(); return; }
+  if (ST.mode === 'flash') {
+    const f = ST.flash;
+    if (!f || !f.q) { if (cmd === 'start' || d.value == null) flashStart(ST.flashLevel || 'add20'); return; }
+    if (f.locked) return;
+    if (cmd === 'repeat' || cmd === 'mute' || cmd === 'unmute') return flashSay();
+    if (cmd === 'skip') { f.input = '—'; return flashCheck(true); }
+    if (d.value != null) { f.input = String(d.value); stEl('flA').textContent = f.input; flashCheck(); }
+  } else if (ST.mode === 'timo') {
+    const q = TIMO.q;
+    if (!q) { if (cmd === 'start' || d.value == null) timoStart(TIMO.level || 'k2', {}); return; }
+    if (TIMO.locked) return;
+    if (cmd === 'repeat' || cmd === 'mute' || cmd === 'unmute') return timoSay();
+    if (cmd === 'hint') return timoHint();
+    if (cmd === 'skip') return timoAnswer('__skip__', '—');
+    if (q.ans === 'choice') {
+      const t = timoNorm(d.text);
+      const letter = (String(d.text || '').trim().match(/^[a-dA-D]$/) || [])[0];
+      let hit = letter ? q.opts[letter.toUpperCase().charCodeAt(0) - 65] : null;
+      if (!hit) hit = q.opts.find(o => timoNorm(o) && t.includes(timoNorm(o)));
+      if (!hit && d.value != null) hit = q.opts.find(o => timoNorm(o) === String(d.value));
+      if (hit) timoAnswer(hit, hit);
+      else quizSay(ST.lang === 'en' ? 'Which one? Say one of the choices on the screen.' : '选哪个？说屏幕上的一个', ST.lang, true);
+      return;
+    }
+    if (d.value != null) timoAnswer(String(d.value), String(d.value));
+  }
+}
+
 /* -- 口算闪卡 -- */
 const FLASH_LEVELS = { add20: '20 以内加减', add100: '100 以内加减', times: '乘法表', mixed: '混合' };
+const FLASH_LEVELS_EN = { add20: 'Up to 20', add100: 'Up to 100', times: 'Times tables', mixed: 'Mixed' };
+const flEN = () => ST.lang === 'en';
 const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 function flashQuestion(level) {
   const lv = level === 'mixed' ? ['add20', 'add100', 'times'][rnd(0, 2)] : level;
@@ -2493,25 +2653,40 @@ function flashQuestion(level) {
   if (Math.random() < 0.5) { const b = rnd(1, max - a); return [`${a} + ${b}`, a + b]; }
   const b = rnd(1, a); return [`${a} − ${b}`, a - b];
 }
+function flashSpeech(expr, lang) {
+  const ops = lang === 'en' ? { '+': 'plus', '−': 'minus', '×': 'times', '÷': 'divided by' } : { '+': '加', '−': '减', '×': '乘', '÷': '除以' };
+  const s = expr.replace(/[+−×÷]/g, m => ' ' + ops[m] + ' ').replace(/\s+/g, ' ').trim();
+  return lang === 'en' ? `What is ${s}?` : lang === 'yue' ? `${s}，等于几多？` : `${s}，等于多少？`;
+}
 function flashView(body, opts) {
   const level = FLASH_LEVELS[opts.level] ? opts.level : (ST.flashLevel || 'add20');
   ST.flashLevel = level;
-  body.innerHTML = `<div class="st-row">${Object.entries(FLASH_LEVELS).map(([k, v]) =>
+  const names = flEN() ? FLASH_LEVELS_EN : FLASH_LEVELS;
+  body.innerHTML = `<div class="st-row">${Object.entries(names).map(([k, v]) =>
       `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${v}</button>`).join('')}</div>
-    <div class="flash"><div class="flash-q" id="flQ">准备好就开始</div><div class="flash-a" id="flA"></div>
-      <div class="flash-meta" id="flMeta">10 题一轮</div>
+    <div class="flash"><div class="flash-q" id="flQ">${flEN() ? 'Ready?' : '准备好就开始'}</div><div class="flash-a" id="flA"></div>
+      <div class="flash-meta" id="flMeta">${flEN() ? '10 questions. Say the answer or tap it' : '10 题一轮，说答案或者点数字'}</div>
       <div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
-      <button class="pri st-go" id="flGo">开始</button></div>`;
+      <div class="st-row"><button class="pri st-go" id="flGo">${flEN() ? 'Start' : '开始'}</button>
+        <button id="flSay" hidden>${flEN() ? '🔊 Again' : '🔊 再念'}</button></div></div>`;
   body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => flashView(body, { level: b.dataset.lv })));
   body.querySelectorAll('.pad button').forEach(b => b.addEventListener('click', () => flashKey(b.dataset.k)));
   stEl('flGo').addEventListener('click', () => flashStart(level));
+  stEl('flSay').addEventListener('click', flashSay);
+  starRender();
 }
 function flashStart(level) {
   if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
   ST.flash = { level, n: 0, total: 10, right: 0, wrong: [], input: '', started: Date.now(), q: null };
   ST.flash.tick = setInterval(flashMeta, 500);
+  QV.streak = 0; QV.roundStars = 0;
   stEl('flGo').hidden = true;
+  if (stEl('flSay')) stEl('flSay').hidden = false;
   flashNext();
+}
+function flashSay() {
+  const f = ST.flash; if (!f || !f.q) return;
+  quizSay(flashSpeech(f.q[0], ST.lang), ST.lang, true);
 }
 function flashNext() {
   const f = ST.flash;
@@ -2520,11 +2695,15 @@ function flashNext() {
   stEl('flQ').textContent = f.q[0] + ' = ?';
   stEl('flA').textContent = ''; stEl('flA').className = 'flash-a';
   flashMeta();
+  studyPush();
+  flashSay();
 }
 function flashMeta() {
   const f = ST.flash; if (!f) return;
   const sec = Math.round((Date.now() - f.started) / 1000);
-  const m = stEl('flMeta'); if (m) m.textContent = `第 ${f.n}/${f.total} 题 · 答对 ${f.right} · ${sec} 秒`;
+  const m = stEl('flMeta'); if (!m) return;
+  m.textContent = flEN() ? `Question ${f.n}/${f.total} · ${f.right} right · ${sec} s${QV.streak >= 2 ? ` · 🔥 ${QV.streak}` : ''}`
+                         : `第 ${f.n}/${f.total} 题 · 答对 ${f.right} · ${sec} 秒${QV.streak >= 2 ? ` · 🔥 连对 ${QV.streak}` : ''}`;
 }
 function flashKey(k) {
   const f = ST.flash; if (!f || !f.q || f.locked) return;
@@ -2533,25 +2712,34 @@ function flashKey(k) {
   else if (f.input.length < 4) f.input += k;
   stEl('flA').textContent = f.input;
 }
-function flashCheck() {
-  const f = ST.flash, ok = Number(f.input) === f.q[1], a = stEl('flA');
+async function flashCheck(skipped) {
+  const f = ST.flash, ok = !skipped && Number(f.input) === f.q[1], a = stEl('flA');
   f.locked = true;
-  if (ok) { f.right += 1; a.className = 'flash-a good'; a.textContent = f.input + ' ✓'; }
-  else { f.wrong.push({ question: f.q[0] + ' =', child_answer: f.input, correct: String(f.q[1]), ok: false });
-         a.className = 'flash-a bad'; a.textContent = `${f.input} ✗  = ${f.q[1]}`; }
-  setTimeout(() => { f.locked = false; flashNext(); }, ok ? 500 : 1600);
+  let say;
+  if (ok) { f.right += 1; a.className = 'flash-a good'; a.textContent = f.input + ' ✓'; say = quizRight(1); }
+  else { QV.streak = 0;
+         f.wrong.push({ question: f.q[0] + ' =', child_answer: skipped ? '' : f.input, correct: String(f.q[1]), ok: false });
+         a.className = 'flash-a bad'; a.textContent = `${skipped ? '' : f.input + ' ✗  '}= ${f.q[1]}`;
+         const expr = flashSpeech(f.q[0], ST.lang).replace(/^What is |[，,]?(等于几多|等于多少)？$|\?$/g, '');
+         say = pickOne(KIND_WRONG[ST.lang] || KIND_WRONG.en) + (ST.lang === 'en' ? ` ${expr} is ${f.q[1]}.` : ` ${expr}等于${f.q[1]}。`); }
+  flashMeta(); studyPush();
+  const q = f.q;
+  await quizSay(say, ST.lang, false);
+  if (ST.flash !== f || f.q !== q) return;
+  f.locked = false; flashNext();
 }
 function flashEnd() {
   const f = ST.flash; clearInterval(f.tick);
   const sec = Math.round((Date.now() - f.started) / 1000);
-  stEl('flQ').textContent = `答对 ${f.right} / ${f.total}，用了 ${sec} 秒`;
-  stEl('flA').textContent = f.right === f.total ? '全对！好叻！' : '错的题已放进错题本';
+  f.q = null;
+  stEl('flQ').textContent = flEN() ? `${f.right} / ${f.total} right · ${sec} s` : `答对 ${f.right} / ${f.total}，用了 ${sec} 秒`;
+  stEl('flA').textContent = f.right === f.total ? (flEN() ? 'All correct! ⭐⭐⭐' : '全对！⭐⭐⭐')
+                          : (flEN() ? 'Missed ones went into your mistake book' : '错的题已放进错题本');
   stEl('flA').className = 'flash-a';
-  const go = stEl('flGo'); go.hidden = false; go.textContent = '再来一轮';
-  const say = { yue: f.right === f.total ? '全部啱晒，好叻！' : `啱咗${f.right}题，错咗嘅放咗入错题本`,
-                en: f.right === f.total ? 'All correct, well done!' : `${f.right} right. The others are in your mistake book`,
-                zh: f.right === f.total ? '全对了，真棒！' : `对了${f.right}题，错的放进错题本了` }[ST.lang];
-  speakText(say, ST.lang);
+  const go = stEl('flGo'); go.hidden = false; go.textContent = flEN() ? 'Play again' : '再来一轮';
+  if (stEl('flSay')) stEl('flSay').hidden = true;
+  studyPush();
+  quizSay(quizRoundEnd('flash', f.level, f.right, f.total, sec), ST.lang, false);
   if (f.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ subject: '口算', source: 'flash', items: f.wrong.map((w, i) => ({ no: i + 1, ...w })) }) }).catch(() => {});
 }
@@ -2734,6 +2922,7 @@ function timoStart(level, opts) {
   const n = Number(opts && opts.count) || 8;
   TIMO.list = B.pick(level, n);
   TIMO.n = 0; TIMO.right = 0; TIMO.wrong = []; TIMO.input = ''; TIMO.hintUsed = 0;
+  QV.streak = 0; QV.roundStars = 0;
   TIMO.total = TIMO.list.length; TIMO.started = Date.now();
   stEl('tqGo').hidden = true;
   stEl('tqSay').hidden = false; stEl('tqHint').hidden = false;
@@ -2744,20 +2933,21 @@ function timoText(q) {
 }
 function timoSay() {
   const q = TIMO.q; if (!q) return;
-  speakText(timoText(q), ST.lang);
+  const opts = q.ans === 'choice' && q.opts ? (ST.lang === 'en' ? ' Is it ' + q.opts.join(', or ') + '?' : ' 选：' + q.opts.join('，')) : '';
+  quizSay(timoText(q) + opts, ST.lang, true);
 }
 function timoHint() {
   const q = TIMO.q; if (!q) return;
   TIMO.hintUsed += 1;
   const t = ST.lang === 'en' ? q.hinte : ST.lang === 'yue' ? q.hinty : q.hint;
   const note = stEl('tqA');
-  if (note) note.textContent = '💡 ' + t;
-  speakText(t, ST.lang);
+  if (note) { note.textContent = '💡 ' + t; note.className = 'timo-a'; }
+  quizSay(t, ST.lang, true);
 }
 function timoNext() {
   const q = TIMO.list[TIMO.n];
   if (!q) return timoEnd();
-  TIMO.q = q; TIMO.input = ""; TIMO.locked = false; TIMO.hintUsed = 0;
+  TIMO.q = q; TIMO.input = ""; TIMO.locked = false; TIMO.hintUsed = 0; TIMO.tries = 0;
   const n = stEl('tqQ'), a = stEl('tqA'), pad = stEl('tqPad');
   n.textContent = `第 ${TIMO.n + 1} / ${TIMO.total} 题（${q.sec}）`;
   a.className = 'timo-a'; a.textContent = '';
@@ -2770,6 +2960,7 @@ function timoNext() {
   } else {
     pad.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => timoKey(b.dataset.k)));
   }
+  studyPush();
   setTimeout(timoSay, 250);
 }
 function timoKey(k) {
@@ -2781,27 +2972,43 @@ function timoKey(k) {
   stEl('tqA').className = 'timo-a';
 }
 function timoNorm(s) { return String(s == null ? "" : s).replace(/[\s,，、。.元蚊$]/g, "").toLowerCase(); }
-function timoAnswer(given, shown) {
+async function timoAnswer(given, shown) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
   TIMO.locked = true;
-  const ok = timoNorm(given) === timoNorm(q.a);
+  const skipped = given === '__skip__';
+  const ok = !skipped && timoNorm(given) === timoNorm(q.a);
   const a = stEl('tqA');
-  const right = { yue: '啱晒！', en: 'That\'s right!', zh: '答对了！' }[ST.lang];
-  const wrong = { yue: '唔系喎，再谂下。正确答案系', en: 'Not quite. The answer is', zh: '不对哦，正确答案是' }[ST.lang];
+  const exp = ST.lang === 'en' ? q.expe : (q.exp || q.expe);
+  let say;
   if (ok) {
     TIMO.right += 1;
     a.className = 'timo-a good';
-    a.textContent = `${shown} ✓  ${q.expe}`;
-    speakText(right + ' ' + q.expe, ST.lang);
-  } else {
-    TIMO.wrong.push({ question: timoText(q), child_answer: String(given), correct: String(q.a), ok: false });
+    a.textContent = `${shown} ✓  ${exp}`;
+    say = quizRight(TIMO.tries || TIMO.hintUsed ? 1 : 2) + ' ' + exp;   // 自己第一次就对 2 颗，提示/再想之后对 1 颗
+  } else if (!skipped && !TIMO.tries) {
+    // 第一次错：先鼓励，给提示，再想一次（不揭答案）
+    TIMO.tries = 1; QV.streak = 0;
+    const hint = ST.lang === 'en' ? q.hinte : ST.lang === 'yue' ? q.hinty : q.hint;
     a.className = 'timo-a bad';
-    a.textContent = `${shown} ✗  ${wrong} ${q.a}. ${q.expe}`;
-    speakText(wrong + ' ' + q.a + '. ' + q.expe, ST.lang);
+    a.textContent = `${shown} ✗  💡 ${hint}`;
+    TIMO.locked = false; TIMO.input = '';
+    studyPush();
+    quizSay(pickOne(TRY_AGAIN[ST.lang] || TRY_AGAIN.en) + ' ' + hint, ST.lang, true);
+    return;
+  } else {
+    QV.streak = 0;
+    TIMO.wrong.push({ question: timoText(q), child_answer: skipped ? '' : String(given), correct: String(q.a), ok: false });
+    a.className = 'timo-a bad';
+    const reveal = { yue: '答案系', en: 'The answer is', zh: '答案是' }[ST.lang];
+    a.textContent = `${skipped ? '' : shown + ' ✗  '}${reveal} ${q.a}. ${exp}`;
+    say = pickOne(KIND_WRONG[ST.lang] || KIND_WRONG.en) + ' ' + reveal + ' ' + q.a + '. ' + exp;
   }
   TIMO.n += 1;
-  const wait = ok ? 2200 : 5200;   // 讲解长一点，等一下再进下一题
-  setTimeout(timoNext, wait);
+  studyPush();
+  await quizSay(say, ST.lang, false);
+  if (TIMO.q !== q) return;
+  await sleepMs(600);
+  if (TIMO.q === q) timoNext();
 }
 function timoEnd() {
   const sec = Math.round((Date.now() - TIMO.started) / 1000), t = timoT();
@@ -2814,9 +3021,8 @@ function timoEnd() {
   stEl('tqPad').innerHTML = '';
   stEl('tqSay').hidden = true; stEl('tqHint').hidden = true;
   const go = stEl('tqGo'); go.hidden = false; go.textContent = t.retry;
-  speakText({ yue: TIMO.right === TIMO.total ? '全部啱晒，好叻！' : `啱咗${TIMO.right}题，错咗嘅入咗错题本`,
-              en: TIMO.right === TIMO.total ? 'All correct, well done!' : `${TIMO.right} right. The rest went into your mistake book`,
-              zh: TIMO.right === TIMO.total ? '全对了，真棒！' : `对了${TIMO.right}题，错的放进错题本了` }[ST.lang], ST.lang);
+  studyPush();
+  quizSay(quizRoundEnd('timo', TIMO.level, TIMO.right, TIMO.total, sec), ST.lang, false);
   if (TIMO.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ subject: '奥数', source: 'timo', items: TIMO.wrong.map((w, i) => ({ no: i + 1, ...w })) }) }).catch(() => {});
 }
@@ -2849,6 +3055,8 @@ function famApply(f) {
     const n = (f.notes || [])[0];
     const tv = f.tv;
     let html = '';
+    if (f.stars) { STARS.total = f.stars.total || 0; STARS.today = f.stars.today || 0; starRender(); }
+    if (f.stars && f.stars.today > 0) html += `<div class="fam-chip stars">⭐ 今天 <b>${f.stars.today}</b> 颗 · 共 ${f.stars.total}</div>`;
     if (tv) html += `<div class="fam-chip tv">📺 电视还剩 <b id="famTvLeft">${Math.ceil(tv.left / 60)}</b> 分钟<button data-act="tvcancel">取消</button></div>`;
     if (n) html += `<div class="fam-chip note">📝 ${n.from ? esc(n.from) + '：' : ''}${esc(n.text)}
         <button data-act="say" data-id="${n.id}">🔊</button><button data-act="done" data-id="${n.id}">知道了</button>
