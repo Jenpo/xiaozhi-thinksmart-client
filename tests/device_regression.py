@@ -159,6 +159,40 @@ PAGE_JS = r"""
       window.fetch = realFetch;
       if (prevVoice === null) localStorage.removeItem('flashVoice'); else localStorage.setItem('flashVoice', prevVoice);
     }
+    window.__step='timo';
+    // 2026-11-19 晚：①揭晓后键盘只变暗不 disabled，点任何键 = 下一题 ②语言按钮立刻换题面 ③Audio 用完要拆管线。
+    // 不出声：speakText/sfx 换成空函数，语音答题关掉，做题现场/星星/错题本接口照旧挡掉
+    const realSpeak = window.speakText, realSfx = window.sfx, langKeep = ST.lang, hwLangKeep = HW.lang;
+    window.speakText = () => null; window.sfx = () => {};
+    window.fetch = (u, o) => /\/api\/(stars\/add|study\/|hw\/record|hw\/tts|quiz\/prepare|listen)/.test(String(u))
+      ? Promise.resolve(new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } })) : realFetch(u, o);
+    localStorage.setItem('flashVoice', 'off');
+    try {
+      const a0 = new Audio('/static/sounds/none.mp3'); audioDrop(a0);
+      C('audio:drop clears src', typeof audioDrop === 'function' && a0.getAttribute('src') === null);
+      stOpen('timo'); await sleep(150);
+      const numQ = timoBank().pick('k2', 60).find(x => x.ans !== 'choice');
+      await timoStart('k2', {});
+      TIMO.list = [numQ, ...TIMO.list.filter(x => x !== numQ)]; TIMO.n = 0; timoNext(); await sleep(50);
+      const q0 = TIMO.q;
+      // 语言按钮：点普通话，题面马上变成中文那句
+      const zhBtn = document.querySelector('.st-lang[data-lang="zh"]');
+      if (zhBtn) { zhBtn.click(); await sleep(50); }
+      C('lang:question text switches now', !!zhBtn && document.getElementById('tqQ').textContent === q0.q);
+      const enBtn = document.querySelector('.st-lang[data-lang="en"]'); if (enBtn) { enBtn.click(); await sleep(50); }
+      timoAnswer('__wrong__', 'x'); await sleep(30);           // 第一次错：给提示、不揭晓
+      timoAnswer('__wrong__', 'x');                            // 第二次错：揭晓（不 await，看讲解中的样子）
+      const keys = [...document.querySelectorAll('#tqPad [data-k]')];
+      C('timo:revealed keys dim, not disabled', keys.length > 0 && keys.every(b => !b.disabled && b.classList.contains('off')));
+      C('timo:locked while explaining', TIMO.locked === true && vis('tqNext') === true);
+      keys.find(b => b.dataset.k === '5').click(); await sleep(50);
+      C('timo:tap a key during explanation = next', TIMO.q !== q0 && TIMO.n === 1 && !TIMO.locked);
+      timoStop(); stClose();
+    } finally {
+      window.speakText = realSpeak; window.sfx = realSfx; ST.lang = langKeep; stLangPills(); hwSetLang(hwLangKeep);
+      window.fetch = realFetch;
+      if (prevVoice === null) localStorage.removeItem('flashVoice'); else localStorage.setItem('flashVoice', prevVoice);
+    }
     // 朗读对齐
     const el = document.createElement('div');
     C('read:compare fn', typeof readCompare === 'function');

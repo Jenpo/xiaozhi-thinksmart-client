@@ -3304,7 +3304,7 @@ function flashKey(k) {
   stEl('flA').textContent = f.input;
 }
 async function flashCheck(byVoice) {
-  const f = ST.flash, ok = f.input !== '' && Math.abs(Number(f.input) - f.q[1]) < 1e-6, a = stEl('flA'), lang = ST.lang;
+  const f = ST.flash, gen = f.gen, ok = f.input !== '' && Math.abs(Number(f.input) - f.q[1]) < 1e-6, a = stEl('flA'), lang = ST.lang;
   if (f.level === 'mixed') {
     if (ok) { f.up += 1; if (f.up >= 2 && f.tier < MIXED_TOP) { f.tier += 1; f.up = 0; f.levelUp = true; } }
     else { f.tier = Math.max(1, f.tier - 1); f.up = 0; }
@@ -3336,7 +3336,9 @@ async function flashCheck(byVoice) {
     await Promise.race([byVoice ? speakWait(say, lang) : sleepMs(1600), new Promise(r => { f.skip = r; })]);
     f.skip = null;
   }
-  if (ST.flash !== f) return;
+  // 讲解那 0.5–1.6 s 里换了标签（stTab → flashStop 加 gen、闪卡视图被换掉）：别再出下一题，
+  // 否则 flashNext 找不到 #flQ 抛错（2026-11-19 回归抓到：答完 ✓ 马上点「TIMO 奥数」）
+  if (ST.flash !== f || f.gen !== gen || ST.mode !== 'flash' || !stEl('flQ')) return;
   f.locked = false; flashPadWait(false);
   studyPush();
   flashNext();
