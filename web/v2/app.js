@@ -2998,12 +2998,13 @@ function flashView(body, opts) {
   body.innerHTML = `<div class="st-row">${Object.entries(names).map(([k, t]) =>
       `<button class="st-pill${k === level ? ' on' : ''}" data-lv="${k}">${t}</button>`).join('')}
       <button class="st-pill voice-pill${v ? ' on' : ''}" id="flVoiceT">${v ? (en ? '🎤 Say it' : '🎤 讲答案') : (en ? '⌨ Tap it' : '⌨ 按答案')}</button></div>
-    <div class="flash"><div class="flash-q" id="flQ">${en ? 'Ready?' : '准备好就开始'}</div><div class="flash-a" id="flA"></div>
+    <div class="flash"><div class="flash-q" id="flQ">${en ? 'Tap Start or any key' : '点「开始」或任何数字'}</div><div class="flash-a" id="flA"></div>
       <div class="flash-voice" id="flV"></div>
       <div class="flash-meta" id="flMeta">${meta}</div>
       <div class="pad">${[1,2,3,4,5,6,7,8,9,'.',0,'⌫','✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
       <button class="pri st-go" id="flGo">${en ? 'Start' : '开始'}</button></div>`;
-  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { flashStop(); flashView(body, { level: b.dataset.lv }); }));
+  // 点档位直接开始（11-19 10:47 孩子连点 Times tables / Division 各 5 下：以前只换档、还要再找「开始」，像点不动）
+  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { flashStop(); flashView(body, { level: b.dataset.lv, auto: true }); }));
   starRender();
   body.querySelectorAll('.pad button').forEach(b => b.addEventListener('click', () => flashKey(b.dataset.k)));
   stEl('flGo').addEventListener('click', () => {
@@ -3123,10 +3124,24 @@ function flashMeta() {
   const tier = f.level === 'mixed' ? ` · 第 ${f.tier} 关（${TIER_GRADE[f.tier]}）` : '';
   m.textContent = `第 ${f.n}/${f.total} 题${tier} · 答对 ${f.right}${f.streak >= 2 ? ` · 🔥连对 ${f.streak}` : ''} · ⭐ ${QV.roundStars} · ${sec} 秒`;
 }
+/* 键盘「点不动」的三种情况（11-19 10:46 0、✓ 后一秒连点 ✓ 15 下）都要看得见：
+   没在出题（还没开始/一轮做完）→ 点任何键就开始一轮；判题讲解时键盘变暗（.wait）；没输数字就点 ✓ → 抖一下并提示 */
+function flashNudge(text) {
+  const a = stEl('flA'); if (!a) return;
+  a.textContent = text; a.className = 'flash-a nudge';
+  void a.offsetWidth; a.classList.add('shake');
+}
+function flashPadWait(on) { const p = document.querySelector('.flash .pad'); if (p) p.classList.toggle('wait', !!on); }
 function flashKey(k) {
-  const f = ST.flash; if (!f || !f.q || f.locked) return;
+  const f = ST.flash;
+  if (!f || !f.q) { flashStart(ST.flashLevel || 'mixed'); return; }
+  if (f.locked) return;
   if (k === '⌫') f.input = f.input.slice(0, -1);
-  else if (k === '✓') { if (f.input) { fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {}); flashCheck(false); } return; }
+  else if (k === '✓') {
+    if (f.input) { fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {}); flashCheck(false); }
+    else flashNudge(flEN() ? 'Type a number first' : '先按数字');
+    return;
+  }
   else if (k === '.') { if (!f.input.includes('.')) f.input = (f.input || '0') + '.'; }
   else if (f.input.length < 6) f.input += k;
   stEl('flA').textContent = f.input;
@@ -3138,7 +3153,7 @@ async function flashCheck(byVoice) {
     else { f.tier = Math.max(1, f.tier - 1); f.up = 0; }
     localStorage.setItem('flashTier', String(f.tier));
   }
-  f.locked = true;
+  f.locked = true; flashPadWait(true);
   const item = { question: f.q[3] ? f.q[0] : f.q[0] + ' =', child_answer: f.input || '（不知道）', correct: fmt(f.q[1]), ok };
   f.done.push(item);
   if (ok) {
@@ -3164,7 +3179,7 @@ async function flashCheck(byVoice) {
     else await new Promise(r => setTimeout(r, 1600));
   }
   if (ST.flash !== f) return;
-  f.locked = false;
+  f.locked = false; flashPadWait(false);
   studyPush();
   flashNext();
 }
@@ -3417,7 +3432,7 @@ function timoView(body, opts) {
       <div class="st-row"><button class="pri st-go" id="tqGo">${esc(t.start)}</button>
         <button id="tqSay" hidden>🔊 ${esc(t.again)}</button><button id="tqHint" hidden>💡 ${esc(t.hint)}</button>
         <button class="pri" id="tqNext" hidden>${timoUI() ? 'Next ▶' : '下一题 ▶'}</button></div></div>`;
-  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { timoStop(); timoView(body, { level: b.dataset.lv }); }));
+  body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { timoStop(); timoView(body, { level: b.dataset.lv }); timoStart(b.dataset.lv, {}); }));
   stEl('tqGo').addEventListener('click', () => timoStart(level, opts));
   stEl('tqSay').addEventListener('click', timoSay);
   stEl('tqHint').addEventListener('click', timoHint);
@@ -3535,7 +3550,11 @@ function timoNext() {
 function timoKey(k) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
   if (k === '⌫') TIMO.input = TIMO.input.slice(0, -1);
-  else if (k === '✓') { if (TIMO.input) { listenCancel(); timoAnswer(TIMO.input, TIMO.input); } return; }
+  else if (k === '✓') {
+    if (TIMO.input) { listenCancel(); timoAnswer(TIMO.input, TIMO.input); }
+    else { const a = stEl('tqA'); a.textContent = timoUI() ? 'Type a number first' : '先按数字'; a.className = 'timo-a nudge'; void a.offsetWidth; a.classList.add('shake'); }
+    return;
+  }
   else if (TIMO.input.length < 6) TIMO.input += k;
   stEl('tqA').textContent = TIMO.input;
   stEl('tqA').className = 'timo-a';

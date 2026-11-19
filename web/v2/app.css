@@ -961,3 +961,9 @@ body.ptt-off .hint::after { content: none; }
 .st-body > .st-row:first-child::-webkit-scrollbar { display: none; }
 .st-body > .st-row:first-child > * { flex: none; }
 .st-pill.voice-pill { position: sticky; right: 0; background: #141a33 !important; box-shadow: -14px 0 14px #0b1027; }
+/* 点不动要看得见（2026-11-19）：判题讲解时键盘变暗；没输数字点 ✓ 抖一下 */
+.flash .pad.wait button { opacity: .38; transition: opacity .15s; }
+.flash-a.nudge, .timo-a.nudge { color: #ffcf7a; font-size: 40px; }
+.shake { animation: shakeX .38s ease-in-out; }
+@keyframes shakeX { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-14px); } 40% { transform: translateX(12px); }
+  60% { transform: translateX(-8px); } 80% { transform: translateX(5px); } }
