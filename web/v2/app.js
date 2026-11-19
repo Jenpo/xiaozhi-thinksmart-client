@@ -13,12 +13,32 @@ function pageLog(kind, msg) {
 }
 window.addEventListener('error', e => pageLog('error', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
 window.addEventListener('unhandledrejection', e => pageLog('rejection', e.reason && e.reason.message ? `${e.reason.message} | ${e.reason.stack || ''}` : e.reason));
+/* 手快的小孩一秒点十几下：以前 touchstart 和 click 各发一条 HTTP，客户端 python 被点到 55% CPU、
+   队列越积越多，反而更像点不动（2026-11-19 18:07 一秒 13 次 ⌫）。同一按钮 300 ms 内只记一条。 */
+let tapLogId = '', tapLogAt = 0;
 for (const type of ['touchstart', 'click']) {
   document.addEventListener(type, e => {
     const b = e.target && e.target.closest && e.target.closest('#hwSheet button, #stSheet button');
-    if (b) pageLog('tap', `${type} ${b.id || ''} 「${(b.textContent || '').trim().slice(0, 12)}」 hidden=${b.hidden} disabled=${b.disabled}`);
+    if (!b) return;
+    const id = `${type}|${b.id || (b.textContent || '').trim().slice(0, 12)}`, now = Date.now();
+    if (id === tapLogId && now - tapLogAt < 300) return;
+    tapLogId = id; tapLogAt = now;
+    pageLog('tap', `${type} ${b.id || ''} 「${(b.textContent || '').trim().slice(0, 12)}」 hidden=${b.hidden} disabled=${b.disabled}`);
   }, { capture: true, passive: true });
 }
+/* 卡顿探针：主线程被堵住 800 ms 以上记一条（kiosk 没有控制台，只能落进 journal）。
+   setInterval 在阻塞时会漂移，正好当判据；每 500 ms 一次的开销可以忽略。 */
+(() => {
+  let last = Date.now(), lastLog = 0;
+  setInterval(() => {
+    const now = Date.now(), gap = now - last;
+    last = now;
+    if (gap > 800 && now - lastLog > 3000) {
+      lastLog = now;
+      pageLog('jank', `main thread stalled ${gap} ms (${(document.querySelector('.sheet.on') || {}).id || 'home'})`);
+    }
+  }, 500);
+})();
 
 // 孩子在点屏幕：告诉客户端（每 3 s 最多一次），小麦就不会在后台提醒「没说话 / 我先休息啦」（owner 2026-11-19）
 let lastTouchPost = 0, lastTouch = 0;
@@ -698,7 +718,22 @@ const micLevel = rms => Math.min(1, Math.max(0, (20 * Math.log10(rms + 1e-6) - M
 const STILL = document.documentElement.classList.contains('still');
 const level = { target: 0, value: 0, phase: 0, raf: 0, last: 0, state: '', since: 0, mix: 1 };
 const isLive = s => s === 'listening' || s === 'speaking';
+/* 面板一打开就是 position:fixed 全屏（TIMO/闪卡/作业/音乐/设置/卡片），圆环仍在后面跑：
+   msm8953 上主线程 ~100% + 合成器 ~110%，点键就排队，孩子感觉「点 next 死机」（2026-11-19 实测）。
+   盖住就停 CSS 动画和 canvas，收起时补一帧。 */
+const covered = () => document.body.classList.contains('sheet-on');
+function syncCovered() {
+  const on = !!document.querySelector('.sheet.on');
+  if (on === covered()) return;
+  document.body.classList.toggle('sheet-on', on);
+  if (!on && !document.hidden) setCorona(shownState());
+}
+for (const id of ['stSheet', 'hwSheet', 'musicSheet', 'sheet', 'settings']) {
+  const el = $(id);
+  if (el) new MutationObserver(syncCovered).observe(el, { attributes: true, attributeFilter: ['class'] });
+}
 function setCorona(state) {
+  if (covered()) { level.state = state; return; }   // 面板盖着：不画，收起时 syncCovered 补一帧
   if (state === level.state) return;
   // morph from what is on screen; a spinning corona is turned by CSS, so carry its angle into the bars
   const m = getComputedStyle($('corona')).transform.match(/matrix\(([^,]+),\s*([^,]+)/);
@@ -723,6 +758,7 @@ function setCorona(state) {
   }
 }
 function levelLoop(now) {
+  if (covered() || document.hidden) { level.raf = 0; level.target = level.value = 0; return; }
   level.raf = requestAnimationFrame(levelLoop);
   if (now - level.last < 33) return;      // ~30 fps is plenty
   const dt = Math.min(.1, (now - level.last) / 1000);
@@ -2625,8 +2661,11 @@ const STREAK = { en: n => `${n} in a row! Bonus star!`, yue: n => `连续啱${n}
 /* 等小麦自己那句说完 → 收起等答案的麦克风 → 念 → 念完（listen 时）开麦等答案。返回念完的 Promise */
 async function quizSay(text, lang, listen) {
   const token = ++QV.token;
-  await sleepMs(150);
-  for (let i = 0; i < 60 && ui.status && (ui.status.state === 'speaking' || ui.status.state === 'thinking'); i++) await sleepMs(200);
+  await sleepMs(120);
+  // 原来是 60×200 ms = 12 s：等小麦退出 speaking/thinking。状态一旦卡住（TTS 收尾事件丢了），
+  // 每道题点 Next 后都要干等 12 s——孩子只会觉得「点不动、死机」（2026-11-19）。最多等 2 s。
+  const until = Date.now() + 2000;
+  while (Date.now() < until && ui.status && (ui.status.state === 'speaking' || ui.status.state === 'thinking')) await sleepMs(120);
   if (token !== QV.token) return;
   await fetch('/api/study/quiet', { method: 'POST' }).catch(() => {});
   const openMic = () => { if (listen && token === QV.token) fetch('/api/study/listen', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2990,11 +3029,13 @@ function voiceCommand(text) {
   return null;
 }
 
-/* 音效：WebAudio 现合成，不用等网络 */
-let sfxCtx = null;
+/* 音效：WebAudio 现合成，不用等网络。
+   AudioContext 建了就一直在跑实时音频线程（设备上实测 webaudio 线程 ≈ 一个核），所以用完就挂起。 */
+let sfxCtx = null, sfxIdle = null;
 function sfx(kind) {
   try {
     sfxCtx = sfxCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (sfxCtx.state === 'suspended') sfxCtx.resume().catch(() => {});
     const notes = { good: [[880, 0], [1320, .09]], bad: [[220, 0], [196, .12]], combo: [[880, 0], [1100, .08], [1320, .16], [1760, .24]],
                     listen: [[660, 0]] }[kind] || [];
     const t0 = sfxCtx.currentTime + .01;
@@ -3005,6 +3046,8 @@ function sfx(kind) {
       g.gain.exponentialRampToValueAtTime(.0001, t0 + at + (kind === 'listen' ? .12 : .22));
       o.connect(g).connect(sfxCtx.destination); o.start(t0 + at); o.stop(t0 + at + .3);
     }
+    clearTimeout(sfxIdle);
+    sfxIdle = setTimeout(() => { try { sfxCtx.suspend(); } catch (e) { /* 已关就算了 */ } }, 3000);
   } catch (e) { /* 没声音也照样判题 */ }
 }
 // 念一句并等它念完（最多 10 秒）；要是已经预取过同一句就直接用
@@ -3531,7 +3574,11 @@ function timoView(body, opts) {
   stEl('tqGo').addEventListener('click', () => timoStart(level, opts));
   stEl('tqSay').addEventListener('click', timoSay);
   stEl('tqHint').addEventListener('click', timoHint);
-  stEl('tqNext').addEventListener('click', () => { quizCancel(); listenCancel(); TIMO.n = Math.max(TIMO.n, TIMO.answered || 0); timoNext(); });
+  stEl('tqNext').addEventListener('click', () => {
+    // 先立刻隐藏并停在原地，不能等念完再换题：孩子点完看不到变化就会连点（2026-11-19 一整屏的连点日志）
+    stEl('tqNext').hidden = true;
+    quizCancel(); listenCancel(); TIMO.n = Math.max(TIMO.n, TIMO.answered || 0); timoNext();
+  });
   starRender();
 }
 function timoStop() { TIMO.gen = (TIMO.gen || 0) + 1; TIMO.q = null; clearTimeout(TIMO.idle); listenCancel(); }
@@ -3653,17 +3700,42 @@ function timoIdle() {
   }, TIMO_IDLE_MS);
 }
 function timoKey(k) {
-  const q = TIMO.q; if (!q || TIMO.locked) return;
+  const q = TIMO.q; if (!q) return;
+  if (TIMO.locked) {
+    // 讲解中（TIMO.locked）按任何数字：直接进下一题，跟闪卡一个口径。
+    // 以前全部被吞掉，按钮看着在、按了没反应，孩子就以为卡死（2026-11-19 18:07 日志里成串的连点）。
+    const nx = stEl('tqNext');
+    if (nx && !nx.hidden) nx.click();
+    return;
+  }
   timoIdle();
-  if (k === '⌫') TIMO.input = TIMO.input.slice(0, -1);
+  if (k === '⌫') {
+    if (!TIMO.input) return tqNudge(timoUI() ? 'Nothing to delete' : '没有数字可删');
+    TIMO.input = TIMO.input.slice(0, -1);
+  }
   else if (k === '✓') {
     if (TIMO.input) { listenCancel(); timoAnswer(TIMO.input, TIMO.input); }
-    else { const a = stEl('tqA'); a.textContent = timoUI() ? 'Type a number first' : '先按数字'; a.className = 'timo-a nudge'; void a.offsetWidth; a.classList.add('shake'); }
+    else tqNudge(timoUI() ? 'Tap a number first' : '先按数字');
     return;
   }
   else if (TIMO.input.length < 6) TIMO.input += k;
   stEl('tqA').textContent = TIMO.input;
   stEl('tqA').className = 'timo-a';
+}
+/* 按下去有没有生效要看得见：2026-11-19 18:07 孩子一秒敲 13 次 ⌫，就是「按了没反应」 */
+function tqNudge(msg) {
+  const a = stEl('tqA'), q = TIMO.q;
+  if (!a) return;
+  a.textContent = msg;
+  a.className = 'timo-a nudge';
+  void a.offsetWidth;
+  a.classList.add('shake');
+  clearTimeout(TIMO.nudge);
+  TIMO.nudge = setTimeout(() => {
+    if (TIMO.locked || TIMO.q !== q) return;   // 已经换题/在讲解：别把新题的输入框抹掉
+    a.textContent = TIMO.input || '';
+    a.className = 'timo-a';
+  }, 900);
 }
 function timoNorm(s) { return String(s == null ? "" : s).replace(/[\s,，、。.元蚊$]/g, "").toLowerCase(); }
 /* 选项按钮的状态要看得见（11-19 09:06 孩子在讲解时连点「P」30 多下，按钮锁了却没任何样子）：
@@ -3718,7 +3790,7 @@ async function timoAnswer(given, shown) {
   studyPush();
   await quizSay(say, ST.lang, false);
   if (TIMO.q !== q) return;
-  await sleepMs(600);
+  await sleepMs(250);
   if (TIMO.q === q) timoNext();
 }
 function timoEnd() {

@@ -234,6 +234,14 @@ body.mic-off[data-state="idle"] .mouth { width: 12px; height: 4px; margin-left: 
 @keyframes breathe { 0%, 100% { transform: scale(.96); } 50% { transform: scale(1.03); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 面板（TIMO/闪卡/作业/音乐/设置）盖住首页时把圆环动画挂起：这台机器合成器常年 110%，
+   白白吃掉一个核，点键就排队（2026-11-19「点 next 像死机」）。收起后自动恢复。 */
+body.sheet-on .core, body.sheet-on .face, body.sheet-on .eye, body.sheet-on .corona,
+body.sheet-on .glows, body.sheet-on .mouth, body.sheet-on .cheek, body.sheet-on #corona {
+  animation-play-state: paused !important;
+}
+body.sheet-on .corona { display: none; }
+
 .title { position: relative; margin: 0; font-size: 36px; font-weight: 700; letter-spacing: 1px; text-align: center; }
 .title em { font-style: normal; background: linear-gradient(90deg, #8ff0ff, #a9b8ff 70%); -webkit-background-clip: text; color: transparent; }
 .hint { position: relative; margin: 10px 0 0; font-size: 19px; color: var(--ink2); text-align: center; min-height: 28px; }
