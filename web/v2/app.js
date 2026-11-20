@@ -2742,7 +2742,9 @@ function studyPush() {
           ans: 'num', lang: ST.lang, question: f.q[0] };
   else if (open && ST.mode === 'timo' && TIMO.q)
     d = { active: true, mode: 'timo', level: TIMO.level, n: Math.min(TIMO.n + 1, TIMO.total), total: TIMO.total, right: TIMO.right, streak: QV.streak,
-          ans: TIMO.q.ans || 'num', opts: TIMO.q.opts || null, lang: ST.lang, question: timoText(TIMO.q) };
+          ans: TIMO.q.ans || 'num', opts: TIMO.q.opts || null, lang: ST.lang, question: timoText(TIMO.q),
+          // 说答案（study_answer 转回页面）要能判题：答案+题型一起推，hub 只做「把话原样转回」
+          kind: TIMO.q.ans || 'num', sec: TIMO.q.sec || '', reveal: !!TIMO.locked };
   fetch('/api/study/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }).catch(() => {});
 }
 
@@ -3735,6 +3737,31 @@ function timoOptsSpeech(q) {
 }
 function tqVoice(t, cls) { const el = stEl('tqV'); if (el) { el.textContent = t || ''; el.className = 'flash-voice' + (cls ? ' ' + cls : ''); } }
 /* 选择题口头作答：字母 A-D、选项原文、或数字等于某个选项 */
+/* 数字答案口头兜底：两位数孩子常说成「十二」「一十二」，parseNum 未必拿到；
+   这里再从原文里揪出「一到两位数字」并和答案比对，避免听对了却判成没听懂 */
+function timoMatchNumber(q, text) {
+  const want = timoNorm(q.a);
+  const t = String(text || '');
+  if (timoNorm(t).indexOf(want) >= 0) return q.a;
+  const digs = (t.match(/[0-9]+/g) || []).map(d => String(Number(d)));
+  if (digs.indexOf(want) >= 0) return q.a;
+  // 中文数字整段转换：小孩常说「十二」「二十三」而不是 12、23
+  const D = { '零':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9 };
+  const cn2num = s => s.replace(/[零一二两三四五六七八九十廿]+/g, w => {
+    // 「十二」「十六」是 12、16，不是 102、106：十开头时十位是 1
+    if (w === '十') return '10';
+    if (w[0] === '十') return String(10 + (D[w[1]] || 0));
+    if (w.indexOf('十') >= 0) {
+      const [a, b] = w.split('十');
+      const hi = a ? (D[a] || 0) : 1, lo = b ? (D[b] || 0) : 0;
+      return String(hi * 10 + lo);
+    }
+    return Array.from(w).map(ch => D[ch] ).join('');
+  });
+  const cn = cn2num(t);
+  const nums = (cn.match(/[0-9]+/g) || []).map(d => String(Number(d)));
+  return nums.indexOf(want) >= 0 ? q.a : null;
+}
 function timoMatchChoice(q, text) {
   const t = timoNorm(text);
   const letter = (String(text || '').trim().match(/^[a-dA-D][.。!！]?$/) || [''])[0][0];
@@ -3837,7 +3864,7 @@ async function timoAfterGuide(q) {
   tqVoice((timoUI() ? 'Heard: ' : '听到：') + (r.text || ''));
   if (/(明白|懂了|知道|识了|ok|got it|i see|understand|yes)/.test(low)) return;
   if (/(再讲|再讲一次|again|repeat|唔明|不明白|听不懂)/.test(low)) return timoSpeakGuide(q);
-  const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (() => { const v = parseNum(r.text); return v === null ? null : String(v); })();
+  const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (timoMatchNumber(q, r.text) || (() => { const v = parseNum(r.text); return v === null ? null : String(v); })());
   if (ans != null && timoNorm(ans) === timoNorm(q.a)) { tqVoice(timoUI() ? 'Yes! You got it now.' : '对了！这次你自己算出来了'); sfx('good'); }
 }
 /* 错题/跳过的题：按同型模板换一组数据放回队尾，必须再做一次（原题重来只会背答案） */
@@ -3883,7 +3910,7 @@ async function timoAsk(readQuestion, prefix) {
     if (cmd === 'skip') return timoSkipAsk();
     if (/讲解|讲讲|解释|一步一步|explain|teach|step by step/.test(low)) return timoExplain();
     if (cmd === 'dunno' || /提示|hint|help|clue/.test(low)) return timoHint();
-    const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (() => { const v = parseNum(r.text); return v === null ? null : String(v); })();
+    const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (timoMatchNumber(q, r.text) || (() => { const v = parseNum(r.text); return v === null ? null : String(v); })());
     if (ans !== null && ans !== undefined) {
       const i = q.ans === 'choice' ? q.opts.findIndex(o => timoNorm(o) === timoNorm(ans)) : -1;
       return timoAnswer(ans, i >= 0 ? timoOptLabel(q, i) : ans);
@@ -3943,9 +3970,11 @@ function timoNext() {
   stEl('tqMeta').textContent = timoUI()
     ? `Question ${no} / ${TIMO.total}${rev}${q._ch ? ' · ⭐ challenge' : ''} · say or tap your answer · ⭐ ${QV.roundStars}`
     : `第 ${no} / ${TIMO.total} 题（${q.sec}）${rev}${q._ch ? ' · ⭐挑战题' : ''} · 说答案或点 · ⭐ ${QV.roundStars}`;
+  // 选择题：2 个选项横向大按钮、3 个以上纵向；数字题：键盘 + 一句「说答案也可以」
   pad.innerHTML = q.ans === 'choice'
-    ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(timoOptLabel(q, i))}</button>`).join('')}</div>`
-    : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`;
+    ? `<div class="timo-opts${q.opts.length <= 2 ? ' two' : ''}">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(timoOptLabel(q, i))}</button>`).join('')}</div>`
+    : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
+       <div class="timo-tip">${timoUI() ? '🎤 You can also just say the answer' : '🎤 也可以直接说答案，不用按键'}</div>`;
   if (q.ans === 'choice') {
     pad.querySelectorAll('[data-o]').forEach(b => b.addEventListener('click', () => {
       if (TIMO.locked) return timoKey('next');      // 讲解中点选项 = 下一题

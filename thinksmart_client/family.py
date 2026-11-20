@@ -612,7 +612,8 @@ def install(client):
             return ok(quiz=fam.quiz_view(), stars=fam.stars_view(),
                       touch_age=round(time.time() - getattr(client, 'touch_at', 0), 1))
         b = await body_of(request)
-        keep = ('active', 'mode', 'level', 'n', 'total', 'right', 'streak', 'ans', 'opts', 'lang', 'question', 'speaking')
+        keep = ('active', 'mode', 'level', 'n', 'total', 'right', 'streak', 'ans', 'opts', 'lang', 'question', 'speaking',
+                'kind', 'sec', 'reveal')
         fam.quiz = {k: b.get(k) for k in keep} if b.get('active') else None
         if fam.quiz:
             fam.quiz['at'] = time.time()

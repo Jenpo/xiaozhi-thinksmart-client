@@ -577,7 +577,7 @@ def test_the_page_keeps_no_settings_of_its_own():
     keys = set(re.findall(r"localStorage\.(?:get|set)Item\(['\"]([^'\"]+)['\"]", js))
     # 2026-11-19: the study panel's own memory, all safe to lose on a reload/new build —
     #   flashTier (last level reached in the challenge), flashVoice (say vs tap answers), qbSeen (recently asked bank ids)
-    assert keys <= {'updShown', 'flashTier', 'flashVoice', 'qbSeen'}, keys
+    assert keys <= {'updShown', 'flashTier', 'flashVoice', 'qbSeen', 'timoK2Perfect'}, keys
     assert 'sessionStorage' not in js
 
 

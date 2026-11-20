@@ -854,6 +854,10 @@ body.ptt-off .hint::after { content: none; }
 .timo .pad button { height: 82px; font-size: 32px; font-weight: 600; }
 .timo .timo-opts { display: grid; gap: 12px; }
 .timo .timo-opts button { height: 88px; font-size: 28px; font-weight: 600; }
+/* 两个选项（加/减、奇/偶、单/双）横排，一屏就看全，不用上下扫 */
+.timo .timo-opts.two { grid-template-columns: 1fr 1fr; }
+/* 键盘下面一句：说答案也行（孩子不知道能开口，只用手指按） */
+.timo .timo-tip { margin-top: 10px; font-size: 20px; color: var(--ink2); }
 .timo .st-go { grid-column: 1; justify-self: start; }
 /* 草稿板：右栏从数字键盘换成画布，手指/鼠标写竖式，换题自动清（owner 2026-11-19） */
 .timo .timo-sk { grid-column: 2; grid-row: 1 / span 4; display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 320px; }
