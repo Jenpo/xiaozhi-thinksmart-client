@@ -62,6 +62,7 @@ HALT_AFTER = 3           # seconds to read "正在关机 … 等 10 秒再拔" b
 UPDATE_BUSY = ('preparing', 'downloading', 'installing', 'testing', 'rolling_back')
 # installing for a page request, or finishing an interrupted one at boot (self-test, rollback)
 UPDATE_UNITS = ('thinksmart-update-run.service', 'thinksmart-update-boot.service')
+REPLY_SECOND_TAP = 3.0  # seconds: a second mic tap this soon after the first during a reply cuts it off
 LONG_REPLY_TAP = 15       # seconds: a reply playing longer than this (a story) is still cut off by a mic tap
 TOUCH_QUIET = 20          # 屏幕刚被点过这么多秒内：没说话也不提醒（不自我介绍、不报没听清）
 QUESTION_EXTRA = 10       # seconds added to the follow-up window when the reply ends with a question
@@ -590,13 +591,21 @@ class Client:
         if self.mic_off_toast():
             return
         if self.in_turn():
-            if source == 'button' and not self._tap_interrupts():
+            now = time.monotonic()
+            second_tap = now - getattr(self, 'reply_tap_at', 0.0) < REPLY_SECOND_TAP
+            if source == 'button' and not self._tap_interrupts() and not second_tap:
                 # 孩子以为要先按麦克风才能回答，一按就把小麦问到一半的话掐掉（2026-11-16 20:26:40「你是想说……还是……」
                 # 播了 2.2 s 被按断；20:26:28「给我」刚识别完就被按掉）。说话时点麦克风改成「说完马上听」，要打断用「打断」键
+                self.reply_tap_at = now
                 self.listen_after_reply = True
                 log.info('mic tapped during a reply (%s): listen right after it instead of cutting it off', self.state)
-                self.events.publish('toast', {'kind': 'info', 'text': '等我说完这句，马上听你说；要打断点「打断」'})
+                self.events.publish('toast', {'kind': 'info', 'text': '说完这句马上听你说；再点一下立刻打断'})
                 return
+            if source == 'button' and second_tap:
+                # 2026-11-20：38 次「说话时点麦」里一秒连点 3–4 下的很多（16:20:59、16:21:27 孩子在 17 s 的长回答上连点），
+                # 第一下只换来一条 toast，看起来就是「按了没反应」。3 s 内第二下 = 真想打断：立刻掐掉开始听。
+                log.info('mic tapped twice during a reply (%s): cutting it off', self.state)
+            self.reply_tap_at = 0.0
             await self.abort('wake_word_detected')
         if not chimed:
             self.chime(source)
@@ -860,7 +869,9 @@ class Client:
                     # user says meanwhile still reaches it (the hub ignores it once the reply starts).
                     self.hold_open = True
             elif text:
-                if self.speech_end > self.listen_since:
+                # 2026-11-20：点卡片/打字的问题不经过听，speech_end 还是上一次说话的时间，算出 367 / 564 / 1424 s 这种假延迟
+                # （全天 12 次 >10 s 全是这种）。超过 30 s 的不算识别延迟。
+                if self.speech_end > self.listen_since and time.monotonic() - self.speech_end < 30:
                     log.info('recognised %.1f s after the user stopped talking: %s',
                              time.monotonic() - self.speech_end, text)
                 else:

@@ -18,7 +18,7 @@ mkdir -p "$OUT"
 
 ticks() { awk '{print $14+$15}' "$1" 2>/dev/null || echo 0; }
 proc_ticks() { awk '{print $14+$15}' "/proc/$1/stat" 2>/dev/null || echo 0; }
-comp_tid() { grep -l "ThreadedComp" /proc/$1/task/*/comm 2>/dev/null | head -1 | awk -F/ '{print $5}'; }
+comp_tid() { grep -l "Compositor" /proc/$1/task/*/comm 2>/dev/null | head -1 | awk -F/ '{print $5}'; }
 
 caps=$(ls "$OUT"/ui-*.txt 2>/dev/null | wc -l); last=0
 declare -A prev

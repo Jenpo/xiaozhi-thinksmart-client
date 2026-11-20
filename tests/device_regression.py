@@ -201,6 +201,7 @@ PAGE_JS = r"""
     cardShow({title:'回归测试', kind:'steps', items:['一','二']}); await sleep(250);
     C('card:open', document.getElementById('cardBox').classList.contains('on') && document.querySelectorAll('#cardItems li').length === 2);
     cardShow({close:true}); await sleep(50); C('card:close', !document.getElementById('cardBox').classList.contains('on'));
+    C('sleep:parent lock on by default', typeof sleepLocked === 'function' && sleepLocked());
     window.__step='fam';
     // 主屏横幅：留言 + 电视限时（只渲染，不调接口）
     const keep = FAM.state;

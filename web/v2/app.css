@@ -371,6 +371,7 @@ body[data-state="listening"] .mic-ring { opacity: .75; }
 .switch[aria-checked="true"] i { transform: translateX(40px); }
 .times { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; transition: opacity .2s; }
 .times.off { opacity: .35; pointer-events: none; }
+.times.locked .stepper button { opacity: .4; }
 .time { display: flex; flex-direction: column; gap: 12px; padding: 22px 26px; border-radius: 26px; background: var(--card); border: 1.5px solid var(--line); }
 .time small { font-size: 17px; color: var(--ink3); }
 .stepper { display: flex; align-items: center; justify-content: space-between; }

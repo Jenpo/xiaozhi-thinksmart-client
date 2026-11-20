@@ -15,17 +15,29 @@ window.addEventListener('error', e => pageLog('error', `${e.message} @${(e.filen
 window.addEventListener('unhandledrejection', e => pageLog('rejection', e.reason && e.reason.message ? `${e.reason.message} | ${e.reason.stack || ''}` : e.reason));
 /* 手快的小孩一秒点十几下：以前 touchstart 和 click 各发一条 HTTP，客户端 python 被点到 55% CPU、
    队列越积越多，反而更像点不动（2026-11-19 18:07 一秒 13 次 ⌫）。同一按钮 300 ms 内只记一条。 */
-let tapLogId = '', tapLogAt = 0;
-for (const type of ['touchstart', 'click']) {
-  document.addEventListener(type, e => {
-    const b = e.target && e.target.closest && e.target.closest('#hwSheet button, #stSheet button');
-    if (!b) return;
-    const id = `${type}|${b.id || (b.textContent || '').trim().slice(0, 12)}`, now = Date.now();
-    if (id === tapLogId && now - tapLogAt < 300) return;
-    tapLogId = id; tapLogAt = now;
-    pageLog('tap', `${type} ${b.id || ''} 「${(b.textContent || '').trim().slice(0, 12)}」 hidden=${b.hidden} disabled=${b.disabled}`);
-  }, { capture: true, passive: true });
-}
+/* 2026-11-20：touchstart / click 各记一条占了全天 journal 的 51%（3923/7658 行），每条又是一次 HTTP。
+   改成一次点按一行：click 时记「按下→click」用了多少 ms（就是孩子感觉到的输入延迟）；
+   按下 1.5 s 还没等到 click 才单记一条 no click。hidden/disabled 只在为真时写。同一按钮 300 ms 内只记一条。 */
+let tapLogId = '', tapLogAt = 0, tapDown = null;
+const tapName = b => `${b.id || ''} 「${(b.textContent || '').trim().slice(0, 12)}」${b.hidden ? ' hidden' : ''}${b.disabled ? ' disabled' : ''}`;
+document.addEventListener('touchstart', e => {
+  const b = e.target && e.target.closest && e.target.closest('#hwSheet button, #stSheet button');
+  if (!b) return;
+  if (tapDown && tapDown.timer) clearTimeout(tapDown.timer);
+  const down = { b, at: performance.now() };
+  down.timer = setTimeout(() => { if (tapDown === down) { tapDown = null; pageLog('tap', `${tapName(b)} no click`); } }, 1500);
+  tapDown = down;
+}, { capture: true, passive: true });
+document.addEventListener('click', e => {
+  const b = e.target && e.target.closest && e.target.closest('#hwSheet button, #stSheet button');
+  if (!b) return;
+  let lag = '';
+  if (tapDown && tapDown.b === b) { lag = ` ${Math.round(performance.now() - tapDown.at)}ms`; clearTimeout(tapDown.timer); tapDown = null; }
+  const id = b.id || (b.textContent || '').trim().slice(0, 12), now = Date.now();
+  if (id === tapLogId && now - tapLogAt < 300) return;
+  tapLogId = id; tapLogAt = now;
+  pageLog('tap', `${tapName(b)}${lag}`);
+}, { capture: true, passive: true });
 /* 卡顿探针：主线程被堵住 800 ms 以上记一条（kiosk 没有控制台，只能落进 journal）。
    setInterval 在阻塞时会漂移，正好当判据；每 500 ms 一次的开销可以忽略。 */
 (() => {
@@ -1014,9 +1026,39 @@ function renderSettings() {
   $('sleepTimes').classList.toggle('off', !s.enabled);
   $('sleepStart').textContent = s.start;
   $('sleepEnd').textContent = s.end;
-  $('sleepNote').textContent = !s.enabled ? '睡眠时段已关闭：补报一到就念，音量和亮度照常'
-    : s.active ? `现在是睡眠时段，到 ${s.end} 结束` : `每天 ${s.start} 到 ${s.end} 是睡眠时段，现在不在`;
+  $('sleepNote').textContent = (!s.enabled ? '睡眠时段已关闭：补报一到就念，音量和亮度照常'
+    : s.active ? `现在是睡眠时段，到 ${s.end} 结束` : `每天 ${s.start} 到 ${s.end} 是睡眠时段，现在不在`)
+    + (sleepLocked() ? '　🔒 家长锁：长按「睡眠时段」3 秒解锁' : '　🔓 已解锁，1 分钟后自动锁上');
+  $('sleepTimes').classList.toggle('locked', sleepLocked());
 }
+/* 家长锁（2026-11-20）：孩子当天在设置页把睡眠时段改了 53 次（12:22 / 14:19 / 14:28 三轮），停在 13:00–23:00，
+   14:18 起「放点王菲」连问 4 遍都被静音时段挡掉。owner 定的是 22:00–09:00（11-16）。
+   时段开关和 ± 默认锁住，长按「睡眠时段」标题 3 秒解锁 60 s；语音改照常（家长说话）。 */
+let sleepUnlockUntil = 0;
+const sleepLocked = () => Date.now() > sleepUnlockUntil;
+function sleepGate() {
+  if (!sleepLocked()) { sleepUnlockUntil = Date.now() + 60000; return true; }
+  toast('睡眠时段有家长锁：长按「睡眠时段」3 秒解锁');
+  pageLog('sleep', 'locked tap');
+  return false;
+}
+(() => {
+  const head = $('sleepSwitch').closest('.opt');
+  let t = null;
+  const cancel = () => { clearTimeout(t); t = null; };
+  head.addEventListener('pointerdown', e => {
+    if (e.target.closest('#sleepSwitch')) return;
+    cancel();
+    t = setTimeout(() => {
+      sleepUnlockUntil = Date.now() + 60000;
+      toast('睡眠时段已解锁 1 分钟');
+      pageLog('sleep', 'unlocked');
+      renderSettings();
+      setTimeout(renderSettings, 60500);
+    }, 3000);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) head.addEventListener(ev, cancel);
+})();
 function sendSleep(changes, delay) {
   Object.assign(sleepEdit, changes);
   renderSettings();
@@ -1040,9 +1082,9 @@ function stepTime(hhmm, minutes) {
   const t = ((h * 60 + m + minutes) % 1440 + 1440) % 1440;
   return pad(Math.floor(t / 60)) + ':' + pad(t % 60);
 }
-$('sleepSwitch').addEventListener('click', () => sendSleep({ enabled: !sleepSetting().enabled }, 0));
-for (const b of document.querySelectorAll('.stepper button')) {
-  b.addEventListener('click', () => sendSleep({ [b.dataset.k]: stepTime(sleepSetting()[b.dataset.k], Number(b.dataset.d)) }, 600));
+$('sleepSwitch').addEventListener('click', () => { if (sleepGate()) sendSleep({ enabled: !sleepSetting().enabled }, 0); });
+for (const b of document.querySelectorAll('#sleepTimes .stepper button')) {
+  b.addEventListener('click', () => { if (sleepGate()) sendSleep({ [b.dataset.k]: stepTime(sleepSetting()[b.dataset.k], Number(b.dataset.d)) }, 600); });
 }
 /* ---- settings: screen brightness (the client hints the system's screen blanker) ---- */
 let brightEdit = null;   // the slider's value while the finger is on it or the change is on its way
