@@ -36,10 +36,16 @@ document.addEventListener('click', e => {
   const id = b.id || (b.textContent || '').trim().slice(0, 12), now = Date.now();
   if (id === tapLogId && now - tapLogAt < 300) return;
   tapLogId = id; tapLogAt = now;
+  jmark('tap:' + id);
   pageLog('tap', `${tapName(b)}${lag}`);
 }, { capture: true, passive: true });
 /* 卡顿探针：主线程被堵住 800 ms 以上记一条（kiosk 没有控制台，只能落进 journal）。
    setInterval 在阻塞时会漂移，正好当判据；每 500 ms 一次的开销可以忽略。 */
+/* 卡顿归因（2026-11-20）：436 次 jank 里 258 次在学习面板、106 次落在点按后 0–1 s。离屏实测（tools/page_stall_bench.py）：
+   AudioContext 挂起后再 resume 堵主线程 140–220 ms、new Audio 念题 40–170 ms、starFly 70–140 ms，叠在一起就过 800 ms。
+   每条 jank 带上前 1.5 s 内做过的事（jmark），次日按标签归因。 */
+const JMARKS = [];
+function jmark(tag) { const now = Date.now(); JMARKS.push([now, tag]); while (JMARKS.length && now - JMARKS[0][0] > 3000) JMARKS.shift(); }
 (() => {
   let last = Date.now(), lastLog = 0, big = [];
   setInterval(() => {
@@ -48,7 +54,8 @@ document.addEventListener('click', e => {
     const where = (document.querySelector('.sheet.on') || {}).id || 'home';
     if (gap > 800 && now - lastLog > 3000) {
       lastLog = now;
-      pageLog('jank', `main thread stalled ${gap} ms (${where})`);
+      const t0 = now - gap - 1500, tags = JMARKS.filter(m => m[0] >= t0).map(m => `${m[1]}@${m[0] - (now - gap)}`);
+      pageLog('jank', `main thread stalled ${gap} ms (${where})${tags.length ? ' after: ' + tags.join(' ') : ''}`);
     }
     // 兜底：2 分钟里 3 次 >5 s 的卡顿 = 页面已经坏了（11-19 19:20 卡到 35 s，只能靠转屏重启才恢复）。
     // 只在没开面板时重载，不把孩子做到一半的题清掉；面板一收起就会走到这里
@@ -2637,6 +2644,7 @@ const ST = { mode: 'flash', lang: 'en', flash: null, dict: null, read: null, ide
 
 const STUDY_EN = ['flash', 'timo', 'dictation', 'read', 'identify'];   // 学习类标签（清单不算）一律英文开
 function stOpen(mode, opts) {
+  jmark('stOpen:' + mode);
   opts = opts || {};
   const sheet = stEl('stSheet');
   if (!sheet) return;
@@ -2672,6 +2680,7 @@ function stLangPills() {
   document.querySelectorAll('.st-lang').forEach(x => x.classList.toggle('on', x.dataset.lang === ST.lang));
 }
 function stTab(mode, opts) {
+  jmark('stTab:' + mode);
   if (ST.flash && mode !== 'flash') flashStop();
   if (mode !== ST.mode) { listenCancel(); ST.rtGen = (ST.rtGen || 0) + 1; if (ST.dict) ST.dict.gen = (ST.dict.gen || 0) + 1; }
   ST.mode = mode;
@@ -2814,6 +2823,7 @@ function starMilestone(goal) {
   QV.milestone = goal;                               // 一轮结束时念出来（现在念会打断题目）
 }
 function starFly(n, label) {
+  jmark('starFly');
   const sheet = stEl('stSheet'); if (!sheet) return;
   const x = document.createElement('div');
   x.className = 'star-fly';
@@ -3155,7 +3165,7 @@ let sfxCtx = null, sfxIdle = null;
 function sfx(kind) {
   try {
     sfxCtx = sfxCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (sfxCtx.state === 'suspended') sfxCtx.resume().catch(() => {});
+    if (sfxCtx.state === 'suspended') { jmark('sfx-resume'); sfxCtx.resume().catch(() => {}); }
     const notes = { good: [[880, 0], [1320, .09]], bad: [[220, 0], [196, .12]], combo: [[880, 0], [1100, .08], [1320, .16], [1760, .24]],
                     listen: [[660, 0]] }[kind] || [];
     const t0 = sfxCtx.currentTime + .01;
@@ -3167,7 +3177,9 @@ function sfx(kind) {
       o.connect(g).connect(sfxCtx.destination); o.start(t0 + at); o.stop(t0 + at + .3);
     }
     clearTimeout(sfxIdle);
-    sfxIdle = setTimeout(() => { try { sfxCtx.suspend(); } catch (e) { /* 已关就算了 */ } }, 3000);
+    // 3 s → 20 s（2026-11-20 实测）：挂起后每次 resume 堵主线程 ~200 ms，孩子 4–10 s 答一题，几乎每个 ✓ 都付一次；
+    // 开着空转只占 ~20% 一个核（11-19 记的 99% 是在出声时）。做题间隔内不挂，停手 20 s 再挂。
+    sfxIdle = setTimeout(() => { try { sfxCtx.suspend(); } catch (e) { /* 已关就算了 */ } }, 20000);
   } catch (e) { /* 没声音也照样判题 */ }
 }
 // 念一句并等它念完（最多 10 秒）；要是已经预取过同一句就直接用
@@ -3176,6 +3188,7 @@ function ttsAudio(text, lang) {
   const key = lang + '|' + text;
   let a = ttsCache.get(key);
   if (!a) {
+    jmark('tts-audio');
     a = new Audio('/api/hw/tts?lang=' + encodeURIComponent(lang) + '&text=' + encodeURIComponent(text));
     a.preload = 'auto';
     ttsCache.set(key, a);
