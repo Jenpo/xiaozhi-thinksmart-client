@@ -293,6 +293,9 @@ class Client:
         self.think_cue_n = 0
         self.think_task = None
         self.speech_end = 0.0         # monotonic: last time the user was heard talking
+        self.turn_at = 0.0            # monotonic: when this turn's question was recognised
+        self.turn_asr = 0.0           # seconds from the end of talking to the recognition
+        self.turn_first = 0.0         # seconds from the recognition to the first reply audio
         self.speech_start = 0.0       # monotonic: when the talking of this turn began (QUICK_END)
         self.vad_tail_until = 0.0     # monotonic: keep uploading until then after the hub's "vad end"
         self.tools_listed = asyncio.Event()   # the hub asked for our device tools on this connection
@@ -875,6 +878,10 @@ class Client:
                 self.deadline = None
                 self.recognised += 1
                 self.reply_samples = 0    # an abort before this turn's audio has heard nothing of it
+                # 每轮一行打点（阶段 0：先把「端到端多慢」变成可查的数字，不改任何行为）
+                self.turn_at = time.monotonic()
+                self.turn_first = 0.0
+                self.turn_asr = (self.turn_at - self.speech_end) if 0.0 < self.speech_end <= self.turn_at else 0.0
                 if late:
                     self.listen_after_reply = True
                 if self.uploading:
@@ -925,6 +932,11 @@ class Client:
                 levels = self.audio.take_echo_levels()
                 if levels:
                     log.info('echo while it played: mic %s dBFS, cancelled %s, for the wake word %s', *levels)
+                # 一行汇总（阶段 0）：asr 延时 / 首包 / 播放时长 / 断流次数 / 是否被打断
+                log.info('turn: asr=%.1f s, first audio=%.1f s, play=%.2f s, dry=%d, interrupted=%s, said=%d chars',
+                         getattr(self, 'turn_asr', 0.0), getattr(self, 'turn_first', 0.0),
+                         self.reply_samples / OUT_RATE, len(player.ran_out),
+                         bool(msg.get('interrupted')), len((self.bot_msg or {}).get('text') or ''))
             if state == 'start':
                 # The hub says "start" as soon as it has the question; the model is still
                 # thinking until the first sentence arrives
@@ -1166,6 +1178,8 @@ class Client:
             self.decoder = Decoder(OUT_RATE, 1)
         try:
             mono = self.decoder.decode(packet)
+            if self.reply_packets == 0 and getattr(self, 'turn_at', 0.0):
+                self.turn_first = time.monotonic() - self.turn_at
             self.reply_samples += len(mono)
             self.reply_packets += 1
             self.audio.player.push(np.repeat(mono[:, None], 2, axis=1))
