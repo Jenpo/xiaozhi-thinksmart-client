@@ -62,16 +62,12 @@ async def test_failure_keeps_the_last_forecast_and_does_not_retry_at_once(monkey
     assert len(calls) == 1                                         # second call is inside RETRY
 
 
-def test_hong_kong_uses_its_own_timezone():
-    # 2026-11-20 owner switched the home-screen weather to Hong Kong: the daily block must be Hong Kong days,
-    # not Asia/Shanghai ones (otherwise "今天" can be the wrong day late in the evening).
-    assert weather.Weather('香港').timezone == 'Asia/Hong_Kong'
-    assert weather.Weather('广州').timezone == 'Asia/Shanghai'
-    assert weather.Weather('').timezone == 'Asia/Shanghai'
-
-
-def test_default_weather_city_is_hong_kong():
-    assert config.DEFAULTS['weather_city'] == '香港'
+def test_weather_city_comes_from_the_device_config():
+    # The city is per-device (config.json); the source keeps no city of its own, so changing where the
+    # device is never means editing code.
+    assert config.DEFAULTS['weather_city'] == ''
+    w = weather.Weather('')
+    assert w.city == ''
 
 
 @pytest.mark.asyncio

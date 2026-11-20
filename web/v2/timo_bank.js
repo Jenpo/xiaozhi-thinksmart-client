@@ -510,7 +510,7 @@
         const y = RND(2, 20, r), x = RND(y + 1, y + 15, r), ans = x - y;
         return { lv: 'k2', sec: '数论', src: 'gen:相差', ans: 'num', a: String(ans),
           q: `小明有 ${x} 个苹果，小红有 ${y} 个。小明比小红多多少个？`, qy: `小明有 ${x} 个苹果，小红有 ${y} 个。小明比小红多幾多个？`,
-          qe: `Ming has ${x} apples and Hong has ${y}. How many more does Ming have?`,
+          qe: `Ming has ${x} apples and Ling has ${y}. How many more does Ming have?`,
           hint: `比多少用减法。`, hinty: `比幾多用减法。`, hinte: 'Compare with subtraction.',
           exp: `${x} − ${y} = ${ans}。`, expe: `${x} − ${y} = ${ans}.`,
           howto: `「比…多多少」就是大数减小数，不是把两个数加起来。`,

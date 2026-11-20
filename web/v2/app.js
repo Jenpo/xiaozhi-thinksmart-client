@@ -95,7 +95,7 @@ const ui = {
 // 而不是「帮我想个周末计划」。每组一个短名，页面上可以横向切。
 const SCENES = [
   ['日常', [
-    // 不带城市：hub 提示词要求直接调 get_weather 不传 location，用设备所在城市（默认香港，见 hub 配置；owner 2026-11-20）
+    // 不带城市：hub 提示词要求直接调 get_weather 不传 location，用 hub 配置里的默认地点
     ['明天天气怎么样？', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>'],
     ['帮我定一个 20 分钟后的计时', '#5ee0ff24', '#8ff0ff', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
     ['讲个冷笑话', '#ff7ac824', '#ff9bd6', '<circle cx="12" cy="12" r="9"/><path d="M8 14.5a5 5 0 0 0 8 0M9 9.5h.01M15 9.5h.01"/>'],
@@ -654,7 +654,7 @@ function renderWeather(w) {
 let WX_OPEN = false;   // 展开整周只在本次会话里记住；页面重载后回到两行
 async function loadWeather() {
   if (DEMO !== null) {
-    return renderWeather({ city: '香港', now: { temp: 21, icon: 'cloud' }, days: [
+    return renderWeather({ city: '', now: { temp: 21, icon: 'cloud' }, days: [
       { label: '今天', text: '阴', icon: 'cloud', lo: 18, hi: 27, rain: 10 },
       { label: '明天', text: '小雨', icon: 'rain', lo: 17, hi: 24, rain: 60 },
       { label: '11月22日 周日', text: '晴', icon: 'sun', lo: 18, hi: 26, rain: 0 },
