@@ -1089,9 +1089,15 @@ class Client:
     async def _listen_after_reply(self):
         """Reopen the mic for a follow-up once the last of the reply has been played (uploading
         earlier would send the hub its tail)."""
-        give_up = time.monotonic() + 3
+        # 等到真正播完再开麦（2026-11-20 09:30：reply stop 时还有 4.3 s 在缓冲，原来最多只等 3 s，
+        # 开麦后把自己念的「湿度偏高…今天会下小雨」又当成问题送给 hub）。封顶防缓冲卡死；
+        # 播完再留 0.3 s 让房间里的尾音散掉
+        playing = self.audio.player.buffered() > 0.02
+        give_up = time.monotonic() + min(30.0, self.audio.player.buffered() + 2.0)
         while self.audio.player.buffered() > 0.02 and time.monotonic() < give_up:
             await asyncio.sleep(0.05)
+        if playing:                    # 打断后缓冲已清空、没在播：不用等尾音，立刻开麦
+            await asyncio.sleep(0.3)
         if not self.listen_after_reply or not self.hub.connected:
             return   # woken, aborted or ended meanwhile: that already decided what comes next
         self.listen_after_reply = False

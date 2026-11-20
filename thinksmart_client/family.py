@@ -496,7 +496,16 @@ def strip_carrier(text, lang):
     m = rx.match(text)
     if m and m.end() >= 2:
         return text[m.end():].strip()
+    if lang == 'en':
+        # 垫话被识别糊了：'D answerous apple.'、'Danceous apple.'（11-20 09:20/09:26，孩子讲的是 apple，被判没听清）。
+        # 只在后面还有词时去掉开头这一个糊掉的词，孩子单独答「ants」之类不动
+        m = _CARRIER_EN_FUZZY.match(text)
+        if m and text[m.end():].strip(' ,.'):
+            return text[m.end():].strip(' ,')
     return text
+
+
+_CARRIER_EN_FUZZY = re.compile(r'^\s*(?:the|d|da|de|th)?\s*a?n\w*s\w*\b(?:\s+(?:is|was))?[\s,.]+', re.I)
 
 
 def _split(pcm, rate, chunk=REC_CHUNK):

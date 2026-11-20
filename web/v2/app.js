@@ -95,7 +95,7 @@ const ui = {
 // 而不是「帮我想个周末计划」。每组一个短名，页面上可以横向切。
 const SCENES = [
   ['日常', [
-    // 不带城市：hub 提示词要求直接调 get_weather 不传 location，用设备所在城市（默认广州，见 hub 配置）
+    // 不带城市：hub 提示词要求直接调 get_weather 不传 location，用设备所在城市（默认香港，见 hub 配置；owner 2026-11-20）
     ['明天天气怎么样？', '#ffb54729', '#ffcf7a', '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>'],
     ['帮我定一个 20 分钟后的计时', '#5ee0ff24', '#8ff0ff', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
     ['讲个冷笑话', '#ff7ac824', '#ff9bd6', '<circle cx="12" cy="12" r="9"/><path d="M8 14.5a5 5 0 0 0 8 0M9 9.5h.01M15 9.5h.01"/>'],
@@ -528,7 +528,11 @@ async function hwCountdownGate() {
   pageLog('note', `看作业纸张分数 ${sc === null ? 'n/a' : sc.toFixed(2)}`);
 }
 async function hwCapture(extra) {
-  if (HW.busy) { pageLog('note', 'hwCapture 跳过：HW.busy'); return; }
+  if (HW.busy) {   // 11-20 09:27 一秒连点 3 次「再拍一张」都没反应：给个看得见的回应
+    pageLog('note', 'hwCapture 跳过：HW.busy');
+    if (Date.now() - (HW.busyToast || 0) > 1500) { HW.busyToast = Date.now(); toast({ yue: '睇紧，等一阵', en: 'Still looking — one moment', zh: '正在看，等一下' }[HW.lang] || '正在看，等一下'); }
+    return;
+  }
   extra = (extra && typeof extra === 'object' && !(extra instanceof Event)) ? extra : {};
   hwLiveOn();
   hwSetBusy(true, '准备拍照…');
@@ -650,7 +654,7 @@ function renderWeather(w) {
 let WX_OPEN = false;   // 展开整周只在本次会话里记住；页面重载后回到两行
 async function loadWeather() {
   if (DEMO !== null) {
-    return renderWeather({ city: '广州', now: { temp: 21, icon: 'cloud' }, days: [
+    return renderWeather({ city: '香港', now: { temp: 21, icon: 'cloud' }, days: [
       { label: '今天', text: '阴', icon: 'cloud', lo: 18, hi: 27, rain: 10 },
       { label: '明天', text: '小雨', icon: 'rain', lo: 17, hi: 24, rain: 60 },
       { label: '11月22日 周日', text: '晴', icon: 'sun', lo: 18, hi: 26, rain: 0 },
@@ -2573,6 +2577,7 @@ else connectEvents();
 const quietMic = () => fetch('/api/study/quiet', { method: 'POST' }).catch(() => {});
 function speakText(text, lang) {
   if (!text) return;
+  noteSaid(text);
   quietMic();
   if (HW.audio) { audioDrop(HW.audio); HW.audio = null; }
   const a = new Audio('/api/hw/tts?lang=' + encodeURIComponent(lang || 'yue') + '&text=' + encodeURIComponent(text));
@@ -2995,6 +3000,8 @@ function flashQuestion(level, f) {
   if (level === 'review') { const r = f.pool[f.n % f.pool.length]; return [r.q, r.a, null, !/^\S+ [+−×÷] \S+$/.test(r.q)]; }
   if (level === 'olympiad') return timoFlashPick(f) || fromGen(OLYMPIAD, f);
   if (level === 'upper') {
+    // 连错两题就先回落到三年级题，连对两题再回高年级（11-20 09:06 一轮 4/10 用了 785 s，一题一分多钟干卡着）
+    if (f.ease) return fromGen(TIERS[3], f);
     return (Math.random() < .3 && bankPick(it => !it.olympiad && it.grade >= 3)) || fromGen([].concat(TIERS[4], TIERS[5], TIERS[6], TIERS[7]), f);
   }
   if (level === 'mixed') {
@@ -3111,6 +3118,7 @@ function ttsAudio(text, lang) {
 function speakWait(text, lang) {
   return new Promise(res => {
     if (!text) return res();
+    noteSaid(text);
     if (HW.audio) { audioDrop(HW.audio); HW.audio = null; }
     const a = ttsAudio(text, lang);
     ttsCache.delete(lang + '|' + text);            // 用过就丢，下次同一句重新取（Audio 不能可靠重播）
@@ -3141,6 +3149,25 @@ function listenOnce(lang, wait) {
     body: JSON.stringify({ lang, wait: wait || 15 }) }).then(x => x.json()).catch(() => ({ status: 'error' }));
 }
 const listenCancel = () => fetch('/api/listen/cancel', { method: 'POST' }).catch(() => {});
+/* 回声过滤（2026-11-20 09:22 日志）：页面刚念完的句子被麦克风收回来当成孩子的话——
+   'and I will go step by step' / 'now, step by step' 命中「讲讲」正则，讲解自己触发自己，还扣了星。
+   记住最近 20 s 念过的句子；听到的是其中一段（够长，孩子的回答都很短）就当回声，重听一次。 */
+const SAID = { text: '', at: 0 };
+function noteSaid(t) {
+  const now = Date.now();
+  SAID.text = (now - SAID.at > 20000 ? '' : SAID.text + ' ') + String(t || '');
+  if (SAID.text.length > 2000) SAID.text = SAID.text.slice(-2000);
+  SAID.at = now;
+}
+const echoNorm = x => String(x || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+function isEcho(heard) {
+  if (!heard || Date.now() - SAID.at > 20000) return false;
+  const h = echoNorm(heard);
+  const words = String(heard).trim().split(/\s+/).filter(Boolean).length;
+  const cjk = (h.match(/[\u4e00-\u9fff]/g) || []).length;
+  if (!(words >= 3 || cjk >= 4)) return false;
+  return echoNorm(SAID.text).includes(h);
+}
 const sleepMs = ms => new Promise(r => setTimeout(r, ms));
 // 中文短句粗匹配：粤语/普通话常见写法统一后，按字算重合比例
 const ZH_NORM = [[/食/g, '吃'], [/咗|晒|好咗|完了|好了|完/g, ''], [/嘅/g, '的'], [/冲凉|沖涼/g, '洗澡'], [/执|執/g, '收拾'],
@@ -3216,19 +3243,23 @@ async function flashStart(level, fromVoice) {
     f.pool.sort(() => Math.random() - .5);
     f.total = Math.min(10, f.pool.length);
   }
+  const g0 = f.gen;
   if (['mixed', 'upper', 'olympiad'].includes(level)) await loadBank();
+  if (f !== ST.flash || f.gen !== g0) return;
   QV.streak = 0; QV.roundStars = 0;
   f.tick = setInterval(flashMeta, 500);
   stEl('flGo').hidden = true;
   if (voiceOn()) {
     flashVoiceLine('稍等…');
     await fetch('/api/quiz/prepare', { method: 'POST' }).catch(() => {});   // 等小麦讲完、收起对话
-    if (f !== ST.flash || f.gen !== ST.flash.gen) return;
+    if (f !== ST.flash || f.gen !== g0) return;   // flashStop 原地加 f.gen，旧写法永远相等（11-20 09:29 换到听写后 flQ 为 null）
   }
+  if (!stEl('flQ')) return;
   flashNext();
 }
 function flashNext() {
   const f = ST.flash;
+  if (!f || !stEl('flQ')) return;
   if (f.n >= f.total) return flashEnd();
   f.q = flashQuestion(f.level, f); f.input = ''; f.n += 1; f.tries = 0;
   stEl('flQ').classList.remove('end-score');
@@ -3329,6 +3360,7 @@ async function flashCheck(byVoice) {
   f.done.push(item);
   if (ok) {
     f.right += 1; f.streak += 1; f.best = Math.max(f.best, f.streak); QV.streak = f.streak;
+    f.miss = 0; if (f.ease && f.streak >= 2) f.ease = false;
     a.className = 'flash-a good'; a.textContent = f.input + ' ✓';
     starGain(1);                                                        // 小星星（2026-11-19）：答对 +1
     if (f.streak % 3 === 0) setTimeout(() => starGain(1, STREAK[ST.lang](f.streak)), 600);   // 每连对 3 题再 +1
@@ -3341,6 +3373,7 @@ async function flashCheck(byVoice) {
     f.skip = null;
   } else {
     f.streak = 0; QV.streak = 0; f.wrong.push(item);
+    f.miss = (f.miss || 0) + 1; if (f.level === 'upper' && f.miss >= 2) f.ease = true;
     a.className = 'flash-a bad'; a.textContent = `${f.input || '?'} ✗  = ${fmt(f.q[1])}`;
     sfx('bad'); flashMeta();
     const ans = fmt(f.q[1]);
@@ -3653,6 +3686,7 @@ async function timoStart(level, opts) {
   stEl('tqSay').hidden = false; stEl('tqHint').hidden = false;
   stEl('tqGuide').hidden = false; stEl('tqSkTg').hidden = false;
   const k2btn = stEl('tqK2'); if (k2btn) k2btn.hidden = true;
+  const upbtn = stEl('tqUp'); if (upbtn) upbtn.hidden = true;
   if (voiceOn()) await fetch('/api/quiz/prepare', { method: 'POST' }).catch(() => {});   // 等小麦讲完、收起对话再念题
   timoNext();
 }
@@ -3747,18 +3781,25 @@ function timoGuideLines(q) {
 }
 async function timoSpeakGuide(q) {
   const gen = TIMO.gen;
+  // 只看 gen 不够：讲解中点「提示」、再点「讲讲」，两段话同时往下念、互相打断，麦克风全收进去（11-20 09:22–09:23）
+  const talk = TIMO.talk = (TIMO.talk || 0) + 1;
+  TIMO.guideAt = Date.now();
   for (const line of timoGuideLines(q)) {
-    if (TIMO.gen !== gen) return;
+    if (TIMO.gen !== gen || TIMO.talk !== talk) return false;
     await quizSay(line, ST.lang, false);
-    if (TIMO.gen !== gen) return;
+    if (TIMO.gen !== gen || TIMO.talk !== talk) return false;
   }
+  return true;
 }
 async function timoAfterGuide(q) {
   if (!voiceOn() || TIMO.q !== q) return;
   const gen = TIMO.gen;
-  tqVoice(timoUI() ? '🎤 Say "got it", or "again", or say the answer' : '🎤 说「明白了」「再讲一次」，或者直接讲答案', 'listen');
-  const r = await listenOnce(ST.lang, 6);
+  await sleepMs(300);
   if (TIMO.gen !== gen || TIMO.q !== q) return;
+  tqVoice(timoUI() ? '🎤 Say "got it", or "again", or say the answer' : '🎤 说「明白了」「再讲一次」，或者直接讲答案', 'listen');
+  let r = await listenOnce(ST.lang, 6);
+  if (TIMO.gen !== gen || TIMO.q !== q) return;
+  if (r.status === 'ok' && isEcho(r.text)) { pageLog('note', 'timo 回声丢弃: ' + r.text); r = await listenOnce(ST.lang, 5); if (TIMO.gen !== gen || TIMO.q !== q) return; }
   if (r.status !== 'ok') return tqVoice('');
   const low = String(r.text || '').toLowerCase();
   tqVoice((timoUI() ? 'Heard: ' : '听到：') + (r.text || ''));
@@ -3781,11 +3822,14 @@ function timoRetryPush(q) {
 /* 念题 → 本机断句听一句（/api/listen，hub 只做识别，不进大模型）→ 判。和闪卡 flashAsk 同一套 */
 async function timoAsk(readQuestion, prefix) {
   const q = TIMO.q, gen = TIMO.gen, lang = ST.lang;
-  const stale = () => TIMO.q !== q || TIMO.gen !== gen || TIMO.locked || !stEl('stSheet').classList.contains('on');
+  const talk = TIMO.talk = (TIMO.talk || 0) + 1;     // 新的一段说话/听：之前没讲完的讲解自动收声
+  const stale = () => TIMO.q !== q || TIMO.gen !== gen || TIMO.talk !== talk || TIMO.locked || !stEl('stSheet').classList.contains('on');
   if (!q) return;
   const text = [prefix || '', readQuestion ? timoText(q) + timoOptsSpeech(q) : ''].filter(Boolean).join(' ');
   if (text) { tqVoice(timoUI() ? '🔊 Reading…' : '🔊 读题…', 'speak'); await quizSay(text, lang, false); }
   if (stale() || !voiceOn()) { if (!stale()) tqVoice(''); return; }
+  await sleepMs(300);                    // 喇叭里还有尾音：ended 比声音出完早，马上开麦会收到自己（09:22 waited 0.1 s）
+  let echoes = 0;
   for (let k = 0; k < 3; k++) {
     if (stale()) return;
     tqVoice(timoUI() ? '🎤 Listening… say your answer' : '🎤 在听…讲答案', 'listen'); sfx('listen');
@@ -3798,6 +3842,7 @@ async function timoAsk(readQuestion, prefix) {
       tqVoice(''); await speakWait(VOICE_SAY.silent[lang], lang); continue;
     }
     if (r.status !== 'ok') return tqVoice(timoUI() ? 'Tap your answer' : '点答案就行');
+    if (isEcho(r.text) && echoes++ < 2) { pageLog('note', 'timo 回声丢弃: ' + r.text); k -= 1; continue; }
     tqVoice((timoUI() ? 'Heard: ' : '听到：') + (r.text || ''));
     const cmd = voiceCommand(r.text), low = String(r.text || '').toLowerCase();
     if (cmd === 'stop') return stClose();
@@ -3818,11 +3863,16 @@ function timoSay() { const q = TIMO.q; if (!q) return; listenCancel(); timoAsk(t
 /* 「讲讲/一步一步」：只讲不清题，孩子还能自己再答（讲过 = 这题只算 1 颗星） */
 function timoExplain() {
   const q = TIMO.q; if (!q || TIMO.locked) return;
+  // 连点两下（11-20 09:23:54/55）不重头再讲；正在讲就别打断
+  if (TIMO.guideQ === q && Date.now() - (TIMO.guideAt || 0) < 3000) return;
+  TIMO.guideQ = q;
   listenCancel();
   TIMO.hintUsed += 1;
+  TIMO.input = '';                       // 答案框被讲解盖住了，旧数字看不见：清掉，免得接着按成「2466」
   const note = stEl('tqA');
   if (note) { note.textContent = '🗣 ' + (timoUI() ? 'Step by step…' : '一步一步讲…'); note.className = 'timo-a'; }
-  timoSpeakGuide(q);
+  // 讲完不能干站着：接着听孩子作答
+  timoSpeakGuide(q).then(done => { if (done && TIMO.q === q && !TIMO.locked) timoAsk(false); });
 }
 /* 反跳过（owner 2026-11-19「要避免小朋友跳过不会的」）：
    说「跳过/不会」不再直接翻页。前两次只给提示并请他再想；
@@ -3836,6 +3886,7 @@ function timoSkipAsk() {
 function timoHint(prefix) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
   TIMO.hintUsed += 1;
+  TIMO.input = '';                       // 提示盖住了答案框：旧数字看不见就别留着（11-20 09:23 「24」+「66」=2466，连按 5 次 ⌫）
   const t = ST.lang === 'en' ? (q.hinte || q.hint) : ST.lang === 'yue' ? (q.hinty || q.hint) : q.hint;
   const note = stEl('tqA');
   if (note) { note.textContent = '💡 ' + t; note.className = 'timo-a'; }
@@ -4005,6 +4056,14 @@ function timoEnd() {
   k2.hidden = !(TIMO.level === 'p1' && TIMO.firstRight * 2 < TIMO.total);
   k2.textContent = timoUI() ? 'Try Kindergarten (K2) ▶' : '换幼稚园组 ▶';
   k2.onclick = () => { timoStop(); timoView(stEl('stBody'), { level: 'k2' }); timoStart('k2', {}); };
+  // 幼稚园组连两轮一次全对：给「挑战小一」（11-20 早上 K2 八轮七轮 8/8，约 100 s 一轮，已经太容易）
+  let pk = Number(localStorage.getItem('timoK2Perfect')) || 0;
+  if (TIMO.level === 'k2') { pk = TIMO.firstRight === TIMO.total ? pk + 1 : 0; localStorage.setItem('timoK2Perfect', pk); }
+  let up = stEl('tqUp');
+  if (!up) { up = document.createElement('button'); up.id = 'tqUp'; up.className = 'pri'; k2.after(up); }
+  up.hidden = !(TIMO.level === 'k2' && pk >= 2);
+  up.textContent = timoUI() ? 'Ready for Grade 1? ▶' : '挑战小一 ▶';
+  up.onclick = () => { timoStop(); timoView(stEl('stBody'), { level: 'p1' }); timoStart('p1', {}); };
   studyPush();
   quizSay(quizRoundEnd('timo', TIMO.level, TIMO.firstRight, TIMO.total, sec), ST.lang, false);
   if (TIMO.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -89,6 +89,17 @@ def test_strip_carrier_variants():
     assert s('五十六', 'yue') == '五十六'       # no carrier heard: keep everything
 
 
+def test_strip_garbled_english_carrier():
+    # 11-20 设备日志：垫话被识别糊了，孩子讲的 apple 没被认出来
+    s = family.strip_carrier
+    assert s('D answerous apple.', 'en') == 'apple.'
+    assert s('Danceous apple.', 'en') == 'apple.'
+    assert s('answers twelve', 'en') == 'twelve'
+    assert s('ants', 'en') == 'ants'               # 单独一个词：是孩子的回答，不动
+    assert s('Dancer', 'en') == 'Dancer'
+    assert s('fifteen', 'en') == 'fifteen'
+
+
 def _run_rec_wait(plan, silence=0.5, max_wait=3.0):
     f = _fam()
     f.rec = []
