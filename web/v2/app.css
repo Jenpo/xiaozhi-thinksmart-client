@@ -855,6 +855,13 @@ body.ptt-off .hint::after { content: none; }
 .timo .timo-opts { display: grid; gap: 12px; }
 .timo .timo-opts button { height: 88px; font-size: 28px; font-weight: 600; }
 .timo .st-go { grid-column: 1; justify-self: start; }
+/* 草稿板：右栏从数字键盘换成画布，手指/鼠标写竖式，换题自动清（owner 2026-11-19） */
+.timo .timo-sk { grid-column: 2; grid-row: 1 / span 4; display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 320px; }
+.timo .timo-sk[hidden] { display: none; }
+.timo #tqPad[hidden] { display: none; }
+.timo .timo-sk canvas { width: 100%; height: 100%; min-height: 300px; border: 2px dashed #3a4a5c; border-radius: 18px;
+  background: #0f1620; touch-action: none; cursor: crosshair; }
+.timo .timo-sk button { height: 56px; font-size: 20px; }
 .flash-voice { grid-column: 1; min-height: 30px; font-size: 22px; color: var(--ink2); }
 .flash-voice.listen { color: #8ff0ff; animation: breathe 1.6s ease-in-out infinite; }
 .flash-voice.speak { color: #ffcf7a; }

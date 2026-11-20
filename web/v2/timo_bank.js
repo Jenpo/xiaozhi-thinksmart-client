@@ -418,25 +418,292 @@
     },
   ];
 
-  /* 分档（页面上的按钮顺序） */
-  const LEVELS = [
-    { id: 'k2', name: '幼稚园 K2', note: 'TIMO 幼稚园组 2017/2018 卷，能听懂题就会做',
-      name_en: 'Kindergarten (K2)', note_en: 'TIMO Kindergarten papers 2017 / 2018' },
-    { id: 'p1', name: '小一 P1', note: 'TIMO Primary 1 2018/2020-2021 卷',
-      name_en: 'Primary 1 (P1)', note_en: 'TIMO Primary 1 papers 2018 / 2020-2021' },
+  /* ===== 反背题：动态出题模板（owner 2026-11-19「要做反背题」） =====
+   * 数字由 rng 现场生成、答案当场算出来：孩子记住「上次答案是 13」没有用，
+   * 同一模板下一次换一组数，答案跟着变。pick() 每轮先用生成题（约 3/4），
+   * 并避开最近 200 道出过的题面（localStorage），原卷题库只用来补位、留出处。
+   * 复练走 variant()：错题不是原题重来，而是同型换数据的新题。
+   */
+  const RND = (lo, hi, rng) => lo + Math.floor((rng || Math.random)() * (hi - lo + 1));
+  const fp = q => String((q && q.qe) || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const SEEN_KEY = 'timo_seen_v1', SEEN_MAX = 200;
+  function loadSeen() { try { const a = JSON.parse(localStorage.getItem(SEEN_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  function saveSeen(list) { try { localStorage.setItem(SEEN_KEY, JSON.stringify(list.slice(-SEEN_MAX))); } catch (e) {} }
+  function noteSeen(list) { if (list.length) saveSeen(loadSeen().concat(list)); }
+  function shuffled(a, rng) { const r = rng || Math.random; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+  /* 选择题正确项随机摆位：不能靠「每次都点第二个」蒙对 */
+  function withCorrect(correct, others, rng) {
+    const opts = others.slice(), at = Math.floor((rng || Math.random)() * (opts.length + 1));
+    opts.splice(at, 0, correct);
+    return opts;
+  }
+  const SEQ = (n, f, sep) => Array.from({ length: n }, (_, i) => f(i)).join(sep);
+
+  const GEN = [
+    /* ---------- K2 / 幼稚园组 ---------- */
+    { id: 'k2-add3', lv: 'k2', sec: '算术', make(r) {
+        const a = RND(2, 19, r), b = RND(2, 19, r), c = RND(2, 9, r), s1 = a + b, s = s1 + c;
+        return { lv: 'k2', sec: '算术', src: 'gen:连加', ans: 'num', a: String(s),
+          q: `${a} 加 ${b} 加 ${c} 等于多少？`, qy: `${a} 加 ${b} 加 ${c} 等于几多？`,
+          qe: `What is ${a} + ${b} + ${c}?`,
+          hint: `先算 ${a} 加 ${b}。`, hinty: `先算 ${a} 加 ${b}。`, hinte: `Start with ${a} + ${b}.`,
+          exp: `${a} + ${b} = ${s1}，再 ${s1} + ${c} = ${s}。`, expe: `${a} + ${b} = ${s1}, then ${s1} + ${c} = ${s}.`,
+          howto: `连加从左往右一步一步算，每步写下中间结果；不要跳步心算。`,
+          howtoe: `Work left to right and write each step down; do not skip steps.` };
+      } },
+    { id: 'k2-sub2', lv: 'k2', sec: '算术', make(r) {
+        const a = RND(12, 20, r), b = RND(2, 8, r), room = a - b;
+        const c = RND(2, Math.max(2, Math.min(9, room - 1)), r), s1 = a - b, s = s1 - c;
+        return { lv: 'k2', sec: '算术', src: 'gen:连减', ans: 'num', a: String(s),
+          q: `${a} 减 ${b} 再减 ${c} 等于多少？`, qy: `${a} 减 ${b} 再减 ${c} 等于几多？`,
+          qe: `What is ${a} − ${b} − ${c}?`,
+          hint: `先算 ${a} 减 ${b}。`, hinty: `先算 ${a} 减 ${b}。`, hinte: `Start with ${a} − ${b}.`,
+          exp: `${a} − ${b} = ${s1}，再 ${s1} − ${c} = ${s}。`, expe: `${a} − ${b} = ${s1}, then ${s1} − ${c} = ${s}.`,
+          howto: `连减先算第一步，把得到的数再减第二个；可以用加法验算。`,
+          howtoe: `Subtract step by step and check your answer by adding back.` };
+      } },
+    { id: 'k2-seq', lv: 'k2', sec: '逻辑', make(r) {
+        const st = RND(1, 9, r), d = RND(2, 9, r), a = st + 5 * d;
+        return { lv: 'k2', sec: '逻辑', src: 'gen:规律', ans: 'num', a: String(a),
+          q: `按规律：${SEQ(5, i => st + i * d, '、')}，下一个是多少？`,
+          qy: `跟规律：${SEQ(5, i => st + i * d, '、')}，下一个系几多？`,
+          qe: `Pattern: ${SEQ(5, i => st + i * d, ', ')}. What comes next?`,
+          hint: `看看每次加了多少。`, hinty: `睇下每次加咗幾多。`, hinte: 'How much is added each time?',
+          exp: `每次都加 ${d}，${st + 4 * d} 加 ${d} 等于 ${a}。`, expe: `Each term adds ${d}: ${st + 4 * d} + ${d} = ${a}.`,
+          howto: `规律题先算相邻两个数差多少，差固定就用这个差往下推。`,
+          howtoe: `Work out the gap between neighbouring numbers; if it is constant, keep adding it.` };
+      } },
+    { id: 'k2-times', lv: 'k2', sec: '算术', make(r) {
+        const m = RND(2, 5, r), n = RND(2, 6, r), a = m * n;
+        return { lv: 'k2', sec: '算术', src: 'gen:几个几', ans: 'num', a: String(a),
+          q: `${m} 个 ${n} 加起来是多少？`, qy: `${m} 个 ${n} 加起来系几多？`,
+          qe: `What is ${n} added ${m} times?`,
+          hint: `一个一个加：${n}、${n + n}……`, hinty: `一个一个加：${n}、${n + n}……`, hinte: `Add them one at a time: ${n}, ${n + n}, ...`,
+          exp: `${Array(m).fill(n).join(' + ')} = ${a}，也就是 ${n} × ${m}。`, expe: `${Array(m).fill(n).join(' + ')} = ${a}, that is ${n} × ${m}.`,
+          howto: `先一个一个加，再看一共加了几次；下次看到「几个几」直接想乘法。`,
+          howtoe: `Add one at a time first, then count how many times you added; next time use multiplication straight away.` };
+      } },
+    /* 平均分/几个几的变体：分给人或分进盒子，数据全变 */
+    { id: 'k2-share2', lv: 'k2', sec: '组合', make(r) {
+        const m = RND(2, 5, r), k = RND(2, 8, r), total = m * k;
+        const who = ['小朋友', '盒子', '袋子', '盘子'][RND(0, 3, r)];
+        const whEn = { '小朋友': 'children', '盒子': 'boxes', '袋子': 'bags', '盘子': 'plates' }[who];
+        return { lv: 'k2', sec: '组合', src: 'gen:平均分', ans: 'num', a: String(k),
+          q: `${total} 个苹果平均放进 ${m} 个${who}，每个${who}放多少个？`, qy: `${total} 个苹果平均放入 ${m} 个${who}，每个${who}放幾多个？`,
+          qe: `${total} apples are shared equally into ${m} ${whEn}. How many in each?`,
+          hint: `${m} 乘多少会等于 ${total}？`, hinty: `${m} 乘幾多会等于 ${total}？`, hinte: `What times ${m} makes ${total}?`,
+          exp: `${total} 除以 ${m} 等于 ${k}，每个${who}放 ${k} 个。`, expe: `${total} divided by ${m} is ${k}, so ${k} in each.`,
+          howto: `平均分就是除法：总数除以份数；验算用乘法 ${k} × ${m} 应该回到 ${total}。`,
+          howtoe: `Equal sharing is division: total divided by the number of groups. Check with ${k} × ${m} = ${total}.` };
+      } },
+    { id: 'k2-blank', lv: 'k2', sec: '算术', make(r) {
+        const sum = RND(20, 50, r), a = RND(10, sum - 5, r), ans = sum - a;
+        return { lv: 'k2', sec: '算术', src: 'gen:填空', ans: 'num', a: String(ans),
+          q: `${a} 加多少等于 ${sum}？`, qy: `${a} 加幾多等于 ${sum}？`,
+          qe: `${a} + ___ = ${sum}. What fills the blank?`,
+          hint: `用 ${sum} 减 ${a}。`, hinty: `用 ${sum} 减 ${a}。`, hinte: `Do ${sum} − ${a}.`,
+          exp: `${sum} − ${a} = ${ans}。`, expe: `${sum} − ${a} = ${ans}.`,
+          howto: `求加数用减法：和减已知的那个数；算完把 ${ans} 加回 ${a} 验一下。`,
+          howtoe: `Find the missing addend by subtraction: total minus the known part. Check by adding ${ans} + ${a}.` };
+      } },
+    { id: 'k2-more', lv: 'k2', sec: '数论', make(r) {
+        const y = RND(2, 20, r), x = RND(y + 1, y + 15, r), ans = x - y;
+        return { lv: 'k2', sec: '数论', src: 'gen:相差', ans: 'num', a: String(ans),
+          q: `小明有 ${x} 个苹果，小红有 ${y} 个。小明比小红多多少个？`, qy: `小明有 ${x} 个苹果，小红有 ${y} 个。小明比小红多幾多个？`,
+          qe: `Ming has ${x} apples and Hong has ${y}. How many more does Ming have?`,
+          hint: `比多少用减法。`, hinty: `比幾多用减法。`, hinte: 'Compare with subtraction.',
+          exp: `${x} − ${y} = ${ans}。`, expe: `${x} − ${y} = ${ans}.`,
+          howto: `「比…多多少」就是大数减小数，不是把两个数加起来。`,
+          howtoe: `How many more means the bigger minus the smaller, not adding them.` };
+      } },
+    { id: 'k2-biggest', lv: 'k2', sec: '数论', make(r) {
+        const nums = shuffled([RND(1, 20, r), RND(21, 40, r), RND(41, 60, r)], r).map(String);
+        const big = nums.slice().sort((x, y) => Number(y) - Number(x))[0];
+        const opts = withCorrect(big, nums.filter(v => v !== big), r);
+        return { lv: 'k2', sec: '数论', src: 'gen:比大小', ans: 'choice', opts, a: big,
+          q: `哪一个小？`, qy: `边一个最细？`, qe: `Which number is the smallest?`,
+          hint: `先看十位，十位一样再看个位。`, hinty: `先睇十位，十位一样再睇个位。`, hinte: 'Check the tens digit first.',
+          exp: `${opts.slice().sort((x, y) => Number(x) - Number(y))[0]} 最小。`, expe: `${opts.slice().sort((x, y) => Number(x) - Number(y))[0]} is the smallest.`,
+          howto: `比大小先比位数，位数一样从高位往下比，不用把它们加起来。`,
+          howtoe: `Compare digit by digit from the left; you never need to add the numbers.` };
+      } },
+    /* 新的 K2 模板：图形规律 / 单双数 / 一半 / 时间顺序 */
+    { id: 'k2-shapes', lv: 'k2', sec: '逻辑', make(r) {
+        const set = shuffled(['红圆', '蓝三角', '黄方', '绿星'], r);
+        const en = { '红圆': 'red circle', '蓝三角': 'blue triangle', '黄方': 'yellow square', '绿星': 'green star' };
+        const a = set[3];
+        return { lv: 'k2', sec: '逻辑', src: 'gen:图形规律', ans: 'choice',
+          opts: shuffled([a, set[0], set[1]].slice(), r), a,
+          q: `按规律：${set[0]}、${set[1]}、${set[0]}、${set[1]}，下一个是什么？`, qy: `跟规律：${set[0]}、${set[1]}、${set[0]}、${set[1]}，下一个系咩？`,
+          qe: `Pattern: ${en[set[0]]}, ${en[set[1]]}, ${en[set[0]]}, ${en[set[1]]}. What comes next?`,
+          hint: `看看前面两个是怎么排的。`, hinty: `睇下前面两个系点排嘅。`, hinte: 'Look at how the first two repeat.',
+          exp: `规律是两个一循环，所以下一个回到第一个 ${set[0]}。`, expe: `The pattern repeats every two, so next is the first one: ${en[set[0]]}.`,
+          howto: `找规律先找循环长度，再往后数一格。`, howtoe: `Find the repeating block first, then count one step forward.` };
+      } },
+    { id: 'k2-parity', lv: 'k2', sec: '数论', make(r) {
+        const n = RND(11, 99, r), odd = n % 2 === 1;
+        return { lv: 'k2', sec: '数论', src: 'gen:单双数', ans: 'choice', opts: ['单数', '双数'], a: odd ? '单数' : '双数',
+          optse: ['odd', 'even'],
+          q: `${n} 是单数还是双数？`, qy: `${n} 系单数定双数？`,
+          qe: `Is ${n} odd or even?`,
+          hint: `看个位：1、3、5、7、9 是单数。`, hinty: `睇个位：1、3、5、7、9 系单数。`, hinte: 'Look at the units digit: 1, 3, 5, 7, 9 mean odd.',
+          exp: `${n} 的个位是 ${n % 10}，所以是${odd ? '单数' : '双数'}。`, expe: `The units digit of ${n} is ${n % 10}, so it is ${odd ? 'odd' : 'even'}.`,
+          howto: `判断单双只看个位，不用算别的。`, howtoe: `Odd or even is decided by the units digit alone.` };
+      } },
+    { id: 'k2-half', lv: 'k2', sec: '算术', make(r) {
+        const k = RND(2, 9, r), total = k * 2;
+        return { lv: 'k2', sec: '算术', src: 'gen:一半', ans: 'num', a: String(k),
+          q: `${total} 的一半是多少？`, qy: `${total} 嘅一半系幾多？`,
+          qe: `What is half of ${total}?`,
+          hint: `想：几多乘 2 等于 ${total}？`, hinty: `谂：幾多乘 2 等于 ${total}？`, hinte: `What times 2 makes ${total}?`,
+          exp: `${total} ÷ 2 = ${k}。`, expe: `${total} ÷ 2 = ${k}.`,
+          howto: `一半就是平均分两份，可以用乘法反推。`, howtoe: `Half means splitting into two equal parts; you can check with multiplication.` };
+      } },
+
+    /* ---------- P1 / 小一 ---------- */
+    { id: 'p1-give', lv: 'p1', sec: '数论', make(r) {
+        const b = RND(2, 12, r), d = RND(1, 8, r), a = b + 2 * d;
+        return { lv: 'p1', sec: '数论', src: 'gen:给到一样多', ans: 'num', a: String(d),
+          q: `艾美有 ${a} 个苹果，约翰有 ${b} 个。要让两人一样多，艾美要给约翰多少个？`, qy: `艾美有 ${a} 个苹果，约翰有 ${b} 个。要让两个人一样多，艾美要畀约翰幾多个？`,
+          qe: `Amy has ${a} apples and John has ${b}. How many must Amy give John so they are equal?`,
+          hint: `一共 ${a + b} 个，一样多每人几个？`, hinty: `一共 ${a + b} 个，一样多每人幾多个？`, hinte: `There are ${a + b} in total. How many each if equal?`,
+          exp: `一共 ${a + b} 个，一样多每人 ${(a + b) / 2} 个；约翰已有 ${b} 个，所以给 ${d} 个。`, expe: `${a + b} in total means ${(a + b) / 2} each. John has ${b}, so Amy gives ${d}.`,
+          howto: `求「给多少才一样多」：先算两人一共多少，再除以人数得每人多少，然后用已有数减一下；不是把差除以二就完事，要验算。`,
+          howtoe: `For make-it-equal: total divided by the number of people, minus what the other one already has. Always check by giving and recounting.` };
+      } },
+    { id: 'p1-balloons', lv: 'p1', sec: '数论', make(r) {
+        const total = RND(10, 20, r), ans = total - 6;
+        return { lv: 'p1', sec: '数论', src: 'gen:最多最少', ans: 'num', a: String(ans),
+          q: `四个小孩一共有 ${total} 个气球，每人数量都不同，而且每人至少 1 个。气球最多的那个有多少个？`, qy: `四个细路一共有 ${total} 个气球，每人数量都唔同，而且每人至少有 1 个。气球最多嘅嗰个有幾多个？`,
+          qe: `Four children have ${total} balloons in total, all different amounts, at least one each. How many does the child with the most have?`,
+          hint: `先给三个人尽量少：1、2、3。`, hinty: `先畀三个人尽量少：1、2、3。`, hinte: 'Give the other three as few as possible: 1, 2, 3.',
+          exp: `另外三人最少是 1 + 2 + 3 = 6，剩下 ${total} − 6 = ${ans}。`, expe: `The other three take at least 1 + 2 + 3 = 6, so the fourth has ${total} − 6 = ${ans}.`,
+          howto: `「最多那个最多多少」先让其他人尽量少：每人不同就取 1、2、3，剩下的全给最多的那个。`,
+          howtoe: `To maximise one child's share, give the others as little as possible while keeping them different: 1, 2, 3.` };
+      } },
+    { id: 'p1-odd', lv: 'p1', sec: '组合', make(r) {
+        const ds = shuffled([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], r).slice(0, 4);
+        const o = ds.filter(v => v % 2 === 1).length;
+        const tens = 3 - (ds.indexOf(0) >= 0 ? 1 : 0);   // 十位不能是 0
+        const ans = o * tens;
+        return { lv: 'p1', sec: '组合', src: 'gen:奇数个数', ans: 'num', a: String(ans),
+          q: `从 ${ds.join('、')} 里选 2 个不重复的数字组成两位数，能组成多少个奇数？`, qy: `由 ${ds.join('、')} 里面拣 2 个唔重复嘅数字组成两位数，可以组成幾多个奇数？`,
+          qe: `From ${ds.join(', ')} pick 2 digits without repeating to make two-digit numbers. How many are odd?`,
+          hint: `先数个位可以是哪几个奇数。`, hinty: `先数个位可以系邊几个奇数。`, hinte: 'Count the odd digits first: those can be the units digit.',
+          exp: o ? `个位有 ${o} 个奇数可选；十位剩下 ${tens} 个可选（不能是 0）→ ${o} × ${tens} = ${ans}。` : `四个数字都是偶数，个位凑不出奇数，所以是 0 个。`,
+          expe: o ? `${o} odd digit(s) for the unit place, ${tens} digit(s) left for the tens place (0 cannot lead): ${o} × ${tens} = ${ans}.` : 'All four digits are even, so no odd number can be made: 0.',
+          howto: `分位置想：个位决定奇偶，十位不能是 0；两位可选数相乘就是答案。`,
+          howtoe: `Think by place value: the units digit decides odd or even, the tens digit cannot be zero.` };
+      } },
+    { id: 'p1-pairsum', lv: 'p1', sec: '算术', make(r) {
+        const n = RND(8, 15, r), ans = n * (n + 1) / 2;
+        return { lv: 'p1', sec: '算术', src: 'gen:连加配对', ans: 'num', a: String(ans),
+          q: `1 加 2 一直加到 ${n}，等于多少？`, qy: `1 加 2 一直加到 ${n}，等于几多？`,
+          qe: `What is 1 + 2 + 3 + ... + ${n}?`,
+          hint: `1 加 ${n}、2 加 ${n - 1}……这样配对。`, hinty: `1 加 ${n}、2 加 ${n - 1}……咁样配对。`, hinte: `Pair them: 1 + ${n}, 2 + ${n - 1}, ...`,
+          exp: `配对后每对都是 ${n + 1}，一共 ${ans}。`, expe: `Each pair adds to ${n + 1}, and the total is ${ans}.`,
+          howto: `数个数要分位置：个位决定奇偶，十位不能是 0；两个位置的可选数相乘就是总数。`,
+          howtoe: `Count by place: the units digit decides odd or even, and the tens digit cannot be zero; multiply the choices.` };
+      } },
+    { id: 'p1-smallest', lv: 'p1', sec: '组合', make(r) {
+        const ds = shuffled([1, 2, 3, 4, 5, 6, 7, 8, 9], r).slice(0, 4);
+        const ans = ds.slice().sort((x, y) => x - y).join('');
+        return { lv: 'p1', sec: '组合', src: 'gen:最细四位数', ans: 'num', a: ans,
+          q: `用 ${ds.join('、')} 各用一次，组成最小的四位数是多少？`, qy: `用 ${ds.join('、')} 每个用一次，组成最细嘅四位数系几多？`,
+          qe: `Use ${ds.join(', ')} once each to make the smallest 4-digit number.`,
+          hint: `最小的数字放千位。`, hinty: `最细嘅数字放千位。`, hinte: 'Put the smallest digit first.',
+          exp: `数字从小到大排：${ans}。`, expe: `Order the digits from smallest to largest: ${ans}.`,
+          howto: `一长串连加先找配对：第一个配最后一个、第二个配倒数第二个，每对和一样，再数有多少对。`,
+          howtoe: `For long sums, pair the ends: first with last, second with second last; each pair has the same total, then count the pairs.` };
+      } },
+    { id: 'p1-seqmul', lv: 'p1', sec: '逻辑', make(r) {
+        const st = RND(1, 3, r), k = RND(2, 3, r), a = st * Math.pow(k, 4);
+        return { lv: 'p1', sec: '逻辑', src: 'gen:倍数规律', ans: 'num', a: String(a),
+          q: `按规律：${SEQ(4, i => st * Math.pow(k, i), '、')}，下一个是多少？`, qy: `跟规律：${SEQ(4, i => st * Math.pow(k, i), '、')}，下一个系几多？`,
+          qe: `Pattern: ${SEQ(4, i => st * Math.pow(k, i), ', ')}. What comes next?`,
+          hint: `看看每个数是前一个的几倍。`, hinty: `睇下每个数系前一个嘅幾倍。`, hinte: 'How many times bigger is each term?',
+          exp: `每次都乘 ${k}，${st * Math.pow(k, 3)} 乘 ${k} 等于 ${a}。`, expe: `Each term is multiplied by ${k}: ${st * Math.pow(k, 3)} × ${k} = ${a}.`,
+          howto: `组最小数就把数字从小到大排，注意 0 不能放最高位。`,
+          howtoe: `For the smallest number, order the digits from small to large; zero can never be the leading digit.` };
+      } },
+    { id: 'p1-route', lv: 'p1', sec: '组合', make(r) {
+        const m = RND(2, 5, r), n = RND(2, 4, r), a = m * n;
+        return { lv: 'p1', sec: '组合', src: 'gen:走法', ans: 'num', a: String(a),
+          q: `从学校到车站有 ${m} 条路，从车站到图书馆有 ${n} 条路。经车站从学校到图书馆有多少种走法？`, qy: `由学校去车站有 ${m} 条路，由车站去图书馆有 ${n} 条路。经车站由学校去图书馆有幾多种走法？`,
+          qe: `There are ${m} ways from school to the station and ${n} from the station to the library. How many ways from school to the library via the station?`,
+          hint: `每一段都配一次。`, hinty: `每一段都配一次。`, hinte: 'Every first-leg choice pairs with every second-leg choice.',
+          exp: `${m} × ${n} = ${a} 种。`, expe: `${m} × ${n} = ${a} ways.`,
+          howto: `规律题先看相邻两个数的差或倍数，找到规则再往下算一步。`,
+          howtoe: `For patterns, look at the difference or the ratio between neighbouring terms, then apply it once.` };
+      } },
+    { id: 'p1-mult5', lv: 'p1', sec: '数论', make(r) {
+        const good = String(5 * RND(3, 19, r));
+        const others = [];
+        while (others.length < 3) { const v = RND(11, 99, r); if (v % 5 && String(v) !== good && others.indexOf(String(v)) < 0) others.push(String(v)); }
+        const opts = withCorrect(good, others, r);
+        return { lv: 'p1', sec: '数论', src: 'gen:5 的倍数', ans: 'choice', opts, a: good,
+          q: `下面哪一个是 5 的倍数？`, qy: `下面边一个系 5 的倍数？`, qe: `Which of these is a multiple of 5?`,
+          hint: `5 的倍数个位一定是 0 或 5。`, hinty: `5 嘅倍数个位一定系 0 或者 5。`, hinte: 'A multiple of 5 always ends in 0 or 5.',
+          exp: `${good} 的个位是 ${good.slice(-1)}，所以是 5 的倍数。`, expe: `${good} ends in ${good.slice(-1)}, so it is a multiple of 5.`,
+          howto: `倍数先看个位：5 的倍数个位只能是 0 或 5，其他位不用算。`,
+          howtoe: `Multiples of 5 always end in 0 or 5, so check the units digit only.` };
+      } },
   ];
 
-  /* 按档位取题；打乱顺序 */
-  function pick(lv, n) {
-    const pool = BANK.filter(q => q.lv === lv);
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+  /* 分档（页面上的按钮顺序） */
+  /* 只留幼儿园(K2)与小一(P1)两档：TIMO 题面、数据、讲法都按这两个年级设计 */
+  const LEVELS = [
+    { id: 'k2', name: '幼稚园 K2', note: '幼儿园组：数字现场生成，考听懂题就会做',
+      name_en: 'Kindergarten (K2)', note_en: 'TIMO Kindergarten level: numbers are generated fresh each round' },
+    { id: 'p1', name: '小一 P1', note: '一年级：数字现场生成，答案当场算',
+      name_en: 'Primary 1 (P1)', note_en: 'TIMO Primary 1 level: numbers are generated fresh each round' },
+  ];
+
+  /* 按档位出题（反背题）：优先现场生成的题（约 3/4），避开最近出过的题面；
+     原卷题库只用来补位，保证每轮有真实卷别出处。 */
+  function pick(lv, n, rng) {
+    const r = rng || Math.random;
+    const count = Math.max(1, n || 8);
+    const seen = loadSeen();
+    const gens = GEN.filter(g => g.lv === lv);
+    const out = [], usedTpl = new Set();
+    const wantGen = Math.min(gens.length, Math.max(2, Math.round(count * 0.75)));
+    let guard = 0;
+    while (out.length < wantGen && guard++ < 600) {
+      const g = gens[Math.floor(r() * gens.length)];
+      if (usedTpl.has(g.id)) continue;
+      const q = g.make(r);
+      if (!q || seen.indexOf(fp(q)) >= 0) continue;
+      q._tpl = g.id;
+      usedTpl.add(g.id);
+      out.push(q);
     }
-    return pool.slice(0, Math.max(1, Math.min(n || 10, pool.length)));
+    const fresh = shuffled(BANK.filter(q => q.lv === lv && seen.indexOf(fp(q)) < 0).slice(), r);
+    for (const q of fresh) { if (out.length >= count) break; out.push(q); }
+    if (out.length < count) {   // 见过的原卷题补位（数字题基本已被生成题覆盖）
+      for (const q of shuffled(BANK.filter(q => q.lv === lv && out.indexOf(q) < 0).slice(), r)) {
+        if (out.length >= count) break;
+        out.push(q);
+      }
+    }
+    noteSeen(out.map(fp));
+    return shuffled(out, r);
+  }
+  /* 复练：错题/跳过的题按同型模板重新生成一道新数据的题，不是原题重来 */
+  function variant(q, rng) {
+    const g = q && q._tpl && GEN.filter(x => x.id === q._tpl)[0];
+    if (!g) return null;
+    const r = rng || Math.random;
+    for (let i = 0; i < 12; i++) {
+      const nq = g.make(r);
+      if (nq && fp(nq) !== fp(q)) { nq._tpl = g.id; return nq; }
+    }
+    const nq = g.make(r);
+    if (nq) nq._tpl = g.id;
+    return nq;
   }
 
-  const api = { BANK, LEVELS, pick };
+  const api = { BANK, GEN, LEVELS, pick, variant, fp };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof window !== 'undefined') window.TIMO = api;
 })();

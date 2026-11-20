@@ -2613,7 +2613,7 @@ function stClose() {
   if (sheet) sheet.classList.remove('on');
   quizCancel();
   if (ST.flash) ST.flash.q = null;
-  timoStop();
+  timoReset();
   studyPush();
   stLive(false);
   if (ST.flash) flashStop();
@@ -2631,7 +2631,7 @@ function stTab(mode, opts) {
   if (STUDY_EN.includes(mode)) ST.lang = 'en';   // owner 2026-11-19：TIMO 与所有学习默认英文交互
   if (ST.flash && ST.flash.tick) clearInterval(ST.flash.tick);
   if (ST.flash) ST.flash.q = null;
-  timoStop();
+  timoReset();
   quizCancel();
   stLangPills();
   document.querySelectorAll('.st-tab').forEach(t => t.classList.toggle('on', t.dataset.mode === mode));
@@ -2736,7 +2736,7 @@ function studyPush() {
     d = { active: true, mode: 'flash', level: f.level, n: f.n, total: f.total, right: f.right, streak: QV.streak,
           ans: 'num', lang: ST.lang, question: f.q[0] };
   else if (open && ST.mode === 'timo' && TIMO.q)
-    d = { active: true, mode: 'timo', level: TIMO.level, n: TIMO.n + 1, total: TIMO.total, right: TIMO.right, streak: QV.streak,
+    d = { active: true, mode: 'timo', level: TIMO.level, n: Math.min(TIMO.n + 1, TIMO.total), total: TIMO.total, right: TIMO.right, streak: QV.streak,
           ans: TIMO.q.ans || 'num', opts: TIMO.q.opts || null, lang: ST.lang, question: timoText(TIMO.q) };
   fetch('/api/study/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }).catch(() => {});
 }
@@ -2830,7 +2830,7 @@ function studyVoice(d) {
     if (TIMO.locked) return;
     if (cmd === 'repeat' || cmd === 'mute' || cmd === 'unmute') return timoSay();
     if (cmd === 'hint') return timoHint();
-    if (cmd === 'skip') return timoAnswer('__skip__', '—');
+    if (cmd === 'skip') return timoSkipAsk();
     if (q.ans === 'choice') {
       const t = timoNorm(d.text);
       const letter = (String(d.text || '').trim().match(/^[a-dA-D]$/) || [])[0];
@@ -2852,11 +2852,15 @@ const FLASH_LEVELS = { mixed: '混合闯关', add20: '20 以内加减', add100: 
 const FLASH_LEVELS_EN = { mixed: 'Challenge', add20: 'Up to 20', add100: 'Up to 100', times: 'Times tables', div: 'Division',
                           chain: 'Times chant', upper: 'Upper grades', review: 'Retry mistakes' };
 const flEN = () => ST.lang === 'en';
-/* 混合闯关的奥数题：TIMO 题库里数字作答的题（第 1 关 K2，往上 P1），没有就退回模板 */
+/* 混合闯关的奥数题：优先用反背题模板现场生成（K2 数字题），不够才回退原卷题库（第 1 关 K2，往上 P1） */
 function timoFlashPick(f) {
   const B = window.TIMO; if (!B) return null;
   const lv = f && f.tier >= 2 ? 'p1' : 'k2';
-  const pool = B.BANK.filter(q => q.lv === lv && q.ans !== 'choice' && /^-?\d+(\.\d+)?$/.test(String(q.a)));
+  const numOnly = q => q && q.ans !== 'choice' && /^-?\d+(\.\d+)?$/.test(String(q.a));
+  let pool = B.GEN && B.GEN.length
+    ? B.GEN.filter(g => g.lv === lv).map(g => g.make(Math.random)).filter(numOnly)
+    : [];
+  if (!pool.length) pool = B.BANK.filter(q => q.lv === lv).filter(numOnly);
   if (!pool.length) return null;
   const q = pool[rnd(0, pool.length - 1)];
   const text = ST.lang === 'en' ? q.qe : ST.lang === 'yue' ? q.qy : q.q;
@@ -3579,20 +3583,22 @@ function readCompare(ref, heard) {
  * 默认英文交互（owner 2026-11-19）：题面、提示、讲解、对错反馈都用英文走 /api/hw/tts（en 声音）；
  * 答题用数字键盘或选项。错题照旧进错题本（/api/hw/record），和口算闪卡同一条路。
  */
-const TIMO = { level: 'k2', n: 0, total: 8, right: 0, wrong: [], input: '', q: null, list: null, started: 0, hintUsed: 0 };
+const TIMO = { level: 'k2', n: 0, total: 8, right: 0, firstRight: 0, retried: 0, skipTries: 0, wrong: [], input: '', q: null, list: null, started: 0, hintUsed: 0, sk: null };
 /* 奥数面板固定英文：页面文案也走英文，切粤语/普通话按钮时同样生效 */
 function timoUI() { return ST.lang === 'en'; }
 const T_UI = {
   en: { start: 'Start', again: 'Repeat the question', hint: 'Hint', ready: 'Tap Start and I will read the question',
         meta: '8 questions. Listen first, then answer', done: 'Done', right: 'correct', used: 'seconds', allRight: 'All correct, well done!',
         inBook: 'The ones you missed went into your mistake book', retry: 'Try another round', loading: 'Question bank not loaded (timo_bank.js)',
-        sec: 'topic' },
+        sec: 'topic', sk: 'Sketch', guide: 'Explain', review: 'reviewed', keys: 'Keys', clear: 'Clear' },
   yue: { start: '开始', again: '再听一次', hint: '提示', ready: '按「开始」听我读题',
          meta: '一次 8 题，先听题再答', done: '做完啦', right: '答对', used: '秒', allRight: '全对，好叻！',
-         inBook: '错的题已经放进错题本', retry: '再来一轮', loading: '题库没载入（timo_bank.js）', sec: '题型' },
+         inBook: '错的题已经放进错题本', retry: '再来一轮', loading: '题库没载入（timo_bank.js）', sec: '题型',
+         sk: '草稿', guide: '讲讲', review: '复练', keys: '数字', clear: '擦干净' },
   zh: { start: '开始', again: '再听一次', hint: '提示', ready: '按「开始」听我读题',
         meta: '一次 8 题，先听题再答', done: '做完啦', right: '答对', used: '秒', allRight: '全对，真棒！',
-        inBook: '错的题已经放进错题本', retry: '再来一轮', loading: '题库没载入（timo_bank.js）', sec: '题型' },
+        inBook: '错的题已经放进错题本', retry: '再来一轮', loading: '题库没载入（timo_bank.js）', sec: '题型',
+        sk: '草稿', guide: '讲讲', review: '复练', keys: '数字', clear: '擦干净' },
 };
 function timoT() { return T_UI[ST.lang] || T_UI.en; }
 function timoBank() { return window.TIMO || null; }
@@ -3610,13 +3616,19 @@ function timoView(body, opts) {
       <div class="flash-voice" id="tqV"></div>
       <div class="timo-meta" id="tqMeta">${esc(t.meta)}</div>
       <div id="tqPad"></div>
+      <div class="timo-sk" id="tqSk" hidden><canvas id="tqCv"></canvas><button id="tqSkClear">🧽 ${esc(t.clear)}</button></div>
       <div class="st-row"><button class="pri st-go" id="tqGo">${esc(t.start)}</button>
+        <button id="tqGuide" hidden>🗣 ${esc(t.guide)}</button>
+        <button id="tqSkTg" hidden>✍ ${esc(t.sk)}</button>
         <button id="tqSay" hidden>🔊 ${esc(t.again)}</button><button id="tqHint" hidden>💡 ${esc(t.hint)}</button>
         <button class="pri" id="tqNext" hidden>${timoUI() ? 'Next ▶' : '下一题 ▶'}</button></div></div>`;
   body.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { timoStop(); timoView(body, { level: b.dataset.lv }); timoStart(b.dataset.lv, {}); }));
   stEl('tqGo').addEventListener('click', () => timoStart(level, opts));
   stEl('tqSay').addEventListener('click', timoSay);
-  stEl('tqHint').addEventListener('click', timoHint);
+  stEl('tqHint').addEventListener('click', () => timoHint());
+  stEl('tqGuide').addEventListener('click', () => timoExplain());
+  stEl('tqSkTg').addEventListener('click', () => timoSkToggle());
+  stEl('tqSkClear').addEventListener('click', () => { timoSkClear(); tqVoice(timoUI() ? 'Cleared' : '擦干净了'); });
   stEl('tqNext').addEventListener('click', () => {
     // 先立刻隐藏并停在原地，不能等念完再换题：孩子点完看不到变化就会连点（2026-11-19 一整屏的连点日志）
     stEl('tqNext').hidden = true;
@@ -3624,18 +3636,23 @@ function timoView(body, opts) {
   });
   starRender();
 }
-function timoStop() { TIMO.gen = (TIMO.gen || 0) + 1; TIMO.q = null; clearTimeout(TIMO.idle); listenCancel(); }
+function timoStop() { TIMO.gen = (TIMO.gen || 0) + 1; TIMO.q = null; clearTimeout(TIMO.idle); listenCancel(); TIMO.sk = null; }
+/* 关面板/换标签时把草稿板也收掉：下次进来先看到数字键盘，不会被上一题的画占着 */
+function timoReset() { timoStop(); timoSkToggle(false); }
 async function timoStart(level, opts) {
   const B = timoBank();
   const n = Number(opts && opts.count) || 8;
   timoStop();
   TIMO.level = level;
-  TIMO.list = B.pick(level, n);
-  TIMO.n = 0; TIMO.right = 0; TIMO.wrong = []; TIMO.input = ''; TIMO.hintUsed = 0; TIMO.answered = 0;
+  TIMO.list = B.pick(level, n);         // 反背题：这一轮的题面和数字都是现场生成的
+  TIMO.n = 0; TIMO.right = 0; TIMO.firstRight = 0; TIMO.retried = 0; TIMO.skipTries = 0;
+  TIMO.wrong = []; TIMO.input = ''; TIMO.hintUsed = 0; TIMO.answered = 0;
   QV.streak = 0; QV.roundStars = 0;
-  TIMO.total = TIMO.list.length; TIMO.started = Date.now();
+  TIMO.roundSize = TIMO.list.length; TIMO.total = TIMO.roundSize; TIMO.started = Date.now();
   stEl('tqGo').hidden = true;
   stEl('tqSay').hidden = false; stEl('tqHint').hidden = false;
+  stEl('tqGuide').hidden = false; stEl('tqSkTg').hidden = false;
+  const k2btn = stEl('tqK2'); if (k2btn) k2btn.hidden = true;
   if (voiceOn()) await fetch('/api/quiz/prepare', { method: 'POST' }).catch(() => {});   // 等小麦讲完、收起对话再念题
   timoNext();
 }
@@ -3663,6 +3680,104 @@ function timoMatchChoice(q, text) {
   const v = parseNum(text);
   return v === null ? null : (q.opts.find(o => timoNorm(o) === String(v)) || null);
 }
+/* ===== 草稿板（owner 2026-11-19「快速的做一个靠背来写」）=====
+   右栏从数字键盘换成画布：手指/鼠标写竖式、画圈、凑数，换题自动清空。
+   pointer 事件统一处理触摸和鼠标；画布按 devicePixelRatio 放大，线条才不会糊。 */
+function timoSketch() {
+  const cv = stEl('tqCv'); if (!cv) return null;
+  const w = Math.max(120, cv.clientWidth || 320), h = Math.max(160, cv.clientHeight || 320);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#4fc3ff';
+  TIMO.sk = { cv, ctx, w, h, drawing: false };
+  const pos = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch (x) {}
+    TIMO.sk.drawing = true;
+    const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y);
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!TIMO.sk || !TIMO.sk.drawing) return;
+    const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke();
+  });
+  const up = () => { if (TIMO.sk) TIMO.sk.drawing = false; };
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(k => cv.addEventListener(k, up));
+  return TIMO.sk;
+}
+function timoSkClear() {
+  const S = TIMO.sk; if (!S) return;
+  S.ctx.clearRect(0, 0, S.w + 8, S.h + 8);
+  S.ctx.beginPath();
+}
+function timoSkToggle(on) {
+  const sk = stEl('tqSk'), pad = stEl('tqPad'), tg = stEl('tqSkTg');
+  if (!sk || !tg || !pad) return;
+  const want = on === undefined ? sk.hidden : !!on;
+  sk.hidden = !want;
+  pad.hidden = want;
+  tg.textContent = want ? '⌨ ' + (timoUI() ? 'Keys' : '数字') : '✍ ' + timoT().sk;
+  TIMO.sk = null;
+  if (want) requestAnimationFrame(() => timoSketch());
+}
+
+/* ===== 错题详解 + 引导（owner 2026-11-19「错题也要出一个详细的说明和引导，语音交互的」）=====
+   不是一句「答案是 X」，而是：读题 → 给线索 → 一步一步算 → 落到答案 → 换一组数据再练一道。
+   讲完留 5 秒听孩子回话：说「明白了」就下一题，说「再讲一次」就重讲，直接讲对答案也会被夸。
+   任何时候点屏幕/按数字 = 直接下一题，不会被长讲解困住。 */
+function timoGuideLines(q) {
+  const en = ST.lang === 'en';
+  const exp = q.expe || q.exp || '';
+  const hint = ST.lang === 'en' ? (q.hinte || q.hint) : (ST.lang === 'yue' ? (q.hinty || q.hint) : q.hint);
+  const ans = timoAnsLabel(q);
+  const how = q.howto ? (en ? (q.howtoe || q.howto) : q.howto) : '';
+  return en
+    ? [`Let's read the question again. ${timoText(q)}`,
+       `Here is the clue: ${hint}`,
+       `Now step by step. ${exp}`,
+       `So the answer is ${ans}. ${how}`.trim(),
+       `Now a brand new one of the same kind. Let's try it together.`]
+    : [`我们再读一次题：${timoText(q)}`,
+       `先看线索：${hint}`,
+       `我们一起一步一步算：${exp}`,
+       `所以答案是 ${ans}。${how}`,
+       `换一组数，再来一道同型的题，这次你自己算给我看。`];
+}
+async function timoSpeakGuide(q) {
+  const gen = TIMO.gen;
+  for (const line of timoGuideLines(q)) {
+    if (TIMO.gen !== gen) return;
+    await quizSay(line, ST.lang, false);
+    if (TIMO.gen !== gen) return;
+  }
+}
+async function timoAfterGuide(q) {
+  if (!voiceOn() || TIMO.q !== q) return;
+  const gen = TIMO.gen;
+  tqVoice(timoUI() ? '🎤 Say "got it", or "again", or say the answer' : '🎤 说「明白了」「再讲一次」，或者直接讲答案', 'listen');
+  const r = await listenOnce(ST.lang, 6);
+  if (TIMO.gen !== gen || TIMO.q !== q) return;
+  if (r.status !== 'ok') return tqVoice('');
+  const low = String(r.text || '').toLowerCase();
+  tqVoice((timoUI() ? 'Heard: ' : '听到：') + (r.text || ''));
+  if (/(明白|懂了|知道|识了|ok|got it|i see|understand|yes)/.test(low)) return;
+  if (/(再讲|再讲一次|again|repeat|唔明|不明白|听不懂)/.test(low)) return timoSpeakGuide(q);
+  const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (() => { const v = parseNum(r.text); return v === null ? null : String(v); })();
+  if (ans != null && timoNorm(ans) === timoNorm(q.a)) { tqVoice(timoUI() ? 'Yes! You got it now.' : '对了！这次你自己算出来了'); sfx('good'); }
+}
+/* 错题/跳过的题：按同型模板换一组数据放回队尾，必须再做一次（原题重来只会背答案） */
+function timoRetryPush(q) {
+  const B = timoBank();
+  let nq = (B && B.variant && B.variant(q)) || null;
+  if (!nq) nq = Object.assign({}, q);
+  nq._re = true;
+  TIMO.list.push(nq);
+  TIMO.retried = (TIMO.retried || 0) + 1;
+  return nq;
+}
+
 /* 念题 → 本机断句听一句（/api/listen，hub 只做识别，不进大模型）→ 判。和闪卡 flashAsk 同一套 */
 async function timoAsk(readQuestion, prefix) {
   const q = TIMO.q, gen = TIMO.gen, lang = ST.lang;
@@ -3687,7 +3802,8 @@ async function timoAsk(readQuestion, prefix) {
     const cmd = voiceCommand(r.text), low = String(r.text || '').toLowerCase();
     if (cmd === 'stop') return stClose();
     if (cmd === 'repeat') { await speakWait(timoText(q) + timoOptsSpeech(q), lang); continue; }
-    if (cmd === 'skip') return timoAnswer('__skip__', '—');
+    if (cmd === 'skip') return timoSkipAsk();
+    if (/讲解|讲讲|解释|一步一步|explain|teach|step by step/.test(low)) return timoExplain();
     if (cmd === 'dunno' || /提示|hint|help|clue/.test(low)) return timoHint();
     const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (() => { const v = parseNum(r.text); return v === null ? null : String(v); })();
     if (ans !== null && ans !== undefined) {
@@ -3699,28 +3815,49 @@ async function timoAsk(readQuestion, prefix) {
   tqVoice(timoUI() ? '⌨ Tap your answer' : '⌨ 点答案');
 }
 function timoSay() { const q = TIMO.q; if (!q) return; listenCancel(); timoAsk(true); }
-function timoHint() {
+/* 「讲讲/一步一步」：只讲不清题，孩子还能自己再答（讲过 = 这题只算 1 颗星） */
+function timoExplain() {
+  const q = TIMO.q; if (!q || TIMO.locked) return;
+  listenCancel();
+  TIMO.hintUsed += 1;
+  const note = stEl('tqA');
+  if (note) { note.textContent = '🗣 ' + (timoUI() ? 'Step by step…' : '一步一步讲…'); note.className = 'timo-a'; }
+  timoSpeakGuide(q);
+}
+/* 反跳过（owner 2026-11-19「要避免小朋友跳过不会的」）：
+   说「跳过/不会」不再直接翻页。前两次只给提示并请他再想；
+   第三次才揭晓，而且这题会换一组数回到队尾 —— 跳过 = 多做一道同型题，白跳不了。 */
+function timoSkipAsk() {
+  const q = TIMO.q; if (!q || TIMO.locked) return;
+  TIMO.skipTries = (TIMO.skipTries || 0) + 1;
+  if (TIMO.skipTries >= 3) return timoAnswer('__skip__', '—');
+  timoHint(timoUI() ? 'No skipping. Let me give you a clue first.' : '不能跳过，我先给你一个提示。');
+}
+function timoHint(prefix) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
   TIMO.hintUsed += 1;
-  const t = ST.lang === 'en' ? q.hinte : ST.lang === 'yue' ? q.hinty : q.hint;
+  const t = ST.lang === 'en' ? (q.hinte || q.hint) : ST.lang === 'yue' ? (q.hinty || q.hint) : q.hint;
   const note = stEl('tqA');
   if (note) { note.textContent = '💡 ' + t; note.className = 'timo-a'; }
   listenCancel();
-  timoAsk(false, t);
+  timoAsk(false, (typeof prefix === 'string' ? prefix + ' ' : '') + t);
 }
 function timoNext() {
   const q = TIMO.list && TIMO.list[TIMO.n];
   if (!q) return timoEnd();
   TIMO.gen = (TIMO.gen || 0) + 1;
-  TIMO.q = q; TIMO.input = ""; TIMO.locked = false; TIMO.hintUsed = 0; TIMO.tries = 0;
+  TIMO.q = q; TIMO.input = ""; TIMO.locked = false; TIMO.hintUsed = 0; TIMO.tries = 0; TIMO.skipTries = 0;
+  if (TIMO.sk) timoSkClear();            // 换题清草稿：上一题的演算不留在这一题
   const n = stEl('tqQ'), a = stEl('tqA'), pad = stEl('tqPad');
   // owner 2026-11-19「出题的时候，题目在屏幕也要有」：题面整句显示，不只念；题号和题型放到下面一行
   n.textContent = timoText(q);
   a.className = 'timo-a'; a.textContent = '';
   stEl('tqNext').hidden = true;
+  const no = Math.min(TIMO.n + 1, TIMO.total);
+  const rev = TIMO.n >= TIMO.total ? (timoUI() ? ' · review' : ' · 复练') : '';
   stEl('tqMeta').textContent = timoUI()
-    ? `Question ${TIMO.n + 1} / ${TIMO.total} · say or tap your answer · ⭐ ${QV.roundStars}`
-    : `第 ${TIMO.n + 1} / ${TIMO.total} 题（${q.sec}）· 说答案或点 · ⭐ ${QV.roundStars}`;
+    ? `Question ${no} / ${TIMO.total}${rev} · say or tap your answer · ⭐ ${QV.roundStars}`
+    : `第 ${no} / ${TIMO.total} 题（${q.sec}）${rev} · 说答案或点 · ⭐ ${QV.roundStars}`;
   pad.innerHTML = q.ans === 'choice'
     ? `<div class="timo-opts">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(timoOptLabel(q, i))}</button>`).join('')}</div>`
     : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`;
@@ -3798,70 +3935,78 @@ function timoMarkOpts(q, wrongOpt, reveal) {
 }
 async function timoAnswer(given, shown) {
   const q = TIMO.q; if (!q || TIMO.locked) return;
+  const gen = TIMO.gen;
   TIMO.locked = true;
   const skipped = given === '__skip__';
   const ok = !skipped && timoNorm(given) === timoNorm(q.a);
   const a = stEl('tqA');
-  const exp = ST.lang === 'en' ? q.expe : (q.exp || q.expe);
-  let say;
+  const exp = ST.lang === 'en' ? (q.expe || q.exp) : (q.exp || q.expe);
+  let say = null;
   tqVoice('');
   if (ok) {
     TIMO.right += 1;
+    if (!(TIMO.tries || TIMO.hintUsed || TIMO.skipTries || q._re)) TIMO.firstRight += 1;   // 第一次自己答对才算「一次答对」
     a.className = 'timo-a good';
     a.textContent = `${shown} ✓  ${exp}`;
     say = quizRight(TIMO.tries || TIMO.hintUsed ? 1 : 2) + ' ' + exp;   // 自己第一次就对 2 颗，提示/再想之后对 1 颗
     sfx('good');
   } else if (!skipped && !TIMO.tries) {
-    // 第一次错：先鼓励，给提示，再想一次（不揭答案）
+    // 第一次错：先鼓励，给提示，再想一次（不揭答案、不放行）
     TIMO.tries = 1; QV.streak = 0;
-    const hint = ST.lang === 'en' ? q.hinte : ST.lang === 'yue' ? q.hinty : q.hint;
+    const hint = ST.lang === 'en' ? (q.hinte || q.hint) : (ST.lang === 'yue' ? (q.hinty || q.hint) : q.hint);
     a.className = 'timo-a bad';
     a.textContent = `${shown} ✗  💡 ${hint}`;
     if (q.ans === 'choice') timoMarkOpts(q, given, false);
     sfx('bad');
     TIMO.locked = false; TIMO.input = '';
     studyPush();
-    timoAsk(false, pickOne(TRY_AGAIN[ST.lang] || TRY_AGAIN.en) + ' ' + hint);
+    timoAsk(false, pickOne(TRY_AGAIN[ST.lang] || TRY_AGAIN.en) + ' ' + hint
+      + ' ' + (timoUI() ? 'Or say "explain" and I will go step by step.' : '或者讲「讲讲」，我一步一步讲。'));
     return;
   } else {
     QV.streak = 0;
     TIMO.wrong.push({ question: timoText(q), child_answer: skipped ? '' : String(given), correct: String(q.a), ok: false });
-    a.className = 'timo-a bad';
     const reveal = { yue: '答案系', en: 'The answer is', zh: '答案是' }[ST.lang];
+    a.className = 'timo-a bad';
     a.textContent = `${skipped ? '' : shown + ' ✗  '}${reveal} ${timoAnsLabel(q)}. ${exp}`;
-    say = pickOne(KIND_WRONG[ST.lang] || KIND_WRONG.en) + ' ' + reveal + ' ' + timoAnsLabel(q) + '. ' + exp;
     if (!skipped) sfx('bad');
+    if (!q._re) timoRetryPush(q);        // 换一组数放回队尾，必须再做一次
   }
   if (q.ans === 'choice') timoMarkOpts(q, ok ? undefined : given, true); else timoMarkOpts(q, undefined, true);
   TIMO.n += 1; TIMO.answered = TIMO.n;
   stEl('tqNext').hidden = false;
   studyPush();
-  await quizSay(say, ST.lang, false);
-  if (TIMO.q !== q) return;
+  // 讲解期间孩子点屏幕/按数字 = 直接下一题（timoKey/选项点按里改 TIMO.gen），讲解要立刻让位
+  if (say) await quizSay(say, ST.lang, false);
+  else await timoSpeakGuide(q);          // 错题：读题 → 线索 → 分步 → 答案 → 换数据再练
+  if (TIMO.gen !== gen) return;          // 已经翻页了：别再等听完
+  if (!say) { await timoAfterGuide(q); if (TIMO.gen !== gen) return; }
   await sleepMs(250);
-  if (TIMO.q === q) timoNext();
+  if (TIMO.gen === gen) timoNext();
 }
 function timoEnd() {
   const sec = Math.round((Date.now() - TIMO.started) / 1000), t = timoT();
   TIMO.q = null;
   stEl('tqQ').textContent = timoUI()
-    ? `${t.done}: ${TIMO.right} / ${TIMO.total} ${t.right}, ${sec} ${t.used}`
-    : `${t.done}：${t.right} ${TIMO.right} / ${TIMO.total}，用了 ${sec} ${t.used}`;
+    ? `${t.done}: ${TIMO.firstRight} / ${TIMO.total} ${t.right} first time${TIMO.retried ? ` · ${TIMO.retried} ${t.review}` : ''}, ${sec} ${t.used}`
+    : `${t.done}：一次答对 ${TIMO.firstRight} / ${TIMO.total}${TIMO.retried ? `，复练 ${TIMO.retried} 题` : ''}，用了 ${sec} ${t.used}`;
   stEl('tqA').className = 'timo-a';
-  stEl('tqA').textContent = TIMO.right === TIMO.total ? t.allRight : t.inBook;
+  stEl('tqA').textContent = TIMO.firstRight === TIMO.total ? t.allRight : t.inBook;
   stEl('tqPad').innerHTML = '';
   tqVoice('');
   stEl('tqSay').hidden = true; stEl('tqHint').hidden = true; stEl('tqNext').hidden = true;
+  stEl('tqGuide').hidden = true; stEl('tqSkTg').hidden = true;
+  timoSkToggle(false);
   const go = stEl('tqGo'); go.hidden = false; go.textContent = t.retry;
   clearTimeout(TIMO.idle);
   // 小一不到一半：一键换幼稚园组（11-19 小一 2/8、4/8，幼稚园 6/8）
   let k2 = stEl('tqK2');
   if (!k2) { k2 = document.createElement('button'); k2.id = 'tqK2'; k2.className = 'pri'; go.after(k2); }
-  k2.hidden = !(TIMO.level === 'p1' && TIMO.right * 2 < TIMO.total);
+  k2.hidden = !(TIMO.level === 'p1' && TIMO.firstRight * 2 < TIMO.total);
   k2.textContent = timoUI() ? 'Try Kindergarten (K2) ▶' : '换幼稚园组 ▶';
   k2.onclick = () => { timoStop(); timoView(stEl('stBody'), { level: 'k2' }); timoStart('k2', {}); };
   studyPush();
-  quizSay(quizRoundEnd('timo', TIMO.level, TIMO.right, TIMO.total, sec), ST.lang, false);
+  quizSay(quizRoundEnd('timo', TIMO.level, TIMO.firstRight, TIMO.total, sec), ST.lang, false);
   if (TIMO.wrong.length) fetch('/api/hw/record', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ subject: '奥数', source: 'timo', items: TIMO.wrong.map((w, i) => ({ no: i + 1, ...w })) }) }).catch(() => {});
 }
