@@ -928,6 +928,11 @@ class Client:
             if state == 'start':
                 # The hub says "start" as soon as it has the question; the model is still
                 # thinking until the first sentence arrives
+                if getattr(self, 'finished_tail', False) and self.audio.player.buffered() > 0.02:
+                    # 上一条正常收尾但还没播完的尾巴：新回答开始就清掉，不能压在新答案上。
+                    # 垫话（think-*.wav，在思考时推的）不走这条路，不会被切掉。
+                    self.audio.player.trim(0)
+                self.finished_tail = False
                 self.mute_audio = False
                 self.decoder = None
                 self.bot_msg = None
@@ -963,9 +968,11 @@ class Client:
                         self.bot_msg['text'] = prev + ('' if prev[-1:] in PUNCT else '，') + text
                         self.publish_message(self.bot_msg)
             elif state == 'stop':
-                # the hub cut the reply off (a newer question); an older hub doesn't say so, but then
-                # more than the usual tail is still queued
-                if msg.get('interrupted', self.audio.player.buffered() > NORMAL_STOP_TAIL):
+                # 只有 hub 明确说「被打断」才裁掉还没播完的部分（abortHandle 会带 interrupted: True）。
+                # 以前兜底判据是「缓冲 > 0.6 s」：流式下 hub 把文本送完就发 stop，往往还有几秒没播
+                # （2026-11-20 全天 139 次 reply stop 里 128 次 >0.6 s），于是正常收尾被当成打断、
+                # trim(0) 把剩下的音频直接丢——孩子听到的就是「话说一半就停了」。
+                if msg.get('interrupted'):
                     self.audio.player.trim(0)
                     if self.bot_msg:
                         self.bot_msg['interrupted'] = True
@@ -979,6 +986,7 @@ class Client:
                 tail = self.audio.player.buffered()
                 if tail > 0.02:            # 正常结束但还没播完（被打断的上面已 trim 成 0）
                     self.echo_until = time.monotonic() + tail + 0.3
+                self.finished_tail = tail > 0.02 and not msg.get('interrupted')
                 self.last_reply = (self.bot_msg or {}).get('text') or ''
                 self.bot_msg = self.question = None
                 self.hold_open = False
