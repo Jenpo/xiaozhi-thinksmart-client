@@ -1,651 +1,612 @@
-/* ======== TIMO 奥数题库（2026-11-19）：K2/幼稚园组 + 小学一年级 Primary 1 ========
+/* ======== TIMO 奥数题库（2026-11-20 重建）：K2/幼稚园组 + 小学一年级 Primary 1 ========
  *
- * 来源：/Volumes/S/Workplace/timo-papers（TIMO 完整题本，52 份 PDF）。
- * 只取两个年级能做的 4 份（Kindergarten 2017 heat / 2018 final、Primary 1 2018 question paper /
- * 2020-2021 mock）。2019 final、2021-2022 final 属 P1 决赛卷（含棱柱、多位比较），
- * 先不进本库，留作「挑战」档后续再加。
- *
- * 每题都改写成了口语题面（q 中文 qy 粤语 qe 英文），答案在 PDF 原文答案页核对过；
- * 带图形的题（天秤、正方形计数、立方体）不进本库：语音讲不清，留在「看作业」里拍。
+ * 来源：/Volumes/S/Workplace/timo-papers 里四份完整题本，逐页对照原卷图片重录（2026-11-20）：
+ *   TIMO-2017-heat-Kindergarten / TIMO-2018-final-Kindergarten（无答案页，答案逐题自算）
+ *   TIMO-2018-Primary-1 question paper（无答案页，答案逐题自算）
+ *   TIMO-2020-2021-mock-Primary-1（有答案页，逐题核对）
+ * 11-20 上午的「100 题」版本把 2020 模拟卷整卷复制成 2018 卷、几何题凭空编、十多道答案错，已整体替换。
+ * 三道「最少几个立方体」（K2 2017 Q17、K2 2018 Q17、P1 2018 Q17）立体图看不准、又没有答案页，不收；
+ * 2020 模拟卷 Q17 有答案页（6），收。
  *
  * 字段：
  *   lv   'k2' | 'p1'      档位（幼稚园 K2 组 / 小学一年级）
- *   sec  题型分区
- *   q/qy/qe  题面（普通话 / 粤语口语 / 英文）
+ *   sec  题型分区（原卷五大范畴）：逻辑 / 算术 / 数论 / 几何 / 组合
+ *   q/qy/qe  题面（普通话 / 粤语口语 / 英文），念出来要能听懂
+ *   show 屏幕上大字显示的式子/数列/图形序列（不随语言变，念题仍按 q）
+ *   fig  原卷图形裁图（web/v2/timo_fig/*.png），题面里说「看图」
+ *   svg  生成题现画的图（字符串，页面直接嵌）
  *   a    正确答案（字符串，比较时归一化）
- *   ans  答案类型：'num' 数字 | 'choice' 从 opts 里选
- *   opts 选项（choice 用）；optse 英文界面显示/口答用的选项（可选，和 opts 一一对应）
- *   hint/hinty/hinte  提示（不给答案）
- *   exp 讲解
- *   src  出处
- * 语音交互的判题在页面里做（数字键盘或选项按钮），提示/讲解走 /api/hw/tts。
+ *   ans  'num' 数字 | 'choice' 从 opts 里选；optse 英文界面选项（和 opts 一一对应）
+ *   hint/hinty/hinte  提示（不给答案）；exp/expe 讲解；howto/howtoe 这类题怎么想
+ *   src  出处（卷 + 题号）
  */
 (function () {
   'use strict';
 
-  const BANK = [
-    /* ---------- TIMO-2017-heat-Kindergarten ---------- */
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q1',
-      q: '积及的爸爸有四个孩子，其中两个是儿子。积及一共有多少个兄弟姊妹？', qy: '积及爸爸有四个细路，当中两个系仔。积及一共有几多个兄弟姊妹？', qe: 'Jacob\'s father has four children. Two of them are sons. How many brothers and sisters does Jacob have in total?',
-      a: '2', ans: 'num',
-      hint: '想一想：四个孩子里两个是儿子，另外两个呢？', hinty: '谂下：四个细路两个系仔，另外两个系咩？', hinte: 'Think: four children, two are sons. What are the other two?',
-      expe: 'Two of the four children are sons, so the other two are daughters. Jacob is one of the sons, so he has 2 siblings.',
-    },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q2',
-      q: '图中两个天秤：第一个天秤圆球比三角重，第二个天秤三角比方块重。圆球、三角、方块哪个最重？', qy: '图中两个天秤：第一个天秤圆球重过三角，第二个天秤三角重过方块。圆球、三角、方块边个最重？', qe: 'Two balances: the ball is heavier than the triangle, and the triangle is heavier than the square. Which is heaviest?',
-      a: '圆球', ans: 'choice', opts: ['圆球', '三角', '方块'], optse: ['ball', 'triangle', 'square'],
-      hint: '天秤往下的一边更重。', hinty: '天秤向下嘅一边更重。', hinte: 'The side that goes down is heavier.',
-      exp: '圆球比三角重，三角又比方块重，所以圆球最重。', expe: 'Ball beats triangle, triangle beats square, so the ball is heaviest.',
-      howto: '比轻重先看每台天秤哪边低，把两条比较连起来排顺序。', howtoe: 'Read which pan is lower, then chain the comparisons.' },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q3',
-      q: '按规律：1、1、2、3、5、8，下一个是多少？', qy: '跟规律：1、1、2、3、5、8，下一个系几多？', qe: 'Pattern: 1, 1, 2, 3, 5, 8. What comes next?',
-      a: '13', ans: 'num',
-      hint: '把前面两个数加起来看看。', hinty: '试下将前面两个数加起来。', hinte: 'Try adding the two numbers before it.',
-      expe: 'Each number is the sum of the two before it: 5 + 8 = 13.',
-    },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q4',
-      q: '按规律：1、1、2、3、5、8，下一个是多少？', qy: '跟规律：1、1、2、3、5、8，下一个系几多？', qe: 'Pattern: 1, 1, 2, 3, 5, 8. What comes next?',
-      a: '13', ans: 'num',
-      hint: '把前面两个数加起来看看。', hinty: '试下将前面两个数加起来。', hinte: 'Try adding the two numbers before it.',
-      exp: '每个数是前面两个数之和：5 加 8 等于 13。', expe: 'Each number is the sum of the two before it: 5 + 8 = 13.',
-      howto: '规律题先算相邻两数的差，差在变就试试两项相加。', howtoe: 'Check the differences first; if they change, try adding the two previous terms.' },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q5',
-      q: '按规律：第 1 组 1 个星，第 2 组 3 个星，第 3 组 5 个星，每组比上一组多 2 个。第 4 组有多少个星？', qy: '跟规律：第 1 组 1 个星，第 2 组 3 个星，第 3 组 5 个星，每组比上一组多 2 个。第 4 组有几多个星？', qe: 'Group 1 has 1 star, group 2 has 3, group 3 has 5, each group 2 more than the last. How many in group 4?',
-      a: '7', ans: 'num',
-      hint: '第 3 组 5 个，再多 2 个就是第 4 组。', hinty: '第 3 组 5 个，再多 2 个就系第 4 组。', hinte: 'Group 3 has 5; two more gives group 4.',
-      exp: '5 加 2 等于 7，所以第 4 组有 7 个星。', expe: '5 + 2 = 7, so group 4 has 7 stars.',
-      howto: '先算每组之间的差，再用最后一组加上这个差。', howtoe: 'Find the step between groups, then add it to the last group.' },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q6',
-      q: '3 加 3 加 3 加 3 加 3 等于多少？', qy: '3 加 3 加 3 加 3 加 3 等于几多？', qe: 'What is 3 + 3 + 3 + 3 + 3?',
-      a: '15', ans: 'num',
-      hint: '3 个 3 是 9，再加两个 3。', hinty: '3 个 3 系 9，再加两个 3。', hinte: 'Three 3s make 9. Add two more 3s.',
-      expe: 'Five 3s added together make 15, which is 3 × 5.',
-    },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q7',
-      q: '17 减 8 再减 7 等于多少？', qy: '17 减 8 再减 7 等于几多？', qe: 'What is 17 − 8 − 7?',
-      a: '2', ans: 'num',
-      hint: '先算 17 减 8。', hinty: '先算 17 减 8。', hinte: 'Start with 17 minus 8.',
-      expe: '17 − 8 = 9, then 9 − 7 = 2.',
-    },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q8',
-      q: 'A 是一位数，12 减 A 等于 8，A 是多少？', qy: 'A 系一位数，12 减 A 等于 8，A 系几多？', qe: 'A is a 1-digit number and 12 − A = 8. What is A?',
-      a: '4', ans: 'num',
-      hint: '想：12 减几多等于 8？', hinty: '谂：12 减幾多等于 8？', hinte: 'What do you take from 12 to get 8?',
-      exp: '12 减 8 等于 4，所以 A 是 4。', expe: '12 − 8 = 4, so A is 4.',
-      howto: '求减数用减法：被减数减差，算完把 A 代回去验算。', howtoe: 'Subtrahend = start − result; substitute back to check.' },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q9',
-      q: '14 加 11 加 8 等于多少？', qy: '14 加 11 加 8 等于几多？', qe: 'What is 14 + 11 + 8?',
-      a: '33', ans: 'num',
-      hint: '先算 14 加 11。', hinty: '先算 14 加 11。', hinte: 'First do 14 + 11.',
-      expe: '14 + 11 = 25, then 25 + 8 = 33.',
-    },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q10',
-      q: 'A 是一位数，37 加 A 等于 40，A 是多少？', qy: 'A 系一位数，37 加 A 等于 40，A 系几多？', qe: 'A is a 1-digit number and 37 + A = 40. What is A?',
-      a: '3', ans: 'num',
-      hint: '想：37 再加几多就是 40？', hinty: '谂：37 再加幾多就系 40？', hinte: 'How much more than 37 makes 40?',
-      exp: '40 减 37 等于 3，所以 A 是 3。', expe: '40 − 37 = 3, so A is 3.',
-      howto: '求加数用和减已知数，再把答案加回去验算。', howtoe: 'Addend = total − known part; check by adding back.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q11',
-      q: '艾美有 8 个苹果，约翰一个都没有。要让两人苹果一样多，艾美要给约翰多少个？', qy: '艾美有 8 个苹果，约翰一个都冇。要让两个人一样多，艾美要畀约翰几多个？', qe: 'Amy has 8 apples and John has none. How many apples must Amy give John so they have the same number?',
-      a: '4', ans: 'num',
-      hint: '两个人一样多，每人应该是几个？', hinty: '两个人一样多，每人应该有幾多个？', hinte: 'If they end up equal, how many would each have?',
-      expe: 'Split 8 apples into two equal shares of 4, so Amy gives John 4 apples.',
-    },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q12',
-      q: '在 2、3、4、5 之间填加号或减号，使 2 3 4 5 = 14 成立。第一个符号是加还是减？', qy: '喺 2、3、4、5 之间填加号或者减号，令 2 3 4 5 = 14 成立。第一个符号系加定减？', qe: 'Put + or − between 2, 3, 4, 5 so the result is 14. Is the first sign + or −?',
-      a: '+', ans: 'choice', opts: ['+', '−'], optse: ['+', '−'],
-      hint: '先把四个数全加起来看看和是多少。', hinty: '先将四个数全部加埋睇下和系几多。', hinte: 'Add all four first and see the total.',
-      exp: '2 加 3 加 4 加 5 等于 14，全是加号，所以第一个是加号。', expe: '2 + 3 + 4 + 5 = 14, all plus, so the first sign is +.',
-      howto: '先全加得到和，比目标大就把某个加号换成减号，每换一个结果少两倍那个数。', howtoe: 'Add everything; each plus turned to minus lowers the total by twice that number.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q13',
-      q: '在 5、4、3 之间填加号或减号，使 5 4 3 = 4 成立。第一个符号是加还是减？', qy: '喺 5、4、3 之间填加号或者减号，令 5 4 3 = 4 成立。第一个符号系加定减？', qe: 'Put + or − between 5, 4, 3 so the result is 4. Is the first sign + or −?',
-      a: '−', ans: 'choice', opts: ['+', '−'], optse: ['+', '−'],
-      hint: '只有两种填法，都试一遍。', hinty: '只有两种填法，两种都试一次。', hinte: 'There are only two arrangements; try both.',
-      exp: '5 减 4 加 3 等于 4，成立；5 加 4 减 3 等于 6，不对。所以第一个是减号。', expe: '5 − 4 + 3 = 4 works; 5 + 4 − 3 = 6 does not. First sign is −.',
-      howto: '符号题数量少就穷举，不要凭感觉猜。', howtoe: 'With few signs, enumerate every arrangement.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q14',
-      q: 'A 是一位数，12 减 A 等于 5 加 4，A 是多少？', qy: 'A 系一位数，12 减 A 等于 5 加 4，A 系几多？', qe: 'A is a 1-digit number and 12 − A = 5 + 4. What is A?',
-      a: '3', ans: 'num',
-      hint: '先算右边 5 加 4。', hinty: '先算右边 5 加 4。', hinte: 'Work out 5 + 4 first.',
-      exp: '5 加 4 等于 9，12 减 9 等于 3，所以 A 是 3。', expe: '5 + 4 = 9, 12 − 9 = 3, so A = 3.',
-      howto: '等式右边先算成一个数，再按求减数的方法做。', howtoe: 'Simplify the right side, then find the missing subtrahend.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q15',
-      q: '按规律：13、11、9、7，下一个是多少？', qy: '跟规律：13、11、9、7，下一个系几多？', qe: 'Pattern: 13, 11, 9, 7. What comes next?',
-      a: '5', ans: 'num',
-      hint: '每次少了多少？', hinty: '每次少咗几多？', hinte: 'How much does it go down each time?',
-      expe: 'It goes down by 2 each time, so the next number is 5.',
-    },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q16',
-      q: '一个正方形被分成 2 行 2 列的 4 个小正方形。图中一共有多少个正方形（大小都算）？', qy: '一个正方形分成 2 行 2 列嘅 4 个细正方形。图中一共有幾多个正方形（大细都计）？', qe: 'A square is cut into 2 rows and 2 columns of small squares. How many squares in total, counting all sizes?',
-      a: '5', ans: 'num',
-      hint: '4 个小的，还有外面包着的大正方形。', hinty: '4 个细嘅，仲有外面包住嘅大正方形。', hinte: '4 small ones plus the big square around them.',
-      exp: '4 个小正方形加 1 个大正方形，一共 5 个。', expe: '4 small plus 1 big: 5 squares.',
-      howto: '数正方形按大小分类：先数最小的，再数几个小格拼成的，别只数一种。', howtoe: 'Count by size: smallest first, then those built from several cells.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q17',
-      q: '一堆立方体：上面 1 个，下面 3 个。最少由多少个立方体组成？', qy: '一堆立方体：上面 1 个，下面 3 个。最少由幾多个立方体组成？', qe: 'A stack of cubes: 1 on top, 3 below. At least how many cubes?',
-      a: '4', ans: 'num',
-      hint: '上面的 1 个要算，下面 3 个也要算。', hinty: '上面 1 个要计，下面 3 个都要计。', hinte: 'Count the top one and the three below.',
-      exp: '1 加 3 等于 4 个。', expe: '1 + 3 = 4 cubes.',
-      howto: '数立方体按层数，上面的每一块下面都要有一块托住。', howtoe: 'Count layer by layer; every upper cube needs one below.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q18',
-      q: '一个五边形，外面看有 5 条边。这个图形有多少条边？', qy: '一个五边形，外面睇有 5 条边。呢个图形有几多条边？', qe: 'A pentagon has 5 sides on the outside. How many sides does it have?',
-      a: '5', ans: 'num',
-      hint: '五边形就是 5 条边。', hinty: '五边形就系 5 条边。', hinte: 'Pentagon means five sides.',
-      exp: '五边形有 5 条边。', expe: 'A pentagon has 5 sides.',
-      howto: '数边时一条一条数，接在一起的边只算一次。', howtoe: 'Count each edge once; shared edges count once.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q19',
-      q: '一个六边形有多少只角？', qy: '一个六边形有几多只角？', qe: 'How many angles does a hexagon have?',
-      a: '6', ans: 'num',
-      hint: '有几个顶点就有几只角。', hinty: '有几个顶点就有几只角。', hinte: 'One angle per corner.',
-      exp: '六边形有 6 只角。', expe: 'A hexagon has 6 angles.',
-      howto: '多边形的角数、边数、顶点数都一样多。', howtoe: 'Angles, sides and corners of a polygon are equal in number.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q20',
-      q: '按规律：圆、方、三角、圆、方、三角、圆、__、三角。空格是什么？', qy: '跟规律：圆、方、三角、圆、方、三角、圆、__、三角。空格系咩？', qe: 'Pattern: circle, square, triangle, circle, square, triangle, circle, __, triangle. What fills the blank?',
-      a: '方', ans: 'choice', opts: ['圆', '方', '三角'], optse: ['circle', 'square', 'triangle'],
-      hint: '三个一循环，第 8 个是循环里的第二个。', hinty: '三个一循环，第 8 个系循环里面嘅第二个。', hinte: 'Repeats every three; the 8th is the second in the cycle.',
-      exp: '三个一循环，第 8 个落在第二个位置，就是方。', expe: 'The 8th position is the second of the cycle: square.',
-      howto: '先找循环长度，再算第几个落在循环的哪一格。', howtoe: 'Find the cycle length, then locate the position inside it.' },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q21',
-      q: '把 10 颗星分成一样多的两份，每份多少颗？', qy: '将 10 粒星分成一样多嘅两份，每份幾多粒？', qe: 'Split 10 stars into two equal groups. How many stars in each group?',
-      a: '5', ans: 'num',
-      hint: '一半是多少？', hinty: '一半系幾多？', hinte: 'What is half of 10?',
-      expe: 'Half of 10 is 5.',
-    },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q22',
-      q: '下面这些数里有多少个奇数（单数）：1、2、3、6、11、20、37、68？', qy: '下面呢啲数里面有几个奇数（单数）：1、2、3、6、11、20、37、68？', qe: 'How many odd numbers are there: 1, 2, 3, 6, 11, 20, 37, 68?',
-      a: '4', ans: 'num',
-      hint: '奇数的个位是 1、3、5、7、9。', hinty: '奇数嘅个位系 1、3、5、7、9。', hinte: 'Odd numbers end in 1, 3, 5, 7 or 9.',
-      expe: '1, 3, 11 and 37 are odd, so there are 4 odd numbers.',
-    },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q23',
-      q: '下面这些数里有多少个偶数（双数）：1、4、5、9、14、23、37、60？', qy: '下面呢啲数里面有几个偶数（双数）：1、4、5、9、14、23、37、60？', qe: 'How many even numbers are there: 1, 4, 5, 9, 14, 23, 37, 60?',
-      a: '3', ans: 'num',
-      hint: '偶数的个位是 0、2、4、6、8。', hinty: '偶数嘅个位系 0、2、4、6、8。', hinte: 'Even numbers end in 0, 2, 4, 6 or 8.',
-      expe: '4, 14 and 60 are even, so there are 3 even numbers.',
-    },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q24',
-      q: '用 1、2、4 三个数字各用一次，能组成最大的三位数是多少？', qy: '用 1、2、4 三个数字每个用一次，可以组成最大嘅三位数系几多？', qe: 'Use the digits 1, 2 and 4 once each to make the largest 3-digit number. What is it?',
-      a: '421', ans: 'num',
-      hint: '最大的数字放百位。', hinty: '最大嘅数字放百位。', hinte: 'Put the biggest digit in the hundreds place.',
-      expe: 'Put the digits from biggest to smallest: 421.',
-    },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q25',
-      q: '彼得有 4 枚 1 元、2 枚 5 元和 1 枚 10 元硬币，他最多能买多少元的纪念品？', qy: '彼得有 4 个 1 蚊、2 个 5 蚊同 1 个 10 蚊，佢最多买幾多蚊嘅纪念品？', qe: 'Peter has 4 one-dollar coins, 2 five-dollar coins and 1 ten-dollar coin. What is the most he can spend?',
-      a: '24', ans: 'num',
-      hint: '先把所有钱加起来。', hinty: '先将所有钱加埋。', hinte: 'Add all the coins up.',
-      expe: '4 × 1 + 2 × 5 + 10 = 4 + 10 + 10 = 24 dollars.',
-    },
-
-    /* ---------- TIMO-2018-final-Kindergarten ---------- */
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q1',
-      q: '积及是家里最小的男孩，他有 4 个姐姐、没有哥哥弟弟。积及家一共有多少个孩子？', qy: '积及系屋企最细嘅仔，佢有 4 个家姐、冇兄弟。积及屋企一共有几个细路？', qe: 'Jacob is the youngest boy, with 4 elder sisters and no brothers. How many children are in the family?',
-      a: '5', ans: 'num',
-      hint: '别忘了算积及自己。', hinty: '唔好漏咗积及自己。', hinte: 'Remember to count Jacob himself.',
-      expe: '4 sisters plus Jacob himself makes 5 children.',
-    },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q2',
-      q: '图中两个天秤：第一个天秤圆球比三角轻，第二个天秤三角比方块轻。圆球、三角、方块哪个最轻？', qy: '图中两个天秤：第一个天秤圆球轻过三角，第二个天秤三角轻过方块。圆球、三角、方块边个最轻？', qe: 'Two balances: the ball is lighter than the triangle, and the triangle is lighter than the square. Which is lightest?',
-      a: '圆球', ans: 'choice', opts: ['圆球', '三角', '方块'], optse: ['ball', 'triangle', 'square'],
-      hint: '天秤往上翘的那边更轻。', hinty: '天秤向上翘嗰边更轻。', hinte: 'The pan that rises is lighter.',
-      exp: '圆球最轻，三角次之，方块最重。', expe: 'Ball lightest, then triangle, then square.',
-      howto: '把两段比较连成一条线，就能从轻到重排出来。', howtoe: 'Chain the two comparisons to rank from light to heavy.' },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q3',
-      q: '按规律：A、C、E、G、I，下一个字母是什么？', qy: '跟规律：A、C、E、G、I，下一个字母系咩？', qe: 'Pattern: A, C, E, G, I. What letter comes next?',
-      a: 'K', ans: 'choice', opts: ['J', 'K', 'L', 'M'],
-      hint: '字母表里每次跳过几个？', hinty: '字母表里面每次跳过几个？', hinte: 'How many letters are skipped each time?',
-      expe: 'The letters skip one each time: A, C, E, G, I, then K.',
-    },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q4',
-      q: '按规律：1、8、3、6、5、4，下一个是多少？', qy: '跟规律：1、8、3、6、5、4，下一个系几多？', qe: 'Pattern: 1, 8, 3, 6, 5, 4. What comes next?',
-      a: '7', ans: 'num',
-      hint: '一个在变大，一个在变小，看看分别怎么走。', hinty: '一个系变大，一个系变细，睇下佢哋点行。', hinte: 'One sequence goes up, one goes down. Look at each.',
-      expe: 'The odd places go 1, 3, 5, 7 (+2 each) and the even places go 8, 6, 4 (−2 each), so the next is 7.',
-    },
-    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q5',
-      q: '按规律：第 1 组 1 个圆，第 2 组 2 个圆，第 3 组 3 个圆。第 4 组有多少个圆？', qy: '跟规律：第 1 组 1 个圆，第 2 组 2 个圆，第 3 组 3 个圆。第 4 组有几多个圆？', qe: 'Group 1 has 1 circle, group 2 has 2, group 3 has 3. How many in group 4?',
-      a: '4', ans: 'num',
-      hint: '每组比上一组多 1 个。', hinty: '每组比上一组多 1 个。', hinte: 'Each group has one more than the last.',
-      exp: '3 加 1 等于 4。', expe: '3 + 1 = 4.',
-      howto: '找出每组之间加几多，再加一次。', howtoe: 'Find the step between groups and apply it once.' },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q6',
-      q: '2 加 2 加 2 加 2 加 2 等于多少？', qy: '2 加 2 加 2 加 2 加 2 等于几多？', qe: 'What is 2 + 2 + 2 + 2 + 2?',
-      a: '10', ans: 'num',
-      hint: '数一数有几个 2。', hinty: '数下有幾多个 2。', hinte: 'Count how many 2s there are.',
-      expe: 'Five 2s added together make 10, which is 2 × 5.',
-    },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q7',
-      q: '18 减 6 再减 8 等于多少？', qy: '18 减 6 再减 8 等于几多？', qe: 'What is 18 − 6 − 8?',
-      a: '4', ans: 'num',
-      hint: '先算 18 减 6。', hinty: '先算 18 减 6。', hinte: 'Start with 18 minus 6.',
-      expe: '18 − 6 = 12, then 12 − 8 = 4.',
-    },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q8',
-      q: 'A 是一位数，10 减 A 等于 3，A 是多少？', qy: 'A 系一位数，10 减 A 等于 3，A 系几多？', qe: 'A is a 1-digit number and 10 − A = 3. What is A?',
-      a: '7', ans: 'num',
-      hint: '想：10 减几多还剩 3？', hinty: '谂：10 减幾多仲剩 3？', hinte: 'What do you take from 10 to leave 3?',
-      exp: '10 减 3 等于 7，所以 A 是 7。', expe: '10 − 3 = 7, so A = 7.',
-      howto: '求减数用减法，再代回去验算。', howtoe: 'Subtrahend = start − result; check by substitution.' },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q9',
-      q: '10 减 9 加 8 减 7 加 6 减 5 加 4 减 3 加 2 减 1 等于多少？', qy: '10 减 9 加 8 减 7 加 6 减 5 加 4 减 3 加 2 减 1 等于几多？', qe: 'What is 10 − 9 + 8 − 7 + 6 − 5 + 4 − 3 + 2 − 1?',
-      a: '5', ans: 'num',
-      hint: '把成对的数放在一起算：10−9、8−7……', hinty: '将一对一对嘅数放埋一齐算：10−9、8−7……', hinte: 'Pair them up: 10−9, 8−7, and so on.',
-      expe: 'Each pair like 10 − 9 or 8 − 7 equals 1. There are 5 pairs, so the total is 5.',
-    },
-    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q10',
-      q: 'A 是一位数，12 加 A 等于 20，A 是多少？', qy: 'A 系一位数，12 加 A 等于 20，A 系几多？', qe: 'A is a 1-digit number and 12 + A = 20. What is A?',
-      a: '8', ans: 'num',
-      hint: '想：12 加几多等于 20？', hinty: '谂：12 加幾多等于 20？', hinte: 'How much do you add to 12 to reach 20?',
-      exp: '20 减 12 等于 8，所以 A 是 8。', expe: '20 − 12 = 8, so A = 8.',
-      howto: '求加数用和减已知数，再验算。', howtoe: 'Addend = total − known part; check by substitution.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q11',
-      q: '艾美有 7 个梨，约翰有 1 个。要让两人一样多，艾美要给约翰多少个？', qy: '艾美有 7 个梨，约翰有 1 个。要让两个人一样多，艾美要畀约翰幾多个？', qe: 'Amy has 7 pears and John has 1. How many must Amy give John so they have the same?',
-      a: '3', ans: 'num',
-      hint: '一共 8 个梨，一样多的话每人几个？', hinty: '一共 8 个梨，一样多嘅话每人幾多个？', hinte: 'There are 8 pears in total. If equal, how many each?',
-      expe: 'There are 8 pears, so 4 each. John already has 1, so Amy gives him 3.',
-    },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q12',
-      q: '在 2、4、3、1 之间填加号或减号，使 2 4 3 1 = 10 成立。第一个符号是加还是减？', qy: '喺 2、4、3、1 之间填加号或者减号，令 2 4 3 1 = 10 成立。第一个符号系加定减？', qe: 'Put + or − between 2, 4, 3, 1 so the result is 10. Is the first sign + or −?',
-      a: '+', ans: 'choice', opts: ['+', '−'], optse: ['+', '−'],
-      hint: '先把四个数全加起来看看。', hinty: '先将四个数全部加埋睇下。', hinte: 'Add all four first.',
-      exp: '2 加 4 加 3 加 1 等于 10，全是加号。', expe: '2 + 4 + 3 + 1 = 10, all plus.',
-      howto: '先全加，比目标大再换减号。', howtoe: 'Add all first; switch to minus if the total is too big.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q13',
-      q: '在 6、1、3 之间填加号或减号，使 6 1 3 = 2 成立。第一个符号是加还是减？', qy: '喺 6、1、3 之间填加号或者减号，令 6 1 3 = 2 成立。第一个符号系加定减？', qe: 'Put + or − between 6, 1, 3 so the result is 2. Is the first sign + or −?',
-      a: '−', ans: 'choice', opts: ['+', '−'], optse: ['+', '−'],
-      hint: '6 减 1 再减 3 等于多少？', hinty: '6 减 1 再减 3 等于几多？', hinte: 'What is 6 − 1 − 3?',
-      exp: '6 减 1 再减 3 等于 2，所以第一个是减号。', expe: '6 − 1 − 3 = 2, so the first sign is −.',
-      howto: '两种填法都算一遍，6 加 1 减 3 是 4，不对。', howtoe: 'Try both; 6 + 1 − 3 = 4 does not work.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q14',
-      q: 'A 是一位数，11 减 A 等于 4 加 3，A 是多少？', qy: 'A 系一位数，11 减 A 等于 4 加 3，A 系几多？', qe: 'A is a 1-digit number and 11 − A = 4 + 3. What is A?',
-      a: '4', ans: 'num',
-      hint: '先算右边 4 加 3 等于多少。', hinty: '先算右边 4 加 3 等于几多。', hinte: 'Work out 4 + 3 first.',
-      exp: '4 加 3 等于 7，11 减 7 等于 4，所以 A 是 4。', expe: '4 + 3 = 7, 11 − 7 = 4, so A = 4.',
-      howto: '右边先算成一个数，再求减数。', howtoe: 'Simplify the right side, then find the subtrahend.' },
-    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q15',
-      q: '按规律：10、7、4，下一个是多少？', qy: '跟规律：10、7、4，下一个系几多？', qe: 'Pattern: 10, 7, 4. What comes next?',
-      a: '1', ans: 'num',
-      hint: '每次少了多少？', hinty: '每次少咗几多？', hinte: 'How much is taken away each time?',
-      expe: 'It goes down by 3 each time, so 4 − 3 = 1.',
-    },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q16',
-      q: '一个正方形被分成 2 行 2 列的 4 个小正方形。图中一共有多少个正方形（大小都算）？', qy: '一个正方形分成 2 行 2 列嘅 4 个细正方形。图中一共有幾多个正方形（大细都计）？', qe: 'A square is cut into 2 rows and 2 columns. How many squares in total?',
-      a: '5', ans: 'num',
-      hint: '4 个小的加 1 个大的。', hinty: '4 个细嘅加 1 个大嘅。', hinte: '4 small plus 1 big.',
-      exp: '4 加 1 等于 5。', expe: '4 + 1 = 5.',
-      howto: '按大小分类数，别漏掉大的。', howtoe: 'Count by size, including the large one.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q17',
-      q: '一堆立方体：上面 2 个，下面 4 个。最少由多少个立方体组成？', qy: '一堆立方体：上面 2 个，下面 4 个。最少由幾多个立方体组成？', qe: 'A stack of cubes: 2 on top, 4 below. At least how many cubes?',
-      a: '6', ans: 'num',
-      hint: '上面 2 个，下面 4 个，加起来。', hinty: '上面 2 个，下面 4 个，加埋。', hinte: 'Two on top plus four below.',
-      exp: '2 加 4 等于 6。', expe: '2 + 4 = 6.',
-      howto: '按层数数，被挡住的也要算。', howtoe: 'Count by layer, including hidden cubes.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q18',
-      q: '一个正方形旁边接一个三角形组成一个图形。这个图形一共有多少条边？', qy: '一个正方形旁边接一个三角形组成一个图形。呢个图形一共有几多条边？', qe: 'A square with a triangle attached. How many sides in total?',
-      a: '5', ans: 'num',
-      hint: '正方形 4 条边，接上三角形后共用的那条只算一次。', hinty: '正方形 4 条边，接上三角形之后共用嗰条只计一次。', hinte: 'The square has 4 sides; the shared side counts once.',
-      exp: '外面数一圈是 5 条边。', expe: 'Walking around the outside gives 5 sides.',
-      howto: '数边时接在一起的边只算一次。', howtoe: 'Count each edge once, including shared ones.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q19',
-      q: '一个三角形被一条线分成 2 个小三角形。图中一共有多少个三角形（大小都算）？', qy: '一个三角形被一条线分成 2 个细三角形。图中一共有幾多个三角形（大细都计）？', qe: 'A triangle is split by one line into 2 small triangles. How many triangles in total?',
-      a: '3', ans: 'num',
-      hint: '2 个小的加上原来的大三角形。', hinty: '2 个细嘅加埋原来嘅大三角形。', hinte: '2 small ones plus the original big triangle.',
-      exp: '2 加 1 等于 3。', expe: '2 + 1 = 3.',
-      howto: '数图形按大小分类，别只数小的。', howtoe: 'Count by size, not only the small ones.' },
-    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q20',
-      q: '按规律：方、圆、三角、方、圆、三角、方、__、三角。空格是什么？', qy: '跟规律：方、圆、三角、方、圆、三角、方、__、三角。空格系咩？', qe: 'Pattern: square, circle, triangle, square, circle, triangle, square, __, triangle. What fills the blank?',
-      a: '圆', ans: 'choice', opts: ['方', '圆', '三角'], optse: ['square', 'circle', 'triangle'],
-      hint: '三个一循环，第 8 个是循环里的第二个。', hinty: '三个一循环，第 8 个系循环里面嘅第二个。', hinte: 'Repeats every three; the 8th is the second.',
-      exp: '三个一循环，第 8 个落在第二个位置，就是圆。', expe: 'The 8th position is the second of the cycle: circle.',
-      howto: '先找循环长度再定位。', howtoe: 'Find the cycle length first.' },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q21',
-      q: '把 8 颗星分成一样多的两份，每份多少颗？', qy: '将 8 粒星分成一样多嘅两份，每份幾多粒？', qe: 'Split 8 stars into two equal groups. How many in each group?',
-      a: '4', ans: 'num',
-      hint: '一半是多少？', hinty: '一半系幾多？', hinte: 'What is half of 8?',
-      expe: 'Half of 8 is 4.',
-    },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q22',
-      q: '下面这些算式里有多少个结果是奇数：1 加 3、2 加 4、3 加 5、8 加 4、2 加 5？', qy: '下面呢啲算式里面有几多个结果系奇数：1 加 3、2 加 4、3 加 5、8 加 4、2 加 5？', qe: 'How many of these sums are odd: 1+3, 2+4, 3+5, 8+4, 2+5?',
-      a: '1', ans: 'num',
-      hint: '先算每个和，再看个位是不是 1、3、5、7、9。', hinty: '先算每个和，再睇个位系唔系 1、3、5、7、9。', hinte: 'Compute each sum, then check the units digit.',
-      exp: '1+3=4、2+4=6、3+5=8、8+4=12、2+5=7，只有 7 是奇数，共 1 个。', expe: 'Only 7 is odd, so the answer is 1.',
-      howto: '奇数加偶数得奇数；先把每个和算出来再判单双。', howtoe: 'Odd + even gives odd; compute each sum then test parity.' },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q23',
-      q: '下面这些算式里有多少个结果是一位数：14 加 3、4 加 5、7 加 9、3 加 5？', qy: '下面呢啲算式里面有几多个结果系一位数：14 加 3、4 加 5、7 加 9、3 加 5？', qe: 'How many of these sums are single-digit: 14+3, 4+5, 7+9, 3+5?',
-      a: '2', ans: 'num',
-      hint: '先算每个和是几多。', hinty: '先算每个和系几多。', hinte: 'Work out each sum.',
-      exp: '14+3=17、4+5=9、7+9=16、3+5=8，一位数的是 9 和 8，共 2 个。', expe: '9 and 8 are single-digit: 2 of them.',
-      howto: '先算和再数位数，两位数不算。', howtoe: 'Compute each sum then count the digits.' },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q24',
-      q: '下面这些数里有多少个两位数：2、14、15、27、4、32、47？', qy: '下面呢啲数里面有几个两位数：2、14、15、27、4、32、47？', qe: 'How many two-digit numbers are there: 2, 14, 15, 27, 4, 32, 47?',
-      a: '5', ans: 'num',
-      hint: '两位数要有十位。', hinty: '两位数要有十位。', hinte: 'Two-digit numbers need a tens digit.',
-      expe: 'Two-digit numbers need a tens digit: 14, 15, 27, 32 and 47, so 5 of them (2 and 4 are single digits).',
-    },
-    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q25',
-      q: '彼得有 6 枚 1 元硬币，能换多少个 2 元硬币？', qy: '彼得有 6 个 1 蚊硬币，可以换幾多个 2 蚊硬币？', qe: 'Peter has 6 × $1 coins. How many $2 coins can he exchange for?',
-      a: '3', ans: 'num',
-      hint: '6 除以 2。', hinty: '6 除以 2。', hinte: '6 ÷ 2.',
-      exp: '6 除以 2 等于 3。', expe: '6 ÷ 2 = 3.',
-      howto: '换钱是平均分，用除法，验算用乘法。', howtoe: 'Exchanging money is division; check by multiplying.' },
-
-    /* ---------- TIMO-2018-Primary-1 ---------- */
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q1',
-      q: '玛丽有一个哥哥和三个妹妹，玛丽的哥哥有几个妹妹？', qy: '玛丽有一个哥哥同三个妹妹，玛丽嘅哥哥有几多个妹妹？', qe: 'Mary has one brother and three sisters. How many sisters does Mary\'s brother have?',
-      a: '4', ans: 'num',
-      hint: '哥哥的妹妹里，玛丽自己也算一个。', hinty: '哥哥嘅妹妹里面，玛丽自己都算一个。', hinte: 'Mary herself counts as one of the brother\'s sisters.',
-      exp: '玛丽加三个妹妹，一共 4 个。', expe: 'Mary plus three sisters: 4.',
-      howto: '算兄弟姐妹时，被问到的那个人也要算进去。', howtoe: 'Include the person named in the count.' },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q2',
-      q: '三个小朋友艾美、宾利和云妮各有一只宠物：猫、狗或兔。艾美养的不是猫，宾利养的是兔子，云妮养的是什么？', qy: '三个小朋友艾美、宾利同云妮各有一只宠物：猫、狗或者兔。艾美养嘅唔系猫，宾利养嘅系兔，云妮养嘅系咩？', qe: 'Amy, Benny and Winnie each have one pet: cat, dog or bunny. Amy does not have the cat, Benny has the bunny. What does Winnie have?',
-      a: '猫', ans: 'choice', opts: ['猫', '狗', '兔'], optse: ['cat', 'dog', 'bunny'],
-      hint: '宾利用了兔，剩下的猫和狗里艾美不是猫。', hinty: '宾利用咗兔，剩返猫同狗，艾美唔系猫。', hinte: 'Benny took the bunny; Amy is not the cat among the rest.',
-      exp: '宾利是兔，艾美只能是狗，所以云妮是猫。', expe: 'Benny has the bunny, Amy must have the dog, so Winnie has the cat.',
-      howto: '排除法：先填确定的，再按否定条件逐个排除。', howtoe: 'Elimination: fill what is certain, then rule out by the negative clues.' },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q3',
-      q: '要把一个蛋糕切成 4 份，最少要切几刀？', qy: '要将一个蛋糕切成 4 份，最少要切幾多刀？', qe: 'What is the fewest cuts to divide a cake into 4 parts?',
-      a: '2', ans: 'num',
-      hint: '两刀交叉切。', hinty: '两刀交叉切。', hinte: 'Two crossing cuts.',
-      exp: '横一刀竖一刀交叉，就得到 4 块，所以 2 刀。', expe: 'One cut across and one down the middle gives 4 pieces: 2 cuts.',
-      howto: '刀痕交叉才能翻倍：2 刀出 4 块，3 刀出 6 到 7 块。', howtoe: 'Crossing cuts multiply the pieces.' },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q4',
-      q: '约翰写了一个两位数。猜 16 时约翰说「有一个数字对，但位置错了」；猜 67 时也是同样回答。这个数是多少？', qy: '约翰写咗一个两位数。猜 16 时约翰话「有一个数字啱，但位置错」；猜 67 时都系同样答法。呢个数系几多？', qe: 'John wrote a 2-digit number. Guessing 16 gets \'one digit right but in the wrong place\'; guessing 67 gets the same reply. What is the number?',
-      a: '71', ans: 'num',
-      hint: '6 在 16 里是个位、在 67 里是十位，两次都说位置错。', hinty: '6 喺 16 里面系个位、喺 67 里面系十位，两次都话位置错。', hinte: '6 sits in the units place in 16 and in the tens place in 67, misplaced both times.',
-      exp: '6 既不是个位也不是十位，说明 6 不在这个数里。16 剩下 1 在错位置，67 剩下 7 在错位置，所以是 71。', expe: '6 is neither digit, so it is not in the number. From 16 only 1 remains; from 67 only 7. Swapping gives 71.',
-      howto: '「有数字对但位置错」要逐位排除，把每次猜的数字与位置记下来划掉。', howtoe: 'Track each guessed digit and its position; misplaced digits are present but not at that spot.' },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q5',
-      q: '按规律：第 1 组 1 个圆，第 2 组 4 个圆，第 3 组 9 个圆。第 4 组有多少个圆？', qy: '跟规律：第 1 组 1 个圆，第 2 组 4 个圆，第 3 组 9 个圆。第 4 组有几多个圆？', qe: 'Group 1 has 1 circle, group 2 has 4, group 3 has 9. How many in group 4?',
-      a: '16', ans: 'num',
-      hint: '1、4、9 是 1 乘 1、2 乘 2、3 乘 3。', hinty: '1、4、9 系 1 乘 1、2 乘 2、3 乘 3。', hinte: '1, 4, 9 are 1×1, 2×2, 3×3.',
-      exp: '第 4 组是 4 乘 4 等于 16。', expe: 'Group 4 is 4 × 4 = 16.',
-      howto: '1、4、9、16 这种数是平方数，第几组就是几乘几。', howtoe: '1, 4, 9, 16 are square numbers: group n has n × n.' },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q6',
-      q: '3 连加 10 次，等于多少？', qy: '3 连加 10 次，等于几多？', qe: 'What is 3 added ten times?',
-      a: '30', ans: 'num',
-      hint: '3 乘 10。', hinty: '3 乘 10。', hinte: '3 × 10.',
-      exp: '3 乘 10 等于 30。', expe: '3 × 10 = 30.',
-      howto: '相同的数连加就用乘法：个数乘这个数。', howtoe: 'Repeated equal additions are multiplication.' },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q7',
-      q: '82 减 19 再减 42 等于多少？', qy: '82 减 19 再减 42 等于几多？', qe: 'What is 82 − 19 − 42?',
-      a: '21', ans: 'num',
-      hint: '先算 82 减 19。', hinty: '先算 82 减 19。', hinte: 'Start with 82 − 19.',
-      exp: '82 减 19 等于 63，63 减 42 等于 21。', expe: '82 − 19 = 63, then 63 − 42 = 21.',
-      howto: '连减分步算，算完用加法验算。', howtoe: 'Subtract in steps and check by adding back.' },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q8',
-      q: '22 加多少等于 30？', qy: '22 加幾多等于 30？', qe: 'What plus 22 makes 30?',
-      a: '8', ans: 'num',
-      hint: '30 减 22。', hinty: '30 减 22。', hinte: '30 − 22.',
-      exp: '30 减 22 等于 8。', expe: '30 − 22 = 8.',
-      howto: '求加数用减法，再验算。', howtoe: 'Find the addend by subtraction, then check.' },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q9',
-      q: '1 加 2 加 3 一直加到 11，等于多少？', qy: '1 加 2 加 3 一直加到 11，等于几多？', qe: 'What is 1 + 2 + 3 + ... + 11?',
-      a: '66', ans: 'num',
-      hint: '1 加 11、2 加 10 这样配对，每对都是 12。', hinty: '1 加 11、2 加 10 咁样配对，每对都系 12。', hinte: 'Pair 1 + 11, 2 + 10; every pair gives 12.',
-      exp: '配对后 5 对每对 12，共 60，中间剩 6，加起来 66。', expe: '5 pairs of 12 make 60, plus the middle 6: 66.',
-      howto: '一长串连加先配对，第一个配最后一个，中间的那个单独加。', howtoe: 'Pair the ends; handle the middle term separately.' },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q10',
-      q: 'A 和 B 都是一位数，18 减 A 等于 B。A 最大是多少？', qy: 'A 同 B 都系一位数，18 减 A 等于 B。A 最大系几多？', qe: 'A and B are both 1-digit numbers and 18 − A = B. What is the largest possible A?',
-      a: '9', ans: 'num',
-      hint: 'B 也要是一位数，所以 18 减 A 不能超过 9。', hinty: 'B 都要系一位数，所以 18 减 A 唔可以大过 9。', hinte: 'B must stay a single digit, so 18 − A must be at most 9.',
-      exp: '18 减 9 等于 9，B 是一位数；减 8 会得到 10，不是一位数。所以 A 最大是 9。', expe: '18 − 9 = 9 works; 18 − 8 = 10 does not. So A = 9.',
-      howto: '题目有两个条件（A、B 都是一位数），从边界值开始试。', howtoe: 'With two constraints, start testing from the boundary value.' },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q11',
-      q: '艾美有 10 个苹果，约翰有 4 个。要让两人一样多，艾美要给约翰多少个？', qy: '艾美有 10 个苹果，约翰有 4 个。要让两个人一样多，艾美要畀约翰幾多个？', qe: 'Amy has 10 apples and John has 4. How many must Amy give John so they are equal?',
-      a: '3', ans: 'num',
-      hint: '一共 14 个，一样多每人 7 个；约翰已有 4 个。', hinty: '一共 14 个，一样多每人 7 个；约翰已经有 4 个。', hinte: '14 in total means 7 each; John already has 4.',
-      exp: '一共 14 个，每人 7 个，约翰还差 3 个，所以给 3 个。', expe: '14 in total means 7 each; John needs 3 more, so Amy gives 3.',
-      howto: '先算总数和每人应得，再减去对方已有的数。', howtoe: 'Compute the fair share, then subtract what the other already has.' },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q12',
-      q: '在 1、8、5、4 之间填加号或减号，使 1 8 5 4 = 8 成立。第一个符号是加还是减？', qy: '喺 1、8、5、4 之间填加号或者减号，令 1 8 5 4 = 8 成立。第一个符号系加定减？', qe: 'Put + or − between 1, 8, 5, 4 so the result is 8. Is the first sign + or −?',
-      a: '+', ans: 'choice', opts: ['+', '−'], optse: ['+', '−'],
-      hint: '1 加 8 减 5 加 4 等于多少？', hinty: '1 加 8 减 5 加 4 等于几多？', hinte: 'What is 1 + 8 − 5 + 4?',
-      exp: '1 加 8 减 5 加 4 等于 8，所以第一个是加号。', expe: '1 + 8 − 5 + 4 = 8, so the first sign is +.',
-      howto: '先全加得到 18，比目标多 10，把 5 换成减号正好少 10。', howtoe: 'All plus gives 18; switching the 5 to minus drops it by 10.' },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q13',
-      q: '四个小孩一共有 11 个气球，每人数量都不同，而且每人至少 1 个。气球最多的那个有多少个？', qy: '四个细路一共有 11 个气球，每人数量都唔同，而且每人至少有 1 个。气球最多嘅嗰个有幾多个？', qe: 'Four children share 11 balloons, all different amounts, at least one each. How many does the child with the most have?',
-      a: '5', ans: 'num',
-      hint: '另外三人尽量少：1、2、3。', hinty: '另外三人尽量少：1、2、3。', hinte: 'Give the other three as few as possible: 1, 2, 3.',
-      exp: '另外三人最少 1 加 2 加 3 等于 6，剩下 11 减 6 等于 5。', expe: 'The other three take at least 6, leaving 11 − 6 = 5.',
-      howto: '要让一个人最多，其他人尽量少，而且每人不同就取 1、2、3。', howtoe: 'Maximise one share by minimising the others while keeping them different.' },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q14',
-      q: '判断 2 加 5 加 8 加 11 加 14 加 17 加 20 加 23 的结果是奇数还是偶数？', qy: '判断 2 加 5 加 8 加 11 加 14 加 17 加 20 加 23 嘅结果系奇数定偶数？', qe: 'Is 2 + 5 + 8 + 11 + 14 + 17 + 20 + 23 odd or even?',
-      a: '偶数', ans: 'choice', opts: ['奇数', '偶数'], optse: ['odd', 'even'],
-      hint: '先数一数有几个奇数。', hinty: '先数下有几多个奇数。', hinte: 'Count how many of the numbers are odd.',
-      exp: '5、11、17、23 共 4 个奇数，4 个奇数的和是偶数，所以整个结果是偶数（等于 100）。', expe: 'There are 4 odd numbers; the sum of an even count of odd numbers is even. The total is 100.',
-      howto: '连加判单双不用全算：数一数奇数有几个，奇数个数是奇数结果就是奇数。', howtoe: 'To test parity of a sum, count the odd terms; an odd count gives an odd sum.' },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q15',
-      q: '有多少个两位数的个位数是 6？', qy: '有几多个两位数嘅个位数系 6？', qe: 'How many two-digit numbers have units digit 6?',
-      a: '9', ans: 'num',
-      hint: '16、26、36 一直到 96。', hinty: '16、26、36 一直到 96。', hinte: '16, 26, 36 up to 96.',
-      exp: '16、26、36、46、56、66、76、86、96，一共 9 个。', expe: '16 to 96 step 10: 9 numbers.',
-      howto: '十位可以是 1 到 9，共 9 种。', howtoe: 'The tens digit can be 1 to 9: nine choices.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q16',
-      q: '一个正方形被分成 2 行 2 列的 4 个小正方形。图中一共有多少个正方形（大小都算）？', qy: '一个正方形分成 2 行 2 列嘅 4 个细正方形。图中一共有幾多个正方形（大细都计）？', qe: 'A square is cut into 2 rows and 2 columns. How many squares in total?',
-      a: '5', ans: 'num',
-      hint: '4 个小正方形加 1 个大的。', hinty: '4 个细正方形加 1 个大嘅。', hinte: '4 small squares plus the big one.',
-      exp: '4 加 1 等于 5。', expe: '4 + 1 = 5.',
-      howto: '数图形按大小分类，别漏掉大的。', howtoe: 'Count by size, including the large one.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q17',
-      q: '一堆立方体：上面 2 个，下面 4 个。最少由多少个立方体组成？', qy: '一堆立方体：上面 2 个，下面 4 个。最少由幾多个立方体组成？', qe: 'A stack of cubes: 2 on top, 4 below. At least how many cubes?',
-      a: '6', ans: 'num',
-      hint: '按层加起来。', hinty: '按层加埋。', hinte: 'Add layer by layer.',
-      exp: '2 加 4 等于 6。', expe: '2 + 4 = 6.',
-      howto: '按层数，被挡住的也要算。', howtoe: 'Count by layer, hidden cubes included.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q18',
-      q: '一个三角形被一条线分成 2 个小三角形。图中一共有多少个三角形（大小都算）？', qy: '一个三角形被一条线分成 2 个细三角形。图中一共有幾多个三角形（大细都计）？', qe: 'A triangle is split by one line into 2 small triangles. How many triangles in total?',
-      a: '3', ans: 'num',
-      hint: '2 个小的加上原来那个大的。', hinty: '2 个细嘅加埋原来嗰个大嘅。', hinte: '2 small ones plus the original large one.',
-      exp: '2 加 1 等于 3。', expe: '2 + 1 = 3.',
-      howto: '数图形按大小分类，别只数小的。', howtoe: 'Count by size, not only the small ones.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q19',
-      q: '下面五个图案中，哪一个和其他四个不相似？规律是：相似的图案都是同一个图形旋转得到，不相似的形状不一样。', qy: '下面五个图案之中，边一个同其他四个唔相似？规律系：相似嘅图案都系同一个图形转出嚟，唔相似嘅形状唔同。', qe: 'Which of the five shapes is not similar to the others? Similar shapes are the same figure rotated; the odd one has a different shape.',
-      a: 'E', ans: 'choice', opts: ['A', 'B', 'C', 'D', 'E'],
-      hint: '相似只看形状，不管转了几多度。', hinty: '相似只睇形状，唔理转咗幾多度。', hinte: 'Similarity is about shape only, not rotation.',
-      exp: 'A 到 D 都是同一个三角形转过来，E 是五边形，不是同一个形状，所以选 E。', expe: 'A to D are the same triangle rotated; E is a pentagon, so the answer is E.',
-      howto: '判相似先把每个图形在纸上转一转，看能不能和别的重合。', howtoe: 'Mentally rotate each shape and see which ones coincide.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q20',
-      q: '按规律：圆、方、三角、圆、圆、方、三角、圆、__、方、三角。空格是什么？', qy: '跟规律：圆、方、三角、圆、圆、方、三角、圆、__、方、三角。空格系咩？', qe: 'Pattern: circle, square, triangle, circle, circle, square, triangle, circle, __, square, triangle. What fills the blank?',
-      a: '圆', ans: 'choice', opts: ['圆', '方', '三角'], optse: ['circle', 'square', 'triangle'],
-      hint: '四个一循环：圆、方、三角、圆。', hinty: '四个一循环：圆、方、三角、圆。', hinte: 'The block is four long: circle, square, triangle, circle.',
-      exp: '前面是「圆、方、三角、圆」为一组，第 9 个位置正好是这一组的最后一个，也就是圆。', expe: 'The block is circle, square, triangle, circle; position 9 is the fourth of the block: circle.',
-      howto: '先数出一组有几多个，再算目标位置落在第几个。', howtoe: 'Count the block length, then locate the position in the block.' },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q21',
-      q: '把 10 分成两个一位数相加，有多少种方法？（5+6 和 6+5 算同一种）', qy: '将 10 分成两个一位数相加，有幾多种方法？（5+6 同 6+5 当同一种）', qe: 'Split 10 into two 1-digit numbers. How many ways? (5+6 and 6+5 count as one.)',
-      a: '5', ans: 'num',
-      hint: '从 1+9 开始，一个一个数。', hinty: '由 1+9 开始，一个一个数。', hinte: 'Start from 1+9 and count one by one.',
-      expe: '1 + 9, 2 + 8, 3 + 7, 4 + 6 and 5 + 5 make 5 ways.',
-    },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q22',
-      q: '从 1、3、5、8 里选 2 个不重复的数字组成两位数，能组成多少个奇数？', qy: '由 1、3、5、8 里面拣 2 个唔重复嘅数字组成两位数，可以组成幾多个奇数？', qe: 'From 1, 3, 5, 8 pick 2 digits without repeating to make a two-digit number. How many are odd?',
-      a: '9', ans: 'num',
-      hint: '奇数只看个位：1、3、5 都可以做个位。', hinty: '奇数只睇个位：1、3、5 都可以做个位。', hinte: 'Odd depends on the units digit: 1, 3 or 5.',
-      exp: '个位 3 种选法（1、3、5），每种十位还剩 3 个数字可选，3 乘 3 等于 9。', expe: '3 odd units digits × 3 remaining tens digits = 9.',
-      howto: '分位置想：个位决定奇偶，十位不能是 0；两位可选数相乘。', howtoe: 'Think by place value; multiply the choices for each place.' },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q23',
-      q: '从学校到车站有 3 条路，从车站到图书馆有 2 条路。经车站从学校到图书馆有多少种走法？', qy: '由学校去车站有 3 条路，由车站去图书馆有 2 条路。经车站由学校去图书馆有幾多种走法？', qe: 'There are 3 ways from school to the station and 2 from the station to the library. How many ways via the station?',
-      a: '6', ans: 'num',
-      hint: '第一段每一种都配上第二段的每一种。', hinty: '第一段每一种都配第二段每一种。', hinte: 'Each first-leg choice pairs with each second-leg choice.',
-      exp: '3 乘 2 等于 6 种。', expe: '3 × 2 = 6 ways.',
-      howto: '分段走的走法数用乘法：第一段数量乘第二段数量。', howtoe: 'For staged trips, multiply the number of choices per stage.' },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q24',
-      q: '最大的一位偶数和最小的两位奇数加起来是多少？', qy: '最大嘅一位偶数同最细嘅两位奇数加埋系几多？', qe: 'Add the greatest 1-digit even number and the smallest 2-digit odd number.',
-      a: '19', ans: 'num',
-      hint: '最大的一位偶数是 8，最小的两位奇数是 11。', hinty: '最大嘅一位偶数系 8，最细嘅两位奇数系 11。', hinte: 'Greatest 1-digit even is 8; smallest 2-digit odd is 11.',
-      expe: 'The greatest 1-digit even number is 8 and the smallest 2-digit odd number is 11, so 8 + 11 = 19.',
-    },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q25',
-      q: '彼得有 12 枚 1 元硬币，能换多少个 2 元硬币？', qy: '彼得有 12 个 1 蚊，可以换幾多个 2 蚊？', qe: 'Peter has 12 one-dollar coins. How many two-dollar coins can he exchange them for?',
-      a: '6', ans: 'num',
-      hint: '每 2 个 1 元换 1 个 2 元。', hinty: '每 2 个 1 蚊换 1 个 2 蚊。', hinte: 'Two 1-dollar coins make one 2-dollar coin.',
-      expe: '12 ÷ 2 = 6.',
-    },
-
-    /* ---------- TIMO-2020-2021-mock-Primary-1 ---------- */
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q1',
-      q: '玛丽有一个哥哥和三个妹妹，玛丽的哥哥有几个妹妹？', qy: '玛丽有一个阿哥同三个细妹，玛丽个阿哥有幾多个细妹？', qe: 'Mary has one elder brother and three younger sisters. How many sisters does Mary\'s brother have?',
-      a: '4', ans: 'num',
-      hint: '玛丽自己也是妹妹。', hinty: '玛丽自己都系妹妹。', hinte: 'Mary herself is also a sister.',
-      expe: 'Three sisters plus Mary herself makes 4 sisters for the brother.',
-    },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q2',
-      q: '艾美、宾利、云妮各有一只宠物：猫、狗或兔。艾美养的不是猫，宾利养的是兔子，云妮养的是什么？', qy: '艾美、宾利、云妮各有一只宠物：猫、狗或者兔。艾美养嘅唔系猫，宾利养嘅系兔，云妮养嘅系咩？', qe: 'Amy, Benny and Winnie each have a cat, a dog or a bunny. Amy does not have a cat, Benny has a bunny. What does Winnie have?',
-      a: '猫', ans: 'choice', opts: ['猫', '狗', '兔'], optse: ['cat', 'dog', 'bunny'],
-      hint: '宾利占了兔，剩下猫和狗。', hinty: '宾利要咗兔，剩低猫同狗。', hinte: 'Benny has the bunny. Cat and dog are left.',
-      expe: 'Benny has the bunny. Amy is not the cat, so Amy has the dog and Winnie has the cat.',
-    },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q3',
-      q: '要把一个蛋糕切成 4 份，最少要切几刀？', qy: '要将一个蛋糕切成 4 份，最少要切幾多刀？', qe: 'At least how many cuts are needed to cut a cake into 4 parts?',
-      a: '2', ans: 'num',
-      hint: '一刀切两半，两刀呢？', hinty: '一刀切两半，两刀呢？', hinte: 'One cut makes two halves. What about two cuts?',
-      expe: 'Two crossing cuts make 4 parts.',
-    },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q4',
-      q: '约翰写了一个两位数。彼得问「是 16 吗？」，约翰说「有一个数字对，但位置错了」。彼得再问「是 67 吗？」，约翰说「有一个数字对，但位置错了」。这个数是多少？', qy: '约翰写咗一个两位数。彼得问「系 16 咩？」，约翰话「有一个数字啱，但位置错咗」。彼得再问「系 67 咩？」，约翰话「有一个数字啱，但位置错咗」。呢个数系几多？', qe: 'John wrote a 2-digit number. For 16: "one digit is right but in the wrong place." For 67: same answer. What is the number?',
-      a: '71', ans: 'num',
-      hint: '16 里有 1 或 6；67 里有 6 或 7。共同的那个数字不能在自己的位置上。', hinty: '16 里面有 1 或者 6；67 里面有 6 或者 7。共同嗰个数字唔可以喺自己位置。', hinte: 'The shared digit must be in the other place.',
-      expe: 'Take the 1 from 16 into the units place and the 7 from 67 into the tens place: 71 fits both hints.',
-    },
-    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q5',
-      q: '按规律：第 1 组 1 个圆，第 2 组 4 个圆，第 3 组 9 个圆。第 4 组有多少个圆？', qy: '跟规律：第 1 组 1 个圆，第 2 组 4 个圆，第 3 组 9 个圆。第 4 组有幾多个圆？', qe: 'Group 1 has 1 circle, group 2 has 4, group 3 has 9. How many in group 4?',
-      a: '16', ans: 'num',
-      hint: '1、4、9 分别是几个自己相乘？', hinty: '1、4、9 分别系几个自己乘自己？', hinte: '1, 4, 9 are squares. What is the next square?',
-      expe: '1 × 1, 2 × 2, 3 × 3, so group 4 has 4 × 4 = 16 circles.',
-    },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q6',
-      q: '3 连加 10 次，等于多少？', qy: '3 连加 10 次，等于几多？', qe: 'What is 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3?',
-      a: '30', ans: 'num',
-      hint: '10 个 3 是多少？', hinty: '10 个 3 系几多？', hinte: 'What is ten 3s?',
-      expe: '3 × 10 = 30.',
-    },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q7',
-      q: '82 减 19 再减 42 等于多少？', qy: '82 减 19 再减 42 等于几多？', qe: 'What is 82 − 19 − 42?',
-      a: '21', ans: 'num',
-      hint: '82 减 42 是多少？', hinty: '82 减 42 系几多？', hinte: 'What is 82 − 42?',
-      expe: '82 − 42 = 40, then 40 − 19 = 21.',
-    },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q8',
-      q: '22 加多少等于 30？', qy: '22 加幾多等于 30？', qe: '22 + ___ = 30. What number fills the blank?',
-      a: '8', ans: 'num',
-      hint: '30 减 22。', hinty: '30 减 22。', hinte: 'Do 30 − 22.',
-      expe: '30 − 22 = 8.',
-    },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q9',
-      q: '1 加 2 加 3 加 4 加 5 加 6 加 7 加 8 加 9 加 10 加 11 等于多少？', qy: '1 加 2 加 3 加 4 加 5 加 6 加 7 加 8 加 9 加 10 加 11 等于几多？', qe: 'What is 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11?',
-      a: '66', ans: 'num',
-      hint: '1+10、2+9、3+8……这样配对。', hinty: '1+10、2+9、3+8……咁样配对。', hinte: 'Pair them: 1+10, 2+9, 3+8...',
-      expe: '1 + 2 + ... + 10 = 55, plus 11 makes 66.',
-    },
-    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q10',
-      q: 'A 和 B 都是一位数，18 减 A 等于 B，A 是多少？（答案页给 9）', qy: 'A 同 B 都系一位数，18 减 A 等于 B，A 系几多？（答案页畀 9）', qe: 'A and B are 1-digit numbers and 18 − A = B. What is A?',
-      a: '9', ans: 'num',
-      hint: '18 减几多会得到一位数？', hinty: '18 减幾多会得到一位数？', hinte: '18 minus what gives a single digit?',
-      expe: 'A is one digit, so the largest is 9: 18 − 9 = 9 and A = B = 9.',
-    },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q11',
-      q: '艾美有 10 个苹果，约翰有 4 个。要让两人一样多，艾美要给约翰多少个？', qy: '艾美有 10 个苹果，约翰有 4 个。要让两个人一样多，艾美要畀约翰幾多个？', qe: 'Amy has 10 apples and John has 4. How many must Amy give John so they are equal?',
-      a: '3', ans: 'num',
-      hint: '一共 14 个，一样多每人几个？', hinty: '一共 14 个，一样多每人幾多个？', hinte: 'There are 14 in total. If equal, how many each?',
-      expe: 'There are 14 apples, so 7 each. John already has 4, so Amy gives him 3.',
-    },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q12',
-      q: '在 1、3、5、7 之间填加号或减号，使 1 3 5 7 = 6 成立。第一个符号是加还是减？（本卷 Q12 与原卷结构同型）', qy: '喺 1、3、5、7 之间填加号或者减号，令 1 3 5 7 = 6 成立。第一个符号系加定减？', qe: 'Put + or − between 1, 3, 5, 7 so the result is 6. Is the first sign + or −?',
-      a: '+', ans: 'choice', opts: ['+', '−'], optse: ['+', '−'],
-      hint: '先全加得到 16，比 6 大 10。', hinty: '先全加得到 16，比 6 大 10。', hinte: 'All plus gives 16, ten too many.',
-      exp: '1 加 3 减 5 加 7 等于 6，所以第一个是加号。', expe: '1 + 3 − 5 + 7 = 6, so the first sign is +.',
-      howto: '换成减号会让结果少两倍那个数，按差值选要换的数。', howtoe: 'Switching to minus lowers the total by twice that number.' },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q13',
-      q: '四个小孩一共有 11 个气球，每人数量都不同，而且每人至少 1 个。气球最多的那个有多少个？', qy: '四个细路一共有 11 个气球，每人数量都唔同，而且每人至少有 1 个。气球最多嘅嗰个有幾多个？', qe: 'Four children have 11 balloons in total, all different, at least one each. How many does the one with most have?',
-      a: '5', ans: 'num',
-      hint: '先给三个人尽量少：1、2、3。', hinty: '先畀三个人尽量少：1、2、3。', hinte: 'Give the others as few as possible: 1, 2, 3.',
-      expe: 'Give the other three as few as possible: 1 + 2 + 3 = 6, leaving 5 for the fourth child.',
-    },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q14',
-      q: '个位数是 0 的两位数有多少个？', qy: '个位数系 0 嘅两位数有幾多个？', qe: 'How many two-digit numbers end in 0?',
-      a: '9', ans: 'num',
-      hint: '十位可以是 1 到 9。', hinty: '十位可以系 1 到 9。', hinte: 'The tens digit can be 1 to 9.',
-      expe: '10, 20, 30, 40, 50, 60, 70, 80 and 90 make 9 numbers.',
-    },
-    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q15',
-      q: '按规律：1、4、7、10、13，下一个是多少？', qy: '跟规律：1、4、7、10、13，下一个系几多？', qe: 'Pattern: 1, 4, 7, 10, 13. What comes next?',
-      a: '16', ans: 'num',
-      hint: '每次加了多少？', hinty: '每次加咗幾多？', hinte: 'How much is added each time?',
-      expe: 'Each term adds 3, so 13 + 3 = 16.',
-    },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q16',
-      q: '一个正方形被分成 2 行 2 列的 4 个小正方形。图中一共有多少个正方形（大小都算）？', qy: '一个正方形分成 2 行 2 列嘅 4 个细正方形。图中一共有幾多个正方形（大细都计）？', qe: 'A square is cut into 2 rows and 2 columns. How many squares in total?',
-      a: '5', ans: 'num',
-      hint: '4 个小的加 1 个大的。', hinty: '4 个细嘅加 1 个大嘅。', hinte: '4 small plus 1 big.',
-      exp: '4 加 1 等于 5。', expe: '4 + 1 = 5.',
-      howto: '按大小分类数。', howtoe: 'Count by size.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q17',
-      q: '一堆立方体：上面 2 个，下面 4 个。最少由多少个立方体组成？', qy: '一堆立方体：上面 2 个，下面 4 个。最少由幾多个立方体组成？', qe: 'A stack of cubes: 2 on top, 4 below. At least how many cubes?',
-      a: '6', ans: 'num',
-      hint: '按层加起来。', hinty: '按层加埋。', hinte: 'Add layer by layer.',
-      exp: '2 加 4 等于 6。', expe: '2 + 4 = 6.',
-      howto: '按层数，被挡住的那块也要算。', howtoe: 'Count by layer; hidden cubes count too.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q18',
-      q: '一个三角形被一条线分成 2 个小三角形。图中一共有多少个三角形（大小都算）？', qy: '一个三角形被一条线分成 2 个细三角形。图中一共有幾多个三角形（大细都计）？', qe: 'A triangle is split by one line into 2 small triangles. How many triangles in total?',
-      a: '3', ans: 'num',
-      hint: '2 个小的加原来那个大的。', hinty: '2 个细嘅加原来嗰个大嘅。', hinte: '2 small plus the original big one.',
-      exp: '2 加 1 等于 3。', expe: '2 + 1 = 3.',
-      howto: '按大小分类数。', howtoe: 'Count by size.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q19',
-      q: '下面五个图案中，哪一个和其他的不相似？相似的图案是同一个图形旋转得到。', qy: '下面五个图案之中，边一个同其他唔相似？相似嘅图案系同一个图形转出嚟。', qe: 'Which of the five shapes is not similar to the others? Similar ones are the same figure rotated.',
-      a: 'E', ans: 'choice', opts: ['A', 'B', 'C', 'D', 'E'],
-      hint: '相似只看形状，不看转了几多度。', hinty: '相似只睇形状，唔睇转咗幾多度。', hinte: 'Similarity is about shape only.',
-      exp: 'A 到 D 是同一个三角形转过来，E 是五边形，所以选 E。', expe: 'A to D are the same triangle rotated; E is a pentagon, so E.',
-      howto: '在心里把图形转一转，看能不能和别的重合。', howtoe: 'Mentally rotate each shape to see which ones coincide.' },
-    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q20',
-      q: '按规律：圆、方、三角、圆、圆、方、三角、圆、__、方、三角。空格是什么？', qy: '跟规律：圆、方、三角、圆、圆、方、三角、圆、__、方、三角。空格系咩？', qe: 'Pattern: circle, square, triangle, circle, circle, square, triangle, circle, __, square, triangle. What fills the blank?',
-      a: '圆', ans: 'choice', opts: ['圆', '方', '三角'], optse: ['circle', 'square', 'triangle'],
-      hint: '四个一循环：圆、方、三角、圆。', hinty: '四个一循环：圆、方、三角、圆。', hinte: 'The block is four long: circle, square, triangle, circle.',
-      exp: '第 9 个位置是这一组的最后一个，也就是圆。', expe: 'Position 9 is the last of the block: circle.',
-      howto: '先数一组几个，再算目标位置落在第几个。', howtoe: 'Count the block length, then locate the position.' },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q21',
-      q: '把 8 粒糖果分成一样多的两份，每份多少粒？', qy: '将 8 粒糖分成一样多嘅两份，每份幾多粒？', qe: 'Split 8 candies into two equal groups. How many in each?',
-      a: '4', ans: 'num',
-      hint: '一半是多少？', hinty: '一半系幾多？', hinte: 'What is half of 8?',
-      expe: 'Half of 8 is 4.',
-    },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q22',
-      q: '从 1、3、5、8 里选 2 个不重复的数字组成两位数，能组成多少个奇数？', qy: '从 1、3、5、8 里面拣 2 个唔重复嘅数字组成两位数，可以组成幾多个奇数？', qe: 'From 1, 3, 5, 8 pick 2 digits without repeating to make two-digit numbers. How many are odd?',
-      a: '9', ans: 'num',
-      hint: '奇数要个位是 1、3、5。', hinty: '奇数要个位系 1、3、5。', hinte: 'Odd numbers need units digit 1, 3 or 5.',
-      expe: 'The units digit is 1, 3 or 5 and the tens digit has 3 choices each, so 3 × 3 = 9 odd numbers.',
-    },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q23',
-      q: '从学校到车站有 3 条路，从车站到图书馆有 2 条路。经车站从学校到图书馆有多少种走法？', qy: '由学校去车站有 3 条路，由车站去图书馆有 2 条路。经车站由学校去图书馆有幾多种走法？', qe: 'There are 3 ways from school to the station and 2 from the station to the library. How many ways from school to the library via the station?',
-      a: '6', ans: 'num',
-      hint: '每一段都配一次。', hinty: '每一段都配一次。', hinte: 'Each first-leg choice pairs with each second-leg choice.',
-      expe: '3 × 2 = 6 ways.',
-    },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q24',
-      q: '用 3、6、1、8 各用一次，组成最小的四位数是多少？', qy: '用 3、6、1、8 每个用一次，组成最细嘅四位数系几多？', qe: 'Use 3, 6, 1, 8 once each to make the smallest 4-digit number.',
-      a: '1368', ans: 'num',
-      hint: '最小的数字放千位。', hinty: '最细嘅数字放千位。', hinte: 'Put the smallest digit first.',
-      expe: 'Put the digits from smallest to largest: 1368.',
-    },
-    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q25',
-      q: '从 0、3、5、6、9 里选 2 个不重复的数字组成两位数，能组成多少个 5 的倍数？', qy: '从 0、3、5、6、9 里面拣 2 个唔重复嘅数字组成两位数，可以组成幾多个 5 嘅倍数？', qe: 'From 0, 3, 5, 6, 9 pick 2 digits without repeating to make two-digit multiples of 5. How many?',
-      a: '7', ans: 'num',
-      hint: '5 的倍数个位是 0 或 5；十位不能是 0。', hinty: '5 嘅倍数个位系 0 或者 5；十位唔可以系 0。', hinte: 'Multiples of 5 end in 0 or 5; the tens digit cannot be 0.',
-      expe: 'Ending in 0: 30, 50, 60, 90 (4); ending in 5: 35, 65, 95 (3); so 7 multiples.',
+  const MINUS = '−';
+  /* 填加减号题：原卷要写完整算式。语音/点选都难，改成「选哪一条算式对」——
+     选项是全部可能里挑的（正确的 + 3 条错的），算式写全，孩子要逐条算，不是猜一个符号 */
+  function signs(nums, target) {
+    const gaps = nums.length - 1, all = [];
+    for (let m = 0; m < (1 << gaps); m++) {
+      let v = nums[0], s = String(nums[0]);
+      for (let i = 0; i < gaps; i++) {
+        const plus = !(m & (1 << (gaps - 1 - i)));
+        v += plus ? nums[i + 1] : -nums[i + 1];
+        s += (plus ? ' + ' : ` ${MINUS} `) + nums[i + 1];
+      }
+      all.push({ s, v });
     }
+    const good = all.filter(x => x.v === target);
+    if (good.length !== 1) throw new Error('signs: not unique ' + nums + '=' + target);
+    const wrong = all.filter(x => x.v !== target).sort((x, y) => Math.abs(x.v - target) - Math.abs(y.v - target)).slice(0, 3);
+    return { a: good[0].s, opts: [good[0].s].concat(wrong.map(x => x.s)), show: nums.join(' __ ') + ' = ' + target };
+  }
+  const SHAPE = { opts: ['圆', '方', '三角'], optse: ['circle', 'square', 'triangle'] };
 
+  const BANK = [
+    /* ================= TIMO-2017-heat-Kindergarten ================= */
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q1', a: '3', ans: 'num',
+      q: '积及的爸爸有四个孩子，其中两个是儿子。积及有多少个兄弟姊妹？', qy: '积及爸爸有四个细路，其中两个系仔。积及有几多个兄弟姊妹？',
+      qe: "Jacob's father has four children. Two of them are sons. How many brothers and sisters does Jacob have?",
+      hint: '积及自己是儿子之一，兄弟姊妹不算自己。', hinty: '积及自己系其中一个仔，兄弟姊妹唔计自己。', hinte: 'Jacob is one of the sons. Do not count Jacob himself.',
+      exp: '四个孩子去掉积及自己，剩下 3 个：1 个哥哥或弟弟、2 个姐妹。', expe: 'Four children minus Jacob himself leaves 3: one brother and two sisters.',
+      howto: '问「有几个兄弟姊妹」时，先算全家孩子，再减去自己。', howtoe: 'Count all the children, then take away the person being asked about.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q2', fig: 'timo_fig/k17-q2.png', a: '方块', ans: 'choice', opts: ['圆', '三角', '方块'], optse: ['circle', 'triangle', 'square'],
+      q: '看图：第一个天秤，2 个方块和 3 个三角一样重；第二个天秤，1 个三角和 3 个圆一样重。哪个最重？',
+      qy: '睇图：第一个天秤，2 个方块同 3 个三角一样重；第二个天秤，1 个三角同 3 个圆一样重。边个最重？',
+      qe: 'Look at the picture: 2 squares balance 3 triangles, and 1 triangle balances 3 circles. Which is the heaviest?',
+      hint: '个数少的那边，每一个更重。', hinty: '个数少嗰边，每一个更重。', hinte: 'On a balanced scale, the side with fewer pieces has heavier pieces.',
+      exp: '2 个方块抵 3 个三角，所以方块比三角重；1 个三角抵 3 个圆，所以三角比圆重。方块最重。', expe: '2 squares balance 3 triangles, so a square is heavier than a triangle; 1 triangle balances 3 circles, so a triangle is heavier than a circle. The square is heaviest.',
+      howto: '天秤平衡时，个数少的那种更重；两台天秤连起来排顺序。', howtoe: 'When balanced, fewer pieces means heavier pieces. Chain the two scales to rank them.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q3', fig: 'timo_fig/k17-q3.png', a: '6', ans: 'num',
+      q: '看图：数字排成三角形，方格里是什么数？', qy: '睇图：啲数字排成三角形，方格入面系咩数？', qe: 'Look at the number triangle. What number goes in the box?',
+      hint: '每个数等于它头上两个数加起来。', hinty: '每个数等于佢头顶两个数加埋。', hinte: 'Each number is the sum of the two numbers just above it.',
+      exp: '方格头上是 3 和 3，3 加 3 等于 6。', expe: 'The two numbers above the box are 3 and 3, and 3 + 3 = 6.',
+      howto: '数字三角形先看一个数和它上面两个数的关系，再用到空格上。', howtoe: 'Find how a number relates to the two above it, then use that rule for the box.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q4', show: '1, 1, 2, 3, 5, 8, __', a: '13', ans: 'num',
+      q: '按规律：1、1、2、3、5、8，下一个是多少？', qy: '跟规律：1、1、2、3、5、8，下一个系几多？', qe: 'Pattern: 1, 1, 2, 3, 5, 8. What comes next?',
+      hint: '把前面两个数加起来看看。', hinty: '试下将前面两个数加埋。', hinte: 'Try adding the two numbers before it.',
+      exp: '每个数是前面两个数之和：5 加 8 等于 13。', expe: 'Each number is the sum of the two before it: 5 + 8 = 13.',
+      howto: '规律题先算相邻两数的差；差在变，就试试前两个数相加。', howtoe: 'Check the differences first; if they keep changing, try adding the two previous numbers.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2017-heat-Kindergarten Q5', fig: 'timo_fig/k17-q5.png', a: '24', ans: 'num',
+      q: '看图：每组是一圈打叉的格子，第 1 组 1 个，第 2 组 8 个，第 3 组 16 个。第 4 组（7 乘 7 的方格最外一圈）有多少个？',
+      qy: '睇图：每组系一圈打交叉嘅格，第 1 组 1 个，第 2 组 8 个，第 3 组 16 个。第 4 组（7 乘 7 嘅方格最外一圈）有几多个？',
+      qe: 'Look at the picture: each group is the outer ring of a square grid: 1, 8, 16. How many marks in the 4th group, the outer ring of a 7 by 7 grid?',
+      hint: '一圈有 4 条边，每条边 7 格，四个角不要数两次。', hinty: '一圈有 4 条边，每条边 7 格，四个角唔好数两次。', hinte: 'A ring has 4 sides of 7, but do not count the 4 corners twice.',
+      exp: '每组比上一组多 8 个：1、8、16，再加 8 是 24。也可以算 7 乘 4 减 4 个角等于 24。', expe: 'Each group adds 8: 1, 8, 16, then 24. Or 4 sides of 7 is 28, minus the 4 corners counted twice: 24.',
+      howto: '数一圈的格子：边长乘 4，再减去重复的 4 个角。', howtoe: 'For a ring: side length times 4, minus the 4 corners counted twice.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q6', show: '3 + 3 + 3 + 3 + 3', a: '15', ans: 'num',
+      q: '3 加 3 加 3 加 3 加 3 等于多少？', qy: '3 加 3 加 3 加 3 加 3 等于几多？', qe: 'What is 3 + 3 + 3 + 3 + 3?',
+      hint: '3 个 3 是 9，再加两个 3。', hinty: '3 个 3 系 9，再加两个 3。', hinte: 'Three 3s make 9. Add two more 3s.',
+      exp: '3、6、9、12、15，五个 3 是 15。', expe: 'Count by threes: 3, 6, 9, 12, 15.',
+      howto: '同一个数连加，可以一个一个跳着数，数清加了几次。', howtoe: 'For repeated adding, skip-count and keep track of how many times.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q7', show: '17 − 8 − 7', a: '2', ans: 'num',
+      q: '17 减 8 再减 7 等于多少？', qy: '17 减 8 再减 7 等于几多？', qe: 'What is 17 − 8 − 7?',
+      hint: '先算 17 减 8。', hinty: '先计 17 减 8。', hinte: 'Start with 17 − 8.',
+      exp: '17 减 8 等于 9，9 减 7 等于 2。', expe: '17 − 8 = 9, and 9 − 7 = 2.',
+      howto: '连减从左到右一步一步算，每步写下中间的数。', howtoe: 'Subtract left to right, one step at a time.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q8', show: '12 − A = 8', a: '4', ans: 'num',
+      q: 'A 是一位数，12 减 A 等于 8，A 是多少？', qy: 'A 系一位数，12 减 A 等于 8，A 系几多？', qe: 'A is a 1-digit number and 12 − A = 8. What is A?',
+      hint: '想：12 减几等于 8？', hinty: '谂下：12 减几等于 8？', hinte: 'What do you take from 12 to leave 8?',
+      exp: '12 减 8 等于 4，所以 A 是 4。验算：12 减 4 等于 8。', expe: '12 − 8 = 4, so A = 4. Check: 12 − 4 = 8.',
+      howto: '求减去的数：用大数减结果，再代回去验算。', howtoe: 'The missing number is start minus result; put it back in to check.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q9', show: '14 + 11 + 8', a: '33', ans: 'num',
+      q: '14 加 11 加 8 等于多少？', qy: '14 加 11 加 8 等于几多？', qe: 'What is 14 + 11 + 8?',
+      hint: '先算 14 加 11。', hinty: '先计 14 加 11。', hinte: 'First do 14 + 11.',
+      exp: '14 加 11 等于 25，25 加 8 等于 33。', expe: '14 + 11 = 25, and 25 + 8 = 33.',
+      howto: '连加先算容易的一步，记住中间结果再加下一个。', howtoe: 'Add step by step and remember the middle answer.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2017-heat-Kindergarten Q10', show: '37 + A = 40', a: '3', ans: 'num',
+      q: 'A 是一位数，37 加 A 等于 40，A 是多少？', qy: 'A 系一位数，37 加 A 等于 40，A 系几多？', qe: 'A is a 1-digit number and 37 + A = 40. What is A?',
+      hint: '从 37 往上数到 40。', hinty: '由 37 向上数到 40。', hinte: 'Count up from 37 to 40.',
+      exp: '38、39、40，数了 3 下，A 是 3。', expe: '38, 39, 40: three steps, so A = 3.',
+      howto: '求加上的数：用和减去已知的数，或者往上数。', howtoe: 'The missing addend is total minus the known number, or count up.' },
+    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q11', a: '4', ans: 'num',
+      q: '艾美有 8 个苹果，约翰一个都没有。要让两人苹果一样多，艾美要给约翰多少个？', qy: '艾美有 8 个苹果，约翰一个都冇。要两个人一样多，艾美要畀约翰几多个？',
+      qe: 'Amy has 8 apples and John has none. How many must Amy give John so they have the same?',
+      hint: '8 个分成一样多的两份，每份几个？', hinty: '8 个分成一样多嘅两份，每份几个？', hinte: 'Split 8 into two equal shares.',
+      exp: '8 个平分两人，每人 4 个，所以艾美给约翰 4 个。', expe: '8 shared by two is 4 each, so Amy gives John 4.',
+      howto: '给到一样多：先算两人一共多少、每人应得多少，再看要给几个。', howtoe: 'Find the total, halve it, then see how many must move.' },
+    Object.assign({ lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q12', ans: 'choice',
+      q: '在 2、3、4、5 中间填加号或减号，使结果等于 14。哪一条算式对？', qy: '喺 2、3、4、5 中间填加号或者减号，令结果等于 14。边一条算式啱？',
+      qe: 'Put + or − between 2, 3, 4, 5 to make 14. Which one is right?',
+      hint: '每条算式都算一算，看哪条等于 14。', hinty: '每条算式都计下，睇边条等于 14。', hinte: 'Work out each one and find the one that makes 14.',
+      exp: '2 加 3 加 4 加 5 等于 14，全部是加号。', expe: '2 + 3 + 4 + 5 = 14, all plus signs.',
+      howto: '先全部用加号算一次：太大了就把某个加号换成减号，结果会少两倍那个数。', howtoe: 'Try all plus signs first; changing a + to − lowers the total by twice that number.' }, signs([2, 3, 4, 5], 14)),
+    Object.assign({ lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q13', ans: 'choice',
+      q: '在 5、4、3 中间填加号或减号，使结果等于 4。哪一条算式对？', qy: '喺 5、4、3 中间填加号或者减号，令结果等于 4。边一条算式啱？',
+      qe: 'Put + or − between 5, 4, 3 to make 4. Which one is right?',
+      hint: '每条算式都算一算，看哪条等于 4。', hinty: '每条算式都计下，睇边条等于 4。', hinte: 'Work out each one and find the one that makes 4.',
+      exp: '5 减 4 等于 1，1 加 3 等于 4。', expe: '5 − 4 = 1, then 1 + 3 = 4.',
+      howto: '全部用加号是 12，比 4 大 8；把 4 前面的加号换成减号，正好少 8。', howtoe: 'All plus gives 12, which is 8 too many; turning +4 into −4 removes exactly 8.' }, signs([5, 4, 3], 4)),
+    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q14', show: '12 − A = 5 + 4', a: '3', ans: 'num',
+      q: 'A 是一位数，12 减 A 等于 5 加 4，A 是多少？', qy: 'A 系一位数，12 减 A 等于 5 加 4，A 系几多？', qe: 'A is a 1-digit number and 12 − A = 5 + 4. What is A?',
+      hint: '先算右边 5 加 4。', hinty: '先计右边 5 加 4。', hinte: 'Work out 5 + 4 first.',
+      exp: '5 加 4 等于 9；12 减 A 等于 9，所以 A 是 3。', expe: '5 + 4 = 9, and 12 − A = 9, so A = 3.',
+      howto: '等号两边一样大：先把能算的一边算出来，再求 A。', howtoe: 'Both sides are equal: work out the known side first, then find A.' },
+    { lv: 'k2', sec: '数论', src: 'TIMO-2017-heat-Kindergarten Q15', show: '13, 11, 9, 7, __', a: '5', ans: 'num',
+      q: '按规律：13、11、9、7，下一个是多少？', qy: '跟规律：13、11、9、7，下一个系几多？', qe: 'Pattern: 13, 11, 9, 7. What comes next?',
+      hint: '每次少了几个？', hinty: '每次少咗几多？', hinte: 'How much smaller is each number?',
+      exp: '每次减 2，7 减 2 等于 5。', expe: 'Each time it goes down by 2: 7 − 2 = 5.',
+      howto: '数列先算相邻两个数差多少，再用这个差往下推。', howtoe: 'Find the gap between neighbours, then carry it on.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q16', fig: 'timo_fig/k17-q16.png', a: '6', ans: 'num',
+      q: '看图：图中一共有多少个正方形？大的小的都要数。', qy: '睇图：图入面一共有几多个正方形？大嘅细嘅都要数。', qe: 'Look at the picture. How many squares are there, big and small?',
+      hint: '先数小格，再找由 4 个小格拼成的大正方形。', hinty: '先数细格，再搵由 4 个细格拼成嘅大正方形。', hinte: 'Count the small squares, then look for big ones made of 4 small squares.',
+      exp: '小正方形 5 个，左边 4 个小格拼成 1 个大正方形，一共 6 个。', expe: '5 small squares plus 1 big square made of 4 small ones: 6.',
+      howto: '数图形要分大小：先数最小的，再数两格乘两格的，最后加起来。', howtoe: 'Count by size: smallest first, then 2 by 2, then add them up.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q18', fig: 'timo_fig/k17-q18.png', a: '6', ans: 'num',
+      q: '看图：这个多边形有多少条边？', qy: '睇图：呢个多边形有几多条边？', qe: 'Look at the picture. How many sides does this polygon have?',
+      hint: '从一条边开始，用手指沿着边数一圈。', hinty: '由一条边开始，用手指沿住边数一圈。', hinte: 'Start at one side and trace around with your finger.',
+      exp: '这是六边形，一共 6 条边。', expe: 'It is a hexagon with 6 sides.',
+      howto: '数边：先在起点做记号，沿着走一圈回到起点为止。', howtoe: 'Mark where you start and go once around.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q19', fig: 'timo_fig/k17-q19.png', a: '7', ans: 'num',
+      q: '看图：这个箭头形状有多少只角？', qy: '睇图：呢个箭咀形有几多只角？', qe: 'Look at the arrow shape. How many angles does it have?',
+      hint: '每两条边相交的地方就是一只角，顺着边数。', hinty: '每两条边相交嘅地方就系一只角，跟住边数。', hinte: 'Every corner where two sides meet is an angle. Go around and count.',
+      exp: '箭头尖 1 只，两边肩膀各 2 只，底下 2 只，一共 7 只角。', expe: '1 at the tip, 2 on each shoulder, 2 at the bottom: 7 angles.',
+      howto: '多边形的角数和边数一样多，可以数边来验算。', howtoe: 'A polygon has as many angles as sides, so count the sides to check.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2017-heat-Kindergarten Q20', show: '○ □ △ ○ □ △ ○ __ △', a: '方', ans: 'choice', opts: SHAPE.opts, optse: SHAPE.optse,
+      q: '按规律：圆、方、三角、圆、方、三角、圆、空格、三角。空格是什么？', qy: '跟规律：圆、方、三角、圆、方、三角、圆、空格、三角。空格系咩？',
+      qe: 'Pattern: circle, square, triangle, circle, square, triangle, circle, blank, triangle. What is the blank?',
+      hint: '三个一组：圆、方、三角。', hinty: '三个一组：圆、方、三角。', hinte: 'It repeats in threes: circle, square, triangle.',
+      exp: '圆后面总是方，所以空格是方。', expe: 'A square always comes after a circle.',
+      howto: '图形规律先找重复的一组，再看空格在组里第几个。', howtoe: 'Find the repeating block, then see where the blank falls in it.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q21', show: '☆☆☆☆☆☆☆☆☆☆', a: '5', ans: 'num',
+      q: '把 10 颗星分成一样多的两份，每份多少颗？', qy: '将 10 粒星分成一样多嘅两份，每份几多粒？', qe: 'Split 10 stars into 2 equal groups. How many in each group?',
+      hint: '一颗给左边、一颗给右边，轮流分。', hinty: '一粒畀左边、一粒畀右边，轮流分。', hinte: 'Give one to each side in turn.',
+      exp: '10 的一半是 5，每份 5 颗。', expe: 'Half of 10 is 5.',
+      howto: '分成两等份就是找一半：哪个数加自己等于总数。', howtoe: 'Two equal groups means half: which number added to itself makes the total?' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q22', show: '1, 2, 3, 6, 11, 20, 37, 68', a: '4', ans: 'num',
+      q: '1、2、3、6、11、20、37、68 里有多少个单数（奇数）？', qy: '1、2、3、6、11、20、37、68 入面有几多个单数？', qe: 'How many odd numbers are in 1, 2, 3, 6, 11, 20, 37, 68?',
+      hint: '只看个位：1、3、5、7、9 是单数。', hinty: '淨系睇个位：1、3、5、7、9 系单数。', hinte: 'Look only at the last digit: 1, 3, 5, 7, 9 are odd.',
+      exp: '单数是 1、3、11、37，一共 4 个。', expe: 'The odd ones are 1, 3, 11, 37: four.',
+      howto: '判断单双数只看个位，逐个打勾数。', howtoe: 'Odd or even depends on the last digit only; tick them one by one.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q23', show: '1, 4, 5, 9, 14, 23, 37, 60', a: '3', ans: 'num',
+      q: '1、4、5、9、14、23、37、60 里有多少个双数（偶数）？', qy: '1、4、5、9、14、23、37、60 入面有几多个双数？', qe: 'How many even numbers are in 1, 4, 5, 9, 14, 23, 37, 60?',
+      hint: '只看个位：0、2、4、6、8 是双数。', hinty: '淨系睇个位：0、2、4、6、8 系双数。', hinte: 'Look only at the last digit: 0, 2, 4, 6, 8 are even.',
+      exp: '双数是 4、14、60，一共 3 个。', expe: 'The even ones are 4, 14, 60: three.',
+      howto: '判断单双数只看个位，逐个打勾数。', howtoe: 'Odd or even depends on the last digit only; tick them one by one.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q24', a: '421', ans: 'num',
+      q: '用 1、2、4 三个数字各用一次，组成最大的三位数是多少？', qy: '用 1、2、4 三个数字每个用一次，组成最大嘅三位数系几多？', qe: 'Use 1, 2 and 4 once each. What is the largest 3-digit number?',
+      hint: '最大的数字放最前面。', hinty: '最大嘅数字放最前面。', hinte: 'Put the biggest digit first.',
+      exp: '从大到小排：4、2、1，就是 421。', expe: 'Biggest to smallest: 4, 2, 1 makes 421.',
+      howto: '组最大的数：数字从大到小排；组最小的数：从小到大排。', howtoe: 'Largest number: digits from big to small. Smallest: small to big.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2017-heat-Kindergarten Q25', a: '24', ans: 'num',
+      q: '彼得有 4 个 1 元、2 个 5 元和 1 个 10 元硬币，他最多能买多少元的纪念品？', qy: '彼得有 4 个一蚊、2 个五蚊同 1 个十蚊，佢最多可以买几多蚊嘅纪念品？',
+      qe: 'Peter has four $1 coins, two $5 coins and one $10 coin. What is the most a souvenir can cost for him to buy it?',
+      hint: '最多能买多少，就是全部钱加起来。', hinty: '最多买几多，即系全部钱加埋。', hinte: 'The most he can pay is all his money added up.',
+      exp: '4 个 1 元是 4 元，2 个 5 元是 10 元，再加 10 元：4 加 10 加 10 等于 24 元。', expe: '$4 + $10 + $10 = $24.',
+      howto: '数钱：同一种硬币先合起来，再把几种加在一起。', howtoe: 'Group the same coins first, then add the groups.' },
+
+    /* ================= TIMO-2018-final-Kindergarten ================= */
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q1', a: '5', ans: 'num',
+      q: '积及是家里最小的男孩，他有 4 个姐姐，没有兄弟。积及家一共有多少个孩子？', qy: '积及系屋企最细嘅男仔，佢有 4 个家姐，冇兄弟。积及屋企一共有几多个细路？',
+      qe: "Jacob is the youngest boy in the family. He has 4 elder sisters and no brothers. How many children are in Jacob's family?",
+      hint: '别忘了算积及自己。', hinty: '唔好漏咗积及自己。', hinte: 'Remember to count Jacob himself.',
+      exp: '4 个姐姐加积及自己，一共 5 个孩子。', expe: '4 sisters plus Jacob makes 5 children.',
+      howto: '问「家里一共几个孩子」要把自己也算进去。', howtoe: 'When counting the whole family, include the person in the question.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q2', fig: 'timo_fig/k18-q2.png', a: '圆', ans: 'choice', opts: ['圆', '三角', '方块'], optse: ['circle', 'triangle', 'square'],
+      q: '看图：第一个天秤，1 个方块和 3 个三角一样重；第二个天秤，1 个三角和 2 个圆一样重。哪个最轻？',
+      qy: '睇图：第一个天秤，1 个方块同 3 个三角一样重；第二个天秤，1 个三角同 2 个圆一样重。边个最轻？',
+      qe: 'Look at the picture: 1 square balances 3 triangles, and 1 triangle balances 2 circles. Which is the lightest?',
+      hint: '个数多的那边，每一个更轻。', hinty: '个数多嗰边，每一个更轻。', hinte: 'On a balanced scale, the side with more pieces has lighter pieces.',
+      exp: '3 个三角才抵 1 个方块，三角比方块轻；2 个圆才抵 1 个三角，圆比三角轻。圆最轻。', expe: 'It takes 3 triangles to balance a square, and 2 circles to balance a triangle, so the circle is lightest.',
+      howto: '天秤平衡时，个数多的那种更轻；两台天秤连起来排顺序。', howtoe: 'When balanced, more pieces means lighter pieces. Chain the two scales.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q3', show: 'A, C, E, G, I, __', a: 'K', ans: 'choice', opts: ['J', 'K', 'L', 'M'],
+      q: '按规律：A、C、E、G、I，下一个字母是什么？', qy: '跟规律：A、C、E、G、I，下一个字母系咩？', qe: 'Pattern: A, C, E, G, I. What letter comes next?',
+      hint: '字母表里每次跳过一个字母。', hinty: '字母表入面每次跳过一个字母。', hinte: 'One letter is skipped each time.',
+      exp: 'A 跳过 B 到 C，I 跳过 J 就是 K。', expe: 'A skips B to C; I skips J to K.',
+      howto: '字母规律：把字母表念出来，看每次跳几个。', howtoe: 'Say the alphabet and see how many letters are skipped.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q4', show: '1, 8, 3, 6, 5, 4, __', a: '7', ans: 'num',
+      q: '按规律：1、8、3、6、5、4，下一个是多少？', qy: '跟规律：1、8、3、6、5、4，下一个系几多？', qe: 'Pattern: 1, 8, 3, 6, 5, 4. What comes next?',
+      hint: '隔一个看：1、3、5 和 8、6、4。', hinty: '隔一个睇：1、3、5 同 8、6、4。', hinte: 'Look at every other number: 1, 3, 5 and 8, 6, 4.',
+      exp: '单数位置是 1、3、5，每次加 2，下一个是 7。', expe: 'The 1st, 3rd, 5th numbers go 1, 3, 5, so the next is 7.',
+      howto: '一串数忽大忽小时，试试把它拆成隔一个的两串。', howtoe: 'If numbers jump up and down, split them into two alternating lists.' },
+    { lv: 'k2', sec: '逻辑', src: 'TIMO-2018-final-Kindergarten Q5', fig: 'timo_fig/k18-q5.png', a: '14', ans: 'num',
+      q: '看图：第 1 组 1 个，第 2 组 6 个，第 3 组 10 个，都打在最上和最下两行。第 4 组（每行 7 格）有多少个？',
+      qy: '睇图：第 1 组 1 个，第 2 组 6 个，第 3 组 10 个，都系最上同最下两行。第 4 组（每行 7 格）有几多个？',
+      qe: 'Look at the picture: groups have 1, 6, 10 marks in the top and bottom rows. How many in group 4, with 7 squares in each row?',
+      hint: '上面一行 7 个，下面一行也 7 个。', hinty: '上面一行 7 个，下面一行都 7 个。', hinte: 'The top row has 7 and the bottom row has 7.',
+      exp: '每行 7 个，两行就是 7 加 7 等于 14。', expe: 'Two rows of 7: 7 + 7 = 14.',
+      howto: '图形规律先看每组怎么变大，再算下一组。', howtoe: 'See how each group grows, then build the next one.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q6', show: '2 + 2 + 2 + 2 + 2', a: '10', ans: 'num',
+      q: '2 加 2 加 2 加 2 加 2 等于多少？', qy: '2 加 2 加 2 加 2 加 2 等于几多？', qe: 'What is 2 + 2 + 2 + 2 + 2?',
+      hint: '两个两个数：2、4、6……', hinty: '两个两个数：2、4、6……', hinte: 'Count by twos: 2, 4, 6...',
+      exp: '2、4、6、8、10，五个 2 是 10。', expe: 'Count by twos five times: 10.',
+      howto: '同一个数连加，可以跳着数，数清加了几次。', howtoe: 'Skip-count and keep track of how many times.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q7', show: '18 − 6 − 8', a: '4', ans: 'num',
+      q: '18 减 6 再减 8 等于多少？', qy: '18 减 6 再减 8 等于几多？', qe: 'What is 18 − 6 − 8?',
+      hint: '先算 18 减 6。', hinty: '先计 18 减 6。', hinte: 'Start with 18 − 6.',
+      exp: '18 减 6 等于 12，12 减 8 等于 4。', expe: '18 − 6 = 12, and 12 − 8 = 4.',
+      howto: '连减从左到右一步一步算。', howtoe: 'Subtract left to right, one step at a time.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q8', show: '10 − A = 3', a: '7', ans: 'num',
+      q: 'A 是一位数，10 减 A 等于 3，A 是多少？', qy: 'A 系一位数，10 减 A 等于 3，A 系几多？', qe: 'A is a 1-digit number and 10 − A = 3. What is A?',
+      hint: '想：10 减几还剩 3？', hinty: '谂下：10 减几仲剩 3？', hinte: 'What do you take from 10 to leave 3?',
+      exp: '10 减 3 等于 7，所以 A 是 7。', expe: '10 − 3 = 7, so A = 7.',
+      howto: '求减去的数：用大数减结果，再代回去验算。', howtoe: 'The missing number is start minus result; check by putting it back.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q9', show: '10 − 9 + 8 − 7 + 6 − 5 + 4 − 3 + 2 − 1', a: '5', ans: 'num',
+      q: '10 减 9 加 8 减 7 加 6 减 5 加 4 减 3 加 2 减 1 等于多少？', qy: '10 减 9 加 8 减 7 加 6 减 5 加 4 减 3 加 2 减 1 等于几多？',
+      qe: 'What is 10 − 9 + 8 − 7 + 6 − 5 + 4 − 3 + 2 − 1?',
+      hint: '两个两个看：10 减 9 是多少？8 减 7 呢？', hinty: '两个两个睇：10 减 9 系几多？8 减 7 呢？', hinte: 'Pair them: what is 10 − 9? And 8 − 7?',
+      exp: '每一对都等于 1：10−9、8−7、6−5、4−3、2−1，一共 5 对，所以是 5。', expe: 'Each pair (10−9, 8−7, 6−5, 4−3, 2−1) is 1, and there are 5 pairs: 5.',
+      howto: '长算式先找能配成一对的，每对结果一样就数有几对。', howtoe: 'Look for pairs with the same result, then count the pairs.' },
+    { lv: 'k2', sec: '算术', src: 'TIMO-2018-final-Kindergarten Q10', show: '12 + A = 20', a: '8', ans: 'num',
+      q: 'A 是一位数，12 加 A 等于 20，A 是多少？', qy: 'A 系一位数，12 加 A 等于 20，A 系几多？', qe: 'A is a 1-digit number and 12 + A = 20. What is A?',
+      hint: '从 12 往上数到 20。', hinty: '由 12 向上数到 20。', hinte: 'Count up from 12 to 20.',
+      exp: '20 减 12 等于 8，所以 A 是 8。', expe: '20 − 12 = 8, so A = 8.',
+      howto: '求加上的数：用和减去已知的数。', howtoe: 'The missing addend is total minus the known number.' },
+    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q11', a: '3', ans: 'num',
+      q: '艾美有 7 个梨，约翰有 1 个。要让两人一样多，艾美要给约翰多少个？', qy: '艾美有 7 个梨，约翰有 1 个。要两个人一样多，艾美要畀约翰几多个？',
+      qe: 'Amy has 7 pears and John has 1. How many must Amy give John so they have the same?',
+      hint: '两人一共几个？一样多的话每人几个？', hinty: '两个人一共几个？一样多嘅话每人几个？', hinte: 'How many altogether? How many each if equal?',
+      exp: '一共 8 个，一样多每人 4 个；约翰有 1 个，还差 3 个，所以给 3 个。', expe: '8 altogether means 4 each. John has 1, so Amy gives 3.',
+      howto: '给到一样多：总数除以 2 是每人应得的，再看少的那个还差几个。', howtoe: 'Half of the total is each share; see how many the smaller one is missing.' },
+    Object.assign({ lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q12', ans: 'choice',
+      q: '在 2、4、3、1 中间填加号或减号，使结果等于 10。哪一条算式对？', qy: '喺 2、4、3、1 中间填加号或者减号，令结果等于 10。边一条算式啱？',
+      qe: 'Put + or − between 2, 4, 3, 1 to make 10. Which one is right?',
+      hint: '每条算式都算一算，看哪条等于 10。', hinty: '每条算式都计下，睇边条等于 10。', hinte: 'Work out each one and find the one that makes 10.',
+      exp: '2 加 4 加 3 加 1 等于 10，全部是加号。', expe: '2 + 4 + 3 + 1 = 10, all plus signs.',
+      howto: '先全部用加号算一次，太大了再把某个加号换成减号。', howtoe: 'Try all plus first; if too big, change one + to −.' }, signs([2, 4, 3, 1], 10)),
+    Object.assign({ lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q13', ans: 'choice',
+      q: '在 6、1、3 中间填加号或减号，使结果等于 2。哪一条算式对？', qy: '喺 6、1、3 中间填加号或者减号，令结果等于 2。边一条算式啱？',
+      qe: 'Put + or − between 6, 1, 3 to make 2. Which one is right?',
+      hint: '结果比 6 小很多，要减掉不少。', hinty: '结果细过 6 好多，要减走唔少。', hinte: 'The answer is much smaller than 6, so you need to take away.',
+      exp: '6 减 1 等于 5，5 减 3 等于 2。', expe: '6 − 1 = 5, then 5 − 3 = 2.',
+      howto: '目标比第一个数小，就多用减号试。', howtoe: 'If the target is smaller than the first number, try more minus signs.' }, signs([6, 1, 3], 2)),
+    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q14', show: '11 − A = 4 + 3', a: '4', ans: 'num',
+      q: 'A 是一位数，11 减 A 等于 4 加 3，A 是多少？', qy: 'A 系一位数，11 减 A 等于 4 加 3，A 系几多？', qe: 'A is a 1-digit number and 11 − A = 4 + 3. What is A?',
+      hint: '先算右边 4 加 3。', hinty: '先计右边 4 加 3。', hinte: 'Work out 4 + 3 first.',
+      exp: '4 加 3 等于 7；11 减 A 等于 7，所以 A 是 4。', expe: '4 + 3 = 7, and 11 − A = 7, so A = 4.',
+      howto: '等号两边一样大：先算能算的一边，再求 A。', howtoe: 'Work out the known side first, then find A.' },
+    { lv: 'k2', sec: '数论', src: 'TIMO-2018-final-Kindergarten Q15', show: '10, 7, 4, __', a: '1', ans: 'num',
+      q: '按规律：10、7、4，下一个是多少？', qy: '跟规律：10、7、4，下一个系几多？', qe: 'Pattern: 10, 7, 4. What comes next?',
+      hint: '每次少了几个？', hinty: '每次少咗几多？', hinte: 'How much smaller is each number?',
+      exp: '每次减 3，4 减 3 等于 1。', expe: 'Each time it goes down by 3: 4 − 3 = 1.',
+      howto: '数列先算相邻两个数差多少，再往下推。', howtoe: 'Find the gap between neighbours, then carry it on.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q16', fig: 'timo_fig/k18-q16.png', a: '5', ans: 'num',
+      q: '看图：图中一共有多少个正方形？大的小的都要数。', qy: '睇图：图入面一共有几多个正方形？大嘅细嘅都要数。', qe: 'Look at the picture. How many squares are there, big and small?',
+      hint: '先数小格，再看有没有 4 个小格拼成的大正方形。', hinty: '先数细格，再睇有冇 4 个细格拼成嘅大正方形。', hinte: 'Count the small squares, then check for a big one made of 4.',
+      exp: '小正方形 5 个；上面中间缺了一格，拼不成大正方形，所以一共 5 个。', expe: '5 small squares. The top middle is missing, so no big square can be made: 5.',
+      howto: '数图形要分大小：先数最小的，再一个个检查大的是否完整。', howtoe: 'Count by size and check each bigger square is complete.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q18', fig: 'timo_fig/k18-q18.png', a: '6', ans: 'num',
+      q: '看图：这个图形有多少条线段？', qy: '睇图：呢个图形有几多条线段？', qe: 'Look at the picture. How many line segments does this shape have?',
+      hint: '两个黑点之间的一条线就是一条线段。', hinty: '两粒黑点之间嘅一条线就系一条线段。', hinte: 'Each line between two dots is one segment.',
+      exp: '图形有 6 个黑点，围成一圈，一共 6 条线段。', expe: 'There are 6 dots going around, so 6 segments.',
+      howto: '数线段：从一个点出发绕一圈，每过一条线数一下。', howtoe: 'Start at one dot and go round, counting each line.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q19', fig: 'timo_fig/k18-q19.png', a: '5', ans: 'num',
+      q: '看图：图中一共有多少个三角形？大的小的都要数。', qy: '睇图：图入面一共有几多个三角形？大嘅细嘅都要数。', qe: 'Look at the picture. How many triangles are there, big and small?',
+      hint: '先数小三角形，再看整个大三角形。', hinty: '先数细三角形，再睇成个大三角形。', hinte: 'Count the small triangles, then the whole big one.',
+      exp: '小三角形 4 个，加上整个大三角形 1 个，一共 5 个。', expe: '4 small triangles plus the big one: 5.',
+      howto: '数三角形分大小：先数最小的，再数由几个小的拼成的。', howtoe: 'Count the smallest first, then the ones made from several small ones.' },
+    { lv: 'k2', sec: '几何', src: 'TIMO-2018-final-Kindergarten Q20', show: '□ ○ △ □ ○ △ □ __ △', a: '圆', ans: 'choice', opts: SHAPE.opts, optse: SHAPE.optse,
+      q: '按规律：方、圆、三角、方、圆、三角、方、空格、三角。空格是什么？', qy: '跟规律：方、圆、三角、方、圆、三角、方、空格、三角。空格系咩？',
+      qe: 'Pattern: square, circle, triangle, square, circle, triangle, square, blank, triangle. What is the blank?',
+      hint: '三个一组：方、圆、三角。', hinty: '三个一组：方、圆、三角。', hinte: 'It repeats in threes: square, circle, triangle.',
+      exp: '方后面总是圆，所以空格是圆。', expe: 'A circle always comes after a square.',
+      howto: '图形规律先找重复的一组，再看空格在组里第几个。', howtoe: 'Find the repeating block, then see where the blank falls.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q21', show: '☆☆☆☆☆☆☆☆', a: '4', ans: 'num',
+      q: '把 8 颗星分成一样多的两份，每份多少颗？', qy: '将 8 粒星分成一样多嘅两份，每份几多粒？', qe: 'Split 8 stars into 2 equal groups. How many in each group?',
+      hint: '一颗给左边、一颗给右边，轮流分。', hinty: '一粒畀左边、一粒畀右边，轮流分。', hinte: 'Give one to each side in turn.',
+      exp: '8 的一半是 4，每份 4 颗。', expe: 'Half of 8 is 4.',
+      howto: '分成两等份就是找一半：哪个数加自己等于总数。', howtoe: 'Two equal groups means half.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q22', show: '1+3, 2+4, 3+5, 8+4, 2+5, 2+4', a: '1', ans: 'num',
+      q: '1 加 3、2 加 4、3 加 5、8 加 4、2 加 5、2 加 4，这些算式的答案里有多少个单数？', qy: '1 加 3、2 加 4、3 加 5、8 加 4、2 加 5、2 加 4，呢啲算式嘅答案入面有几多个单数？',
+      qe: 'Work out 1+3, 2+4, 3+5, 8+4, 2+5, 2+4. How many of the answers are odd?',
+      hint: '先把每个答案算出来，再看个位。', hinty: '先计晒每个答案，再睇个位。', hinte: 'Work out every answer first, then check the last digit.',
+      exp: '答案是 4、6、8、12、7、6，只有 7 是单数，所以 1 个。', expe: 'The answers are 4, 6, 8, 12, 7, 6. Only 7 is odd.',
+      howto: '先全部算出来写好，再一个个判断，不要边算边猜。', howtoe: 'Write all the answers down first, then check each one.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q23', show: '14+3, 4+5, 7+9, 1+8, 3+5', a: '3', ans: 'num',
+      q: '14 加 3、4 加 5、7 加 9、1 加 8、3 加 5，这些算式的答案里有多少个一位数？', qy: '14 加 3、4 加 5、7 加 9、1 加 8、3 加 5，呢啲算式嘅答案入面有几多个一位数？',
+      qe: 'Work out 14+3, 4+5, 7+9, 1+8, 3+5. How many of the answers are 1-digit numbers?',
+      hint: '一位数就是 0 到 9。', hinty: '一位数即系 0 到 9。', hinte: '1-digit numbers are 0 to 9.',
+      exp: '答案是 17、9、16、9、8，一位数有 9、9、8，一共 3 个。', expe: 'The answers are 17, 9, 16, 9, 8. The 1-digit ones are 9, 9, 8: three.',
+      howto: '先全部算出来，再数符合条件的。', howtoe: 'Work everything out, then count the ones that fit.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q24', show: '2, 14, 15, 27, 4, 32, 47', a: '5', ans: 'num',
+      q: '2、14、15、27、4、32、47 里有多少个两位数？', qy: '2、14、15、27、4、32、47 入面有几多个两位数？', qe: 'How many 2-digit numbers are in 2, 14, 15, 27, 4, 32, 47?',
+      hint: '两位数有十位和个位，像 14。', hinty: '两位数有十位同个位，好似 14。', hinte: 'A 2-digit number has tens and ones, like 14.',
+      exp: '两位数是 14、15、27、32、47，一共 5 个。', expe: '14, 15, 27, 32, 47: five.',
+      howto: '逐个看是几位数，打勾再数。', howtoe: 'Check each number and tick the 2-digit ones.' },
+    { lv: 'k2', sec: '组合', src: 'TIMO-2018-final-Kindergarten Q25', a: '3', ans: 'num',
+      q: '彼得有 6 个 1 元硬币，可以换多少个 2 元硬币？', qy: '彼得有 6 个一蚊，可以换几多个两蚊？', qe: 'Peter has six $1 coins. How many $2 coins can he exchange them for?',
+      hint: '两个 1 元换一个 2 元。', hinty: '两个一蚊换一个两蚊。', hinte: 'Two $1 coins make one $2 coin.',
+      exp: '6 个 1 元两个两个分，分成 3 份，换 3 个 2 元。', expe: 'Group the six $1 coins in twos: 3 groups, so 3 coins.',
+      howto: '换钱：看几个小的凑成一个大的，再分组数。', howtoe: 'See how many small coins make one big coin, then group them.' },
+
+    /* ================= TIMO-2018-Primary-1（question paper，无答案页） ================= */
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q1', a: '8', ans: 'num',
+      q: '积及是家里最大的男孩，他有 4 个妹妹和 3 个弟弟。积及家一共有多少个孩子？', qy: '积及系屋企最大嘅男仔，佢有 4 个妹妹同 3 个细佬。积及屋企一共有几多个细路？',
+      qe: "Jacob is the eldest boy in the family and has 4 younger sisters and 3 younger brothers. How many children are in Jacob's family?",
+      hint: '妹妹、弟弟，再加上积及自己。', hinty: '妹妹、细佬，再加积及自己。', hinte: 'Sisters, brothers, and Jacob himself.',
+      exp: '4 个妹妹加 3 个弟弟是 7 个，再加积及自己，一共 8 个。', expe: '4 + 3 = 7, plus Jacob makes 8.',
+      howto: '数家里的孩子，记得把题目里的人自己也算上。', howtoe: 'Include the person in the question when counting the family.' },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q2', a: '4', ans: 'num',
+      q: '2018 年里，有多少个月刚好是 30 天？', qy: '2018 年入面，有几多个月啱啱系 30 日？', qe: 'In 2018, how many months have exactly 30 days?',
+      hint: '用拳头数月份：凸起来的是大月 31 天，凹下去的是小月。', hinty: '用拳头数月份：凸起嘅系大月 31 日，凹落去嘅系小月。', hinte: 'Use the knuckle trick: knuckles are 31-day months.',
+      exp: '30 天的月是 4 月、6 月、9 月、11 月，一共 4 个。2 月只有 28 天。', expe: 'April, June, September and November have 30 days: 4. February has 28.',
+      howto: '记住口诀：四、六、九、十一是小月 30 天，二月特别。', howtoe: 'Remember: April, June, September, November have 30; February is special.' },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q3', a: '20', ans: 'num',
+      q: '4 年前艾美 13 岁，3 年后艾美几岁？', qy: '4 年前艾美 13 岁，3 年后艾美几多岁？', qe: '4 years ago, Amy was 13 years old. How old will Amy be 3 years later?',
+      hint: '先算艾美现在几岁。', hinty: '先计艾美而家几岁。', hinte: 'Work out how old Amy is now.',
+      exp: '现在是 13 加 4 等于 17 岁，3 年后是 17 加 3 等于 20 岁。', expe: 'Now she is 13 + 4 = 17, so in 3 years she will be 20.',
+      howto: '年龄题先换算到「现在」，再往前或往后算。', howtoe: 'Age questions: get to "now" first, then move forward or back.' },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q4', show: '1, 7, 13, 19, 25, __', a: '31', ans: 'num',
+      q: '按规律：1、7、13、19、25，下一个是多少？', qy: '跟规律：1、7、13、19、25，下一个系几多？', qe: 'Pattern: 1, 7, 13, 19, 25. What comes next?',
+      hint: '每次加了多少？', hinty: '每次加咗几多？', hinte: 'How much is added each time?',
+      exp: '每次加 6，25 加 6 等于 31。', expe: 'Each time add 6: 25 + 6 = 31.',
+      howto: '数列先算相邻两个数差多少，差固定就继续加。', howtoe: 'Find the constant gap and keep adding it.' },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2018-Primary-1 Q5', show: 'A, D, G, J, M, __', a: 'P', ans: 'choice', opts: ['N', 'O', 'P', 'Q'],
+      q: '按规律：A、D、G、J、M，下一个字母是什么？', qy: '跟规律：A、D、G、J、M，下一个字母系咩？', qe: 'Pattern: A, D, G, J, M. What letter comes next?',
+      hint: '每次跳过两个字母。', hinty: '每次跳过两个字母。', hinte: 'Two letters are skipped each time.',
+      exp: 'A 跳过 B、C 到 D；M 跳过 N、O 就是 P。', expe: 'A skips B, C to D; M skips N, O to P.',
+      howto: '字母规律：念字母表，数每次跳几个。', howtoe: 'Say the alphabet and count the jump.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q6', show: '2 + 3 + 5 + 6 + 8 + 9', a: '33', ans: 'num',
+      q: '2 加 3 加 5 加 6 加 8 加 9 等于多少？', qy: '2 加 3 加 5 加 6 加 8 加 9 等于几多？', qe: 'What is 2 + 3 + 5 + 6 + 8 + 9?',
+      hint: '找能凑成 10 或 11 的两个数先加。', hinty: '搵可以凑成 10 或者 11 嘅两个数先加。', hinte: 'Pair numbers that make 10 or 11 first.',
+      exp: '2 加 9、3 加 8、5 加 6 都是 11，三个 11 是 33。', expe: '2 + 9, 3 + 8 and 5 + 6 are each 11; three 11s make 33.',
+      howto: '一串连加先找配对：头尾配对，每对一样大就好算。', howtoe: 'Pair first with last; equal pairs make it easy.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q7', show: '27 + 18 − 17', a: '28', ans: 'num',
+      q: '27 加 18 减 17 等于多少？', qy: '27 加 18 减 17 等于几多？', qe: 'What is 27 + 18 − 17?',
+      hint: '先算 18 减 17 更容易。', hinty: '先计 18 减 17 会易啲。', hinte: 'It is easier to do 18 − 17 first.',
+      exp: '18 减 17 等于 1，27 加 1 等于 28。', expe: '18 − 17 = 1, and 27 + 1 = 28.',
+      howto: '加减混合时，先找能凑成整数或很小的数的两项。', howtoe: 'In mixed sums, look for two numbers that nearly cancel.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q8', show: '3 × A = 3 + 3 + 3 + 3 + 3', a: '5', ans: 'num',
+      q: 'A 是一位数，3 乘 A 等于 3 加 3 加 3 加 3 加 3，A 是多少？', qy: 'A 系一位数，3 乘 A 等于 3 加 3 加 3 加 3 加 3，A 系几多？',
+      qe: 'A is a 1-digit number and 3 × A = 3 + 3 + 3 + 3 + 3. What is A?',
+      hint: '右边有几个 3？', hinty: '右边有几多个 3？', hinte: 'How many 3s are on the right?',
+      exp: '右边是 5 个 3 相加，就是 3 乘 5，所以 A 是 5。', expe: 'Five 3s added is 3 × 5, so A = 5.',
+      howto: '乘法就是同一个数连加：数一数加了几次。', howtoe: 'Multiplication is repeated adding: count how many times.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q9', show: '35 + __ = 42', a: '7', ans: 'num',
+      q: '35 加多少等于 42？', qy: '35 加几多等于 42？', qe: '35 + ___ = 42. What fills the blank?',
+      hint: '从 35 数到 40 要几步，再到 42 呢？', hinty: '由 35 数到 40 要几步，再到 42 呢？', hinte: 'Count from 35 to 40, then to 42.',
+      exp: '35 到 40 是 5，40 到 42 是 2，一共 7。', expe: '35 to 40 is 5, 40 to 42 is 2: 7 in all.',
+      howto: '求加数：和减已知数，或者先凑到整十再数。', howtoe: 'Missing addend: subtract, or count up to the next ten first.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2018-Primary-1 Q10', fig: 'timo_fig/p18-q10.png', a: '6', ans: 'num',
+      q: '看图：竖式里 B 加上两位数 2B 等于 32，两个 B 是同一个数字。B 是多少？', qy: '睇图：直式入面 B 加两位数 2B 等于 32，两个 B 系同一个数字。B 系几多？',
+      qe: 'Look at the column sum: B + 2B = 32, and both B are the same digit. What is B?',
+      hint: '个位：B 加 B 的个位是 2。', hinty: '个位：B 加 B 嘅个位系 2。', hinte: 'Units column: B + B ends in 2.',
+      exp: 'B 加 B 个位是 2，可能是 1 或 6；试 6：6 加 26 等于 32，对了。', expe: 'B + B ends in 2, so B is 1 or 6. Try 6: 6 + 26 = 32. Correct.',
+      howto: '竖式填数从个位开始试，找到可能的数再整条验算。', howtoe: 'Start from the units column, try the possible digits, then check the whole sum.' },
+    Object.assign({ lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q11', ans: 'choice',
+      q: '在 1、8、5、4 中间填加号或减号，使结果等于 8。哪一条算式对？', qy: '喺 1、8、5、4 中间填加号或者减号，令结果等于 8。边一条算式啱？',
+      qe: 'Put + or − between 1, 8, 5, 4 to make 8. Which one is right?',
+      hint: '每条都算一算。全部加是 18，要少 10。', hinty: '每条都计下。全部加系 18，要少 10。', hinte: 'All plus gives 18, which is 10 too many.',
+      exp: '1 加 8 减 5 加 4：9 减 5 是 4，4 加 4 是 8。', expe: '1 + 8 − 5 + 4: 9 − 5 = 4, 4 + 4 = 8.',
+      howto: '全部用加号先算；把某个数前的加号改成减号，总数会少两倍那个数。', howtoe: 'Changing a + to − lowers the total by twice that number.' }, signs([1, 8, 5, 4], 8)),
+    Object.assign({ lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q12', ans: 'choice',
+      q: '在 1、4、5、7 中间填加号或减号，使结果等于 7。哪一条算式对？', qy: '喺 1、4、5、7 中间填加号或者减号，令结果等于 7。边一条算式啱？',
+      qe: 'Put + or − between 1, 4, 5, 7 to make 7. Which one is right?',
+      hint: '全部加是 17，要少 10，就是把 5 前面改成减号。', hinty: '全部加系 17，要少 10，即系将 5 前面改做减号。', hinte: 'All plus gives 17; to lose 10, make the 5 negative.',
+      exp: '1 加 4 减 5 加 7：5 减 5 是 0，0 加 7 是 7。', expe: '1 + 4 − 5 + 7: 5 − 5 = 0, 0 + 7 = 7.',
+      howto: '全部用加号先算；多出来的一半，就是要改成减号的那个数。', howtoe: 'Half of the extra amount is the number that must be subtracted.' }, signs([1, 4, 5, 7], 7)),
+    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q13', a: '6', ans: 'num',
+      q: '四个学生一共有 16 个气球，每人数量都不同。气球最多的那个至少有多少个？', qy: '四个学生一共有 16 个气球，每人数量都唔同。气球最多嗰个最少有几多个？',
+      qe: 'Four students have 16 balloons in total, each a different number. At least how many does the student with the most have?',
+      hint: '要让最多的尽量少，四个人的数要尽量接近。', hinty: '想最多嗰个尽量少，四个人嘅数要尽量接近。', hinte: 'To keep the biggest small, make the four numbers as close as possible.',
+      exp: '如果最多是 5，四人最多 5 加 4 加 3 加 2 等于 14，不够 16；最多是 6 时可以 6、5、4、1，所以至少 6 个。', expe: 'If the most were 5, the total could be at most 5 + 4 + 3 + 2 = 14, not enough. With 6: 6, 5, 4, 1 works. So 6.',
+      howto: '问「最多的至少几个」：先假设一个数，看其他人最多能凑到多少，不够就加一。', howtoe: 'Guess the biggest, see the most the others can reach; if short, go up by one.' },
+    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q14', show: '2 + 5 + 8 + 11 + 14 + 17 + 20 + 232', a: '单数', ans: 'choice', opts: ['单数', '双数'], optse: ['odd', 'even'],
+      q: '2 加 5 加 8 加 11 加 14 加 17 加 20 加 232，结果是单数还是双数？', qy: '2 加 5 加 8 加 11 加 14 加 17 加 20 加 232，结果系单数定双数？',
+      qe: 'Is 2 + 5 + 8 + 11 + 14 + 17 + 20 + 232 odd or even?',
+      hint: '不用算出来，数一数有几个单数。', hinty: '唔使计出嚟，数下有几多个单数。', hinte: 'No need to add it up: count the odd numbers.',
+      exp: '单数有 5、11、17，一共 3 个；单数个数是单数，结果就是单数。', expe: 'There are three odd numbers (5, 11, 17); an odd count of odd numbers gives an odd total.',
+      howto: '判断和的单双：只数单数有几个，双数个单数相加是双数，单数个就是单数。', howtoe: 'Only the odd numbers matter: an even count gives even, an odd count gives odd.' },
+    { lv: 'p1', sec: '数论', src: 'TIMO-2018-Primary-1 Q15', a: '9', ans: 'num',
+      q: '个位是 6 的两位数一共有多少个？', qy: '个位系 6 嘅两位数一共有几多个？', qe: 'How many two-digit numbers have 6 as the units digit?',
+      hint: '从 16 开始往上数：16、26……', hinty: '由 16 开始向上数：16、26……', hinte: 'Start at 16: 16, 26, ...',
+      exp: '16、26、36、46、56、66、76、86、96，十位可以是 1 到 9，一共 9 个。', expe: '16, 26, ... 96: the tens digit can be 1 to 9, so 9 numbers.',
+      howto: '个位固定时，只看十位能填几个数字；十位不能是 0。', howtoe: 'With the units fixed, count the choices for the tens digit (not 0).' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q16', fig: 'timo_fig/p18-q16.png', a: '8', ans: 'num',
+      q: '看图：图中一共有多少个正方形？大的小的都要数。', qy: '睇图：图入面一共有几多个正方形？大嘅细嘅都要数。', qe: 'Look at the picture. How many squares are there, big and small?',
+      hint: '先数小格，再找 2 乘 2 拼成的大正方形。', hinty: '先数细格，再搵 2 乘 2 拼成嘅大正方形。', hinte: 'Count the small squares, then look for 2 by 2 squares.',
+      exp: '小正方形 7 个；中间上下四格拼成 1 个大正方形，一共 8 个。', expe: '7 small squares plus 1 big square in the middle: 8.',
+      howto: '数正方形分大小：最小的、两格乘两格的，逐个检查是否完整。', howtoe: 'Count by size and check each larger square is complete.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q18', fig: 'timo_fig/p18-q18.png', a: '6', ans: 'num',
+      q: '看图：图中一共有多少个三角形？大的小的都要数。', qy: '睇图：图入面一共有几多个三角形？大嘅细嘅都要数。', qe: 'Look at the picture. How many triangles are there, big and small?',
+      hint: '先数小三角形，再看左边四个小三角形能不能拼成大三角形。', hinty: '先数细三角形，再睇左边四个细三角形拼唔拼到大三角形。', hinte: 'Count the small ones, then look for a big one made of four.',
+      exp: '小三角形 5 个；左下角四个小三角形拼成 1 个大三角形，一共 6 个。', expe: '5 small triangles plus 1 big one made of four: 6.',
+      howto: '数三角形分大小：先数最小的，再找几个拼起来的。', howtoe: 'Count the smallest first, then combinations of several.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q19', show: '△ ○ □ △ ○ □ △ ○ □ △ __ □', a: '圆', ans: 'choice', opts: SHAPE.opts, optse: SHAPE.optse,
+      q: '按规律：三角、圆、方，一直重复，三角后面的空格是什么？', qy: '跟规律：三角、圆、方，一路重复，三角后面嘅空格系咩？',
+      qe: 'Pattern: triangle, circle, square, repeating. What goes in the blank after the triangle?',
+      hint: '三个一组：三角、圆、方。', hinty: '三个一组：三角、圆、方。', hinte: 'It repeats in threes: triangle, circle, square.',
+      exp: '三角后面总是圆。', expe: 'A circle always follows a triangle.',
+      howto: '图形规律先找重复的一组，再看空格在组里第几个。', howtoe: 'Find the repeating block, then place the blank.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2018-Primary-1 Q20', fig: 'timo_fig/p18-q20.png', a: '91', ans: 'num',
+      q: '看图：第 1 组 1 个，第 3 组 6 个，第 5 组 15 个，像楼梯一样每行少一个。第 13 组有多少个？',
+      qy: '睇图：第 1 组 1 个，第 3 组 6 个，第 5 组 15 个，好似楼梯咁每行少一个。第 13 组有几多个？',
+      qe: 'Look at the picture: group 1 has 1, group 3 has 6, group 5 has 15, like stairs with one fewer each row. How many in group 13?',
+      hint: '第 5 组是 5 加 4 加 3 加 2 加 1。', hinty: '第 5 组系 5 加 4 加 3 加 2 加 1。', hinte: 'Group 5 is 5 + 4 + 3 + 2 + 1.',
+      exp: '第 13 组是 13 加 12 一直加到 1；头尾配对每对 14，有 6 对半：6 乘 14 加 7 等于 91。', expe: 'Group 13 is 13 + 12 + ... + 1. Pairs of 14: six pairs plus 7 in the middle = 91.',
+      howto: '楼梯形的个数是连续数相加：1 加到 n，用头尾配对来算。', howtoe: 'Staircase counts are 1 + 2 + ... + n; pair the ends to add quickly.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q21', a: '5', ans: 'num',
+      q: '把 10 分成两个一位数相加，有多少种分法？5 加 6 和 6 加 5 算同一种。', qy: '将 10 分成两个一位数相加，有几多种分法？5 加 6 同 6 加 5 当系同一种。',
+      qe: 'Write 10 as the sum of two 1-digit numbers. How many ways are there? 5 + 6 and 6 + 5 count as the same.',
+      hint: '从 1 加 9 开始列出来。', hinty: '由 1 加 9 开始列出嚟。', hinte: 'List them, starting with 1 + 9.',
+      exp: '1+9、2+8、3+7、4+6、5+5，一共 5 种。', expe: '1+9, 2+8, 3+7, 4+6, 5+5: five ways.',
+      howto: '分拆数要有顺序地列：小的那个数从 1 开始往上，到一半为止。', howtoe: 'List in order: let the smaller number go up from 1 until halfway.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q22', a: '51', ans: 'num',
+      q: '用 1、3、4、7 四个数字（各用一次）组成两个两位数，再相加，和最小是多少？', qy: '用 1、3、4、7 四个数字（每个用一次）组成两个两位数，再加埋，最细嘅和系几多？',
+      qe: 'Use 1, 3, 4 and 7 once each to make two 2-digit numbers and add them. What is the smallest possible sum?',
+      hint: '十位的数影响大，十位放最小的两个。', hinty: '十位影响大，十位放最细嗰两个。', hinte: 'Tens digits matter more: put the two smallest there.',
+      exp: '十位放 1 和 3，个位放 4 和 7：14 加 37 等于 51。', expe: 'Tens 1 and 3, units 4 and 7: 14 + 37 = 51.',
+      howto: '要和最小，小的数字放高位；要和最大，大的数字放高位。', howtoe: 'For the smallest sum, small digits go in the tens place.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q23', show: '15 + 3, 17 − 8, 18 + 9, 12 + 9, 19 − 9', a: '4', ans: 'num',
+      q: '15 加 3、17 减 8、18 加 9、12 加 9、19 减 9，这些算式的答案里有多少个两位数？', qy: '15 加 3、17 减 8、18 加 9、12 加 9、19 减 9，呢啲算式嘅答案入面有几多个两位数？',
+      qe: 'Work out 15 + 3, 17 − 8, 18 + 9, 12 + 9, 19 − 9. How many answers are 2-digit numbers?',
+      hint: '先把每个答案算出来。', hinty: '先计晒每个答案。', hinte: 'Work out every answer first.',
+      exp: '答案是 18、9、27、21、10，两位数有 18、27、21、10，一共 4 个。', expe: 'The answers are 18, 9, 27, 21, 10. Four of them have 2 digits.',
+      howto: '先全部算出来写好，再一个个判断。', howtoe: 'Write all answers down, then check each one.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q24', a: '19', ans: 'num',
+      q: '最大的一位双数和最小的两位单数相加，等于多少？', qy: '最大嘅一位双数同最细嘅两位单数加埋，等于几多？', qe: 'Add the greatest 1-digit even number and the smallest 2-digit odd number.',
+      hint: '最大的一位双数是 8；最小的两位单数呢？', hinty: '最大嘅一位双数系 8；最细嘅两位单数呢？', hinte: 'The greatest 1-digit even number is 8. What about the other?',
+      exp: '最大的一位双数是 8，最小的两位单数是 11，8 加 11 等于 19。', expe: '8 + 11 = 19.',
+      howto: '先把每个条件对应的数找出来，再计算。', howtoe: 'Find each number from its description first, then add.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2018-Primary-1 Q25', a: '6', ans: 'num',
+      q: '彼得有 12 个 1 元硬币，可以换多少个 2 元硬币？', qy: '彼得有 12 个一蚊，可以换几多个两蚊？', qe: 'Peter has twelve $1 coins. How many $2 coins can he exchange them for?',
+      hint: '两个 1 元换一个 2 元。', hinty: '两个一蚊换一个两蚊。', hinte: 'Two $1 coins make one $2 coin.',
+      exp: '12 个两个两个分，分成 6 份，换 6 个 2 元。', expe: '12 in twos makes 6 groups: 6 coins.',
+      howto: '换钱就是分组：几个小的凑一个大的。', howtoe: 'Exchanging coins is grouping.' },
+
+    /* ================= TIMO-2020-2021-mock-Primary-1（有答案页，逐题核对） ================= */
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q1', a: '4', ans: 'num',
+      q: '玛莉有一个哥哥和三个妹妹，玛莉的哥哥有多少个妹妹？', qy: '玛莉有一个哥哥同三个妹妹，玛莉个哥哥有几多个妹妹？', qe: "Mary has one elder brother and three younger sisters. How many younger sisters does Mary's brother have?",
+      hint: '对哥哥来说，玛莉也是妹妹。', hinty: '对哥哥嚟讲，玛莉都系妹妹。', hinte: "To the brother, Mary is a sister too.",
+      exp: '三个妹妹加上玛莉自己，哥哥有 4 个妹妹。', expe: 'The three sisters plus Mary: 4.',
+      howto: '亲属题换一个人的角度看，别漏了题目里的人。', howtoe: "Look from the other person's point of view; don't leave anyone out." },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q2', a: '猫', ans: 'choice', opts: ['猫', '狗', '兔'], optse: ['cat', 'dog', 'bunny'],
+      q: '艾美、宾利和云妮每人有一只宠物：猫、狗或兔。艾美养的不是猫，宾利养的是兔。云妮养的是什么？', qy: '艾美、宾利同云妮每人有一只宠物：猫、狗或者兔。艾美养嘅唔系猫，宾利养兔。云妮养咩？',
+      qe: 'Amy, Benny and Winnie each have one pet: a cat, a dog or a bunny. Amy does not have a cat. Benny has a bunny. What does Winnie have?',
+      hint: '宾利是兔，艾美不是猫，那艾美是什么？', hinty: '宾利系兔，艾美唔系猫，咁艾美系咩？', hinte: 'Benny has the bunny and Amy has no cat. So what does Amy have?',
+      exp: '兔是宾利的；艾美不是猫，只能是狗；剩下的猫是云妮的。', expe: 'Benny has the bunny, Amy must have the dog, so Winnie has the cat.',
+      howto: '逻辑配对：先定下确定的，再排除，最后剩下的就是答案。', howtoe: 'Fix what is certain, cross out, and the last one left is the answer.' },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q3', a: '2', ans: 'num',
+      q: '安迪要切一个蛋糕，最少切几刀才能保证分成 4 份？', qy: '安迪要切一个蛋糕，最少切几多刀先确保可以分成 4 份？', qe: 'Andy needs to cut a cake. At least how many cuts does he need to get 4 pieces?',
+      hint: '切一个十字看看。', hinty: '切一个十字睇下。', hinte: 'Try cutting a cross.',
+      exp: '先横切一刀，再竖切一刀，十字形就是 4 份，所以最少 2 刀。', expe: 'One cut across and one cut down make a cross: 4 pieces with 2 cuts.',
+      howto: '切东西题画一画：每一刀尽量穿过之前所有的刀痕。', howtoe: 'Draw it: each new cut should cross all the earlier cuts.' },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q4', a: '71', ans: 'num',
+      q: '约翰写了一个两位数让彼得猜。猜 16 时，约翰说有一个数字对、但位置错了；猜 67 时，也是有一个数字对、位置错了。这个数是多少？',
+      qy: '约翰写咗一个两位数畀彼得估。估 16 时，约翰话有一个数字啱、但位置错咗；估 67 时，都系有一个数字啱、位置错咗。呢个数系几多？',
+      qe: 'John wrote a 2-digit number. For 16 he said one digit is right but in the wrong place. For 67 he said the same. What is the number?',
+      hint: '6 在 16 和 67 里位置不同，试试 6 能不能是对的数字。', hinty: '6 喺 16 同 67 入面位置唔同，试下 6 系咪啱嗰个数字。', hinte: 'Try whether 6 can be the right digit in both guesses.',
+      exp: '如果是 6，它在 16 是个位、在 67 是十位，不可能两次都位置错，所以对的是 16 里的 1 和 67 里的 7：1 要在个位，7 要在十位，答案是 71。', expe: 'If 6 were right, it could not be in the wrong place both times. So 1 (from 16) goes to the units and 7 (from 67) to the tens: 71.',
+      howto: '猜数题逐个假设：假设某个数字对，看会不会和条件矛盾。', howtoe: 'Assume a digit is right and check it against every clue.' },
+    { lv: 'p1', sec: '逻辑', src: 'TIMO-2020-2021-mock-Primary-1 Q5', fig: 'timo_fig/p20-q5.png', a: '10', ans: 'num',
+      q: '看图：圆排成三角形，第 1 组 1 个，第 2 组 3 个，第 3 组 6 个。第 4 组有多少个圆？', qy: '睇图：圆排成三角形，第 1 组 1 个，第 2 组 3 个，第 3 组 6 个。第 4 组有几多个圆？',
+      qe: 'Look at the picture: circles in triangles, 1, 3, 6. How many circles in group 4?',
+      hint: '每组多了一整行，第 4 组底下一行有 4 个。', hinty: '每组多咗一行，第 4 组最底一行有 4 个。', hinte: 'Each group adds a new bottom row; group 4 adds a row of 4.',
+      exp: '第 3 组 6 个，再加底下一行 4 个，等于 10 个。', expe: '6 + 4 = 10.',
+      howto: '图形规律先看每组比上一组多了多少，再加下去。', howtoe: 'See how much each group adds, then add the next row.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q6', show: '3 + 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3', a: '30', ans: 'num',
+      q: '10 个 3 连加，3 加 3 一直加到第 10 个 3，等于多少？', qy: '10 个 3 连加，3 加 3 一路加到第 10 个 3，等于几多？', qe: 'What is 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3 + 3 (ten 3s)?',
+      hint: '5 个 3 是 15，再来 5 个呢？', hinty: '5 个 3 系 15，再嚟 5 个呢？', hinte: 'Five 3s make 15. Then another five?',
+      exp: '10 个 3 就是 3 乘 10 等于 30。', expe: 'Ten 3s is 3 × 10 = 30.',
+      howto: '同一个数连加很多次，先数个数，用乘法或分两半算。', howtoe: 'For many repeated adds, count them and multiply, or split in halves.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q7', show: '82 + 19 − 42', a: '59', ans: 'num',
+      q: '82 加 19 减 42 等于多少？', qy: '82 加 19 减 42 等于几多？', qe: 'What is 82 + 19 − 42?',
+      hint: '先算 82 减 42 更容易。', hinty: '先计 82 减 42 会易啲。', hinte: 'It is easier to do 82 − 42 first.',
+      exp: '82 减 42 等于 40，40 加 19 等于 59。', expe: '82 − 42 = 40, and 40 + 19 = 59.',
+      howto: '加减混合可以换顺序：先算能凑整十的两项。', howtoe: 'You can reorder: do the pair that gives a round number first.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q8', show: '22 + __ = 30', a: '8', ans: 'num',
+      q: '22 加多少等于 30？', qy: '22 加几多等于 30？', qe: '22 + ___ = 30. What fills the blank?',
+      hint: '从 22 数到 30。', hinty: '由 22 数到 30。', hinte: 'Count up from 22 to 30.',
+      exp: '30 减 22 等于 8。', expe: '30 − 22 = 8.',
+      howto: '求加数：和减已知数，算完加回去验算。', howtoe: 'Missing addend: subtract, then add back to check.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q9', show: '1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11', a: '66', ans: 'num',
+      q: '1 加 2 加 3 一直加到 11，等于多少？', qy: '1 加 2 加 3 一路加到 11，等于几多？', qe: 'What is 1 + 2 + 3 + ... + 11?',
+      hint: '1 加 10、2 加 9……这样配对，11 留着。', hinty: '1 加 10、2 加 9……咁样配对，11 留住。', hinte: 'Pair 1 + 10, 2 + 9, ... and keep 11 aside.',
+      exp: '1 到 10 配成 5 对，每对 11，是 55；再加 11 等于 66。', expe: '1 to 10 makes 5 pairs of 11 = 55, plus 11 = 66.',
+      howto: '一长串连续数相加，用头尾配对，数有几对。', howtoe: 'For a run of numbers, pair the ends and count the pairs.' },
+    { lv: 'p1', sec: '算术', src: 'TIMO-2020-2021-mock-Primary-1 Q10', show: '18 − A = B', a: '9', ans: 'num',
+      q: 'A 和 B 都是一位数，18 减 A 等于 B，A 是多少？', qy: 'A 同 B 都系一位数，18 减 A 等于 B，A 系几多？', qe: 'A and B are both 1-digit numbers and 18 − A = B. What is A?',
+      hint: '一位数最大是 9。', hinty: '一位数最大系 9。', hinte: 'The biggest 1-digit number is 9.',
+      exp: 'A 加 B 等于 18，两个一位数加起来最多是 9 加 9 等于 18，所以 A 和 B 都是 9。', expe: 'A + B = 18, and two 1-digit numbers make 18 only as 9 + 9. So A = 9.',
+      howto: '有「一位数」的条件时，想想最大最小能到多少。', howtoe: 'With a 1-digit condition, think about the largest and smallest possible.' },
+    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q11', a: '3', ans: 'num',
+      q: '艾美有 10 个苹果，约翰有 4 个。要让两人一样多，艾美要给约翰多少个？', qy: '艾美有 10 个苹果，约翰有 4 个。要两个人一样多，艾美要畀约翰几多个？',
+      qe: 'Amy has 10 apples and John has 4. How many must Amy give John so they have the same?',
+      hint: '两人一共几个？一样多的话每人几个？', hinty: '两个人一共几个？一样多嘅话每人几个？', hinte: 'How many altogether? How many each if equal?',
+      exp: '一共 14 个，一样多每人 7 个；约翰有 4 个，要再给 3 个。', expe: '14 altogether means 7 each; John has 4, so Amy gives 3.',
+      howto: '给到一样多：总数除以 2 是每人应得的，再看少的那个还差几个。', howtoe: 'Half of the total is each share; see what the smaller one is missing.' },
+    Object.assign({ lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q12', ans: 'choice',
+      q: '在 1、3、5、7 中间填加号或减号，使结果等于 6。哪一条算式对？', qy: '喺 1、3、5、7 中间填加号或者减号，令结果等于 6。边一条算式啱？',
+      qe: 'Put + or − between 1, 3, 5, 7 to make 6. Which one is right?',
+      hint: '全部加是 16，多了 10，要把哪个数改成减？', hinty: '全部加系 16，多咗 10，要将边个数改做减？', hinte: 'All plus gives 16, 10 too many. Which number should be subtracted?',
+      exp: '1 加 3 减 5 加 7：4 减 5 加 7 等于 6。', expe: '1 + 3 − 5 + 7 = 6.',
+      howto: '全部用加号先算；多出来的一半，就是要改成减号的那个数。', howtoe: 'Half of the extra amount is the number that must be subtracted.' }, signs([1, 3, 5, 7], 6)),
+    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q13', a: '5', ans: 'num',
+      q: '四个小孩一共有 11 个气球，每人数量都不同，而且每人至少 1 个。气球最多的那个有多少个？', qy: '四个细路一共有 11 个气球，每人数量都唔同，而且每人最少 1 个。气球最多嗰个有几多个？',
+      qe: 'Four children have 11 balloons in total, all different numbers and at least one each. How many does the child with the most have?',
+      hint: '先让另外三个人尽量少：1、2、3。', hinty: '先畀另外三个人尽量少：1、2、3。', hinte: 'Give the other three as few as possible: 1, 2, 3.',
+      exp: '另外三人最少 1 加 2 加 3 等于 6，剩下 11 减 6 等于 5。', expe: 'The others take at least 1 + 2 + 3 = 6, so the last has 11 − 6 = 5.',
+      howto: '求最多那个：让其他人尽量少，但每人要不同。', howtoe: 'Give the others as little as possible while keeping them different.' },
+    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q14', a: '9', ans: 'num',
+      q: '个位是 0 的两位数一共有多少个？', qy: '个位系 0 嘅两位数一共有几多个？', qe: 'How many two-digit numbers have 0 as the units digit?',
+      hint: '10、20、30……数到哪里？', hinty: '10、20、30……数到边度？', hinte: '10, 20, 30, ... where does it stop?',
+      exp: '10、20、30 一直到 90，一共 9 个。', expe: '10, 20, ... 90: nine numbers.',
+      howto: '个位固定时，只看十位能填几个数字；十位不能是 0。', howtoe: 'With the units fixed, count the tens digits (not 0).' },
+    { lv: 'p1', sec: '数论', src: 'TIMO-2020-2021-mock-Primary-1 Q15', show: '1, 4, 7, 10, 13, __', a: '16', ans: 'num',
+      q: '按规律：1、4、7、10、13，下一个是多少？', qy: '跟规律：1、4、7、10、13，下一个系几多？', qe: 'Pattern: 1, 4, 7, 10, 13. What comes next?',
+      hint: '每次加了多少？', hinty: '每次加咗几多？', hinte: 'How much is added each time?',
+      exp: '每次加 3，13 加 3 等于 16。', expe: 'Each time add 3: 13 + 3 = 16.',
+      howto: '数列先算相邻两个数差多少，再往下推。', howtoe: 'Find the gap between neighbours and carry it on.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q16', fig: 'timo_fig/p20-q16.png', a: '14', ans: 'num',
+      q: '看图：3 乘 3 的方格里一共有多少个正方形？大的小的都要数。', qy: '睇图：3 乘 3 嘅方格入面一共有几多个正方形？大嘅细嘅都要数。', qe: 'Look at the 3 by 3 grid. How many squares are there, big and small?',
+      hint: '1 格的有几个？2 乘 2 的有几个？3 乘 3 的呢？', hinty: '1 格嘅有几多个？2 乘 2 嘅有几多个？3 乘 3 嘅呢？', hinte: 'How many 1 by 1? 2 by 2? 3 by 3?',
+      exp: '1 格的 9 个，2 乘 2 的 4 个，3 乘 3 的 1 个，一共 14 个。', expe: '9 small, 4 two-by-two, 1 three-by-three: 14.',
+      howto: '方格数正方形：按大小分开数再相加。', howtoe: 'Count squares size by size, then add.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q17', fig: 'timo_fig/p20-q17.png', a: '6', ans: 'num',
+      q: '看图：这堆立方体一共有多少个？', qy: '睇图：呢堆立方体一共有几多个？', qe: 'Look at the picture. How many cubes are there?',
+      hint: '分上下两层数，上面那个下面一定有一个托着。', hinty: '分上下两层数，上面嗰个下面一定有一个托住。', hinte: 'Count each layer; the top cube must sit on one below.',
+      exp: '底层前排 3 个、后排 2 个，上层 1 个，一共 6 个。', expe: 'Bottom layer: 3 in front and 2 behind; 1 on top: 6.',
+      howto: '数立方体一层一层数，看不见的要想一想有没有托着。', howtoe: 'Count layer by layer and think about hidden supporting cubes.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q18', fig: 'timo_fig/p20-q18.png', a: '13', ans: 'num',
+      q: '看图：图中一共有多少个三角形？大的小的都要数。', qy: '睇图：图入面一共有几多个三角形？大嘅细嘅都要数。', qe: 'Look at the picture. How many triangles are there, big and small?',
+      hint: '先数最小的 9 个，再数 4 个拼成的中三角形，最后整个大的。', hinty: '先数最细嘅 9 个，再数 4 个拼成嘅中三角形，最后成个大嘅。', hinte: 'Count the 9 smallest, then the medium ones made of 4, then the whole.',
+      exp: '最小的 9 个，中等的 3 个，整个大三角形 1 个，一共 13 个。', expe: '9 small + 3 medium + 1 big = 13.',
+      howto: '数三角形分大小一层层数，尖朝上和尖朝下的都要看。', howtoe: 'Count size by size, both pointing up and pointing down.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q19', fig: 'timo_fig/p20-q19.png', a: 'E', ans: 'choice', opts: ['A', 'B', 'C', 'D', 'E'],
+      q: '看图：五个图形里，哪一个和其他的不一样？', qy: '睇图：五个图形入面，边一个同其他唔一样？', qe: 'Look at the picture. Which figure is not like the others?',
+      hint: '试试把每个图形对折，能不能两边完全重合。', hinty: '试下将每个图形对折，两边可唔可以完全重合。', hinte: 'Try folding each shape in half. Do the halves match?',
+      exp: 'A、B、C、D 都能对折重合（对称），E 这个斜的平行四边形怎么折都不能重合。', expe: 'A to D can be folded so the halves match; the slanted shape E cannot.',
+      howto: '找不同：逐个检查同一个特点，比如能不能对折、有没有直角。', howtoe: 'Check one property at a time, like folding symmetry or right angles.' },
+    { lv: 'p1', sec: '几何', src: 'TIMO-2020-2021-mock-Primary-1 Q20', show: '○ □ △ ○ ○ □ △ ○ __ □ △ ○ ○ □ △', a: '圆', ans: 'choice', opts: SHAPE.opts, optse: SHAPE.optse,
+      q: '按规律：圆、方、三角、圆，一直重复。第 9 个空格是什么？', qy: '跟规律：圆、方、三角、圆，一路重复。第 9 个空格系咩？',
+      qe: 'Pattern: circle, square, triangle, circle, repeating. What is in the 9th place, the blank?',
+      hint: '四个一组：圆、方、三角、圆。', hinty: '四个一组：圆、方、三角、圆。', hinte: 'It repeats in fours: circle, square, triangle, circle.',
+      exp: '每组 4 个，第 9 个是第三组的第 1 个，是圆。', expe: 'Blocks of 4; the 9th is the first of the third block: a circle.',
+      howto: '先找一组有几个，再数空格是组里第几个。', howtoe: 'Find the block length, then where the blank falls in it.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q21', a: '4', ans: 'num',
+      q: '把 8 粒糖果分成一样多的两份，每份多少粒？', qy: '将 8 粒糖分成一样多嘅两份，每份几多粒？', qe: 'Split 8 candies into two equal groups. How many in each?',
+      hint: '8 的一半是多少？', hinty: '8 嘅一半系几多？', hinte: 'What is half of 8?',
+      exp: '8 的一半是 4。', expe: 'Half of 8 is 4.',
+      howto: '平均分成两份就是找一半。', howtoe: 'Two equal groups means half.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q22', a: '9', ans: 'num',
+      q: '从 1、3、5、8 里选 2 个不同的数字组成两位数，能组成多少个单数？', qy: '由 1、3、5、8 入面拣 2 个唔同嘅数字组成两位数，可以组成几多个单数？',
+      qe: 'Pick 2 different digits from 1, 3, 5, 8 to make a two-digit number. How many odd numbers can you make?',
+      hint: '单数的个位要是 1、3 或 5。', hinty: '单数嘅个位要系 1、3 或者 5。', hinte: 'An odd number must end in 1, 3 or 5.',
+      exp: '个位有 1、3、5 三种，每种十位还剩 3 个数字可选，3 乘 3 等于 9 个。', expe: '3 choices for the units, then 3 for the tens: 3 × 3 = 9.',
+      howto: '组数先定决定条件的那一位（单双看个位），再数另一位能填几个。', howtoe: 'Fix the digit that decides the condition first, then count the other.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q23', a: '6', ans: 'num',
+      q: '从学校到车站有 3 条路，从车站到图书馆有 2 条路。从学校经车站到图书馆，有几种走法？', qy: '由学校去车站有 3 条路，由车站去图书馆有 2 条路。由学校经车站去图书馆，有几多种行法？',
+      qe: 'There are 3 ways from school to the station and 2 from the station to the library. How many ways from school to the library through the station?',
+      hint: '第一段每一条路，后面都有 2 种选法。', hinty: '第一段每一条路，后面都有 2 种拣法。', hinte: 'Each first road has 2 choices after it.',
+      exp: '3 条路各配 2 条路，3 乘 2 等于 6 种。', expe: '3 × 2 = 6 ways.',
+      howto: '分两步走：第一步的方法数乘第二步的方法数。', howtoe: 'Two steps: multiply the choices for each step.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q24', a: '1368', ans: 'num',
+      q: '用 3、6、1、8 各用一次，组成最小的四位数是多少？', qy: '用 3、6、1、8 每个用一次，组成最细嘅四位数系几多？', qe: 'Use 3, 6, 1 and 8 once each. What is the smallest 4-digit number?',
+      hint: '最小的数字放最前面。', hinty: '最细嘅数字放最前面。', hinte: 'Put the smallest digit first.',
+      exp: '从小到大排：1、3、6、8，就是 1368。', expe: 'Smallest to largest: 1368.',
+      howto: '组最小的数从小到大排，0 不能放最前面。', howtoe: 'Smallest number: digits small to big, never starting with 0.' },
+    { lv: 'p1', sec: '组合', src: 'TIMO-2020-2021-mock-Primary-1 Q25', a: '7', ans: 'num',
+      q: '从 0、3、5、6、9 里选 2 个不同的数字组成两位数，能组成多少个 5 的倍数？', qy: '由 0、3、5、6、9 入面拣 2 个唔同嘅数字组成两位数，可以组成几多个 5 嘅倍数？',
+      qe: 'Pick 2 different digits from 0, 3, 5, 6, 9 to make a two-digit number. How many multiples of 5 can you make?',
+      hint: '5 的倍数个位是 0 或 5；十位不能是 0。', hinty: '5 嘅倍数个位系 0 或者 5；十位唔可以系 0。', hinte: 'Multiples of 5 end in 0 or 5; the tens digit cannot be 0.',
+      exp: '个位是 0：30、50、60、90，4 个；个位是 5：35、65、95，3 个。一共 7 个。', expe: 'Ending in 0: 30, 50, 60, 90; ending in 5: 35, 65, 95. Total 7.',
+      howto: '分情况数：个位是 0 一种情况，个位是 5 一种情况，分别数再相加。', howtoe: 'Split into cases (ends in 0, ends in 5), count each, then add.' },
   ];
 
-  /* ===== 反背题：动态出题模板（owner 2026-11-19「要做反背题」） =====
-   * 数字由 rng 现场生成、答案当场算出来：孩子记住「上次答案是 13」没有用，
-   * 同一模板下一次换一组数，答案跟着变。pick() 每轮先用生成题（约 3/4），
-   * 并避开最近 200 道出过的题面（localStorage），原卷题库只用来补位、留出处。
-   * 复练走 variant()：错题不是原题重来，而是同型换数据的新题。
+  /* ===== 反背题：动态出题模板 =====
+   * 数字由 rng 现场生成、答案当场算出来：孩子记住「上次答案是 13」没有用。
+   * pick() 每轮最多放 ORIG_PER_ROUND 道原卷题（10 天内出过的不再出），其余用生成题，
+   * 生成题避开最近 SEEN_MAX 道出过的题面。复练走 variant()：错题换同型新数据，不是原题重来。
    */
   const RND = (lo, hi, rng) => lo + Math.floor((rng || Math.random)() * (hi - lo + 1));
-  const fp = q => String((q && q.qe) || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const SEEN_KEY = 'timo_seen_v1', SEEN_MAX = 200;
+  /* 题目指纹：题面 + 选项（排序后）。选择题题面相同、选项不同算不同题；原卷题打乱选项后仍是同一题 */
+  const fp = q => [q && q.qe, ((q && q.opts) || []).slice().sort().join(','), q && q.fig, q && q.show, q && q.svg]
+    .map(x => String(x || '')).join('|').replace(/\s+/g, ' ').trim().toLowerCase();
+  const SEEN_KEY = 'timo_seen_v1', SEEN_MAX = 300;
+  const ORIG_KEY = 'timo_orig_seen_v1', ORIG_COOL_MS = 10 * 86400e3, ORIG_PER_ROUND = 3;
   function loadSeen() { try { const a = JSON.parse(localStorage.getItem(SEEN_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   function saveSeen(list) { try { localStorage.setItem(SEEN_KEY, JSON.stringify(list.slice(-SEEN_MAX))); } catch (e) {} }
   function noteSeen(list) { if (list.length) saveSeen(loadSeen().concat(list)); }
+  function loadOrig() { try { const m = JSON.parse(localStorage.getItem(ORIG_KEY) || '{}'); return m && typeof m === 'object' && !Array.isArray(m) ? m : {}; } catch (e) { return {}; } }
+  function noteOrig(list) {
+    if (!list.length) return;
+    const m = loadOrig(), now = Date.now();
+    list.forEach(f => { m[f] = now; });
+    try { localStorage.setItem(ORIG_KEY, JSON.stringify(m)); } catch (e) {}
+  }
+  const origFresh = (m, q) => !(m[fp(q)] > Date.now() - ORIG_COOL_MS);
   function shuffled(a, rng) { const r = rng || Math.random; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
   /* 选择题正确项随机摆位：不能靠「每次都点第二个」蒙对 */
   function withCorrect(correct, others, rng) {
@@ -654,321 +615,456 @@
     return opts;
   }
   const SEQ = (n, f, sep) => Array.from({ length: n }, (_, i) => f(i)).join(sep);
+  const pickOne = (arr, r) => arr[RND(0, arr.length - 1, r)];
+
+  /* ---- 生成题的图（SVG 字符串，页面直接嵌） ---- */
+  function gridSvg(rows, cols) {
+    const s = 44, w = cols * s + 4, h = rows * s + 4;
+    let p = '';
+    for (let i = 0; i <= rows; i++) p += `M2 ${2 + i * s}H${2 + cols * s}`;
+    for (let j = 0; j <= cols; j++) p += `M${2 + j * s} 2V${2 + rows * s}`;
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w * 2}" height="${h * 2}"><path d="${p}" fill="none" stroke="#222" stroke-width="2"/></svg>`;
+  }
+  function fanSvg(k) {
+    const W = 220, H = 170, ax = W / 2, ay = 6, y = H - 4;
+    let p = `M${ax} ${ay}L4 ${y}L${W - 4} ${y}Z`;
+    for (let i = 1; i <= k; i++) p += `M${ax} ${ay}L${4 + (W - 8) * i / (k + 1)} ${y}`;
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W * 1.6}" height="${H * 1.6}"><path d="${p}" fill="none" stroke="#222" stroke-width="2"/></svg>`;
+  }
+  const squaresIn = (r, c) => { let n = 0; for (let k = 1; k <= Math.min(r, c); k++) n += (r - k + 1) * (c - k + 1); return n; };
+
+  /* 填加减号：随机数 + 随机符号，只留答案唯一的；选项是整条算式 */
+  function signsGen(lv, cnt, lo, hi, r) {
+    for (let t = 0; t < 40; t++) {
+      const nums = Array.from({ length: cnt }, () => RND(lo, hi, r));
+      const ops = Array.from({ length: cnt - 1 }, () => r() < 0.5);
+      let v = nums[0]; ops.forEach((p, i) => { v += p ? nums[i + 1] : -nums[i + 1]; });
+      if (v < 0) continue;
+      let s; try { s = signs(nums, v); } catch (e) { continue; }
+      const L = nums.join('、');
+      return Object.assign({ lv, sec: '数论', src: 'gen:填加减号', ans: 'choice', opts: shuffled(s.opts.slice(), r),
+        q: `在 ${L} 中间填加号或减号，使结果等于 ${v}。哪一条算式对？`, qy: `喺 ${L} 中间填加号或者减号，令结果等于 ${v}。边一条算式啱？`,
+        qe: `Put + or − between ${nums.join(', ')} to make ${v}. Which one is right?`,
+        hint: '每条算式都从左到右算一遍。', hinty: '每条算式都由左到右计一次。', hinte: 'Work out each one from left to right.',
+        exp: `${s.a} = ${v}。`, expe: `${s.a} = ${v}.`,
+        howto: '全部用加号先算；多出来的一半，就是要改成减号的那个数。', howtoe: 'Try all plus first; half of the extra is the number to subtract.' }, { a: s.a, show: s.show });
+    }
+    return null;
+  }
 
   const GEN = [
     /* ---------- K2 / 幼稚园组 ---------- */
     { id: 'k2-add3', lv: 'k2', sec: '算术', make(r) {
         const a = RND(2, 19, r), b = RND(2, 19, r), c = RND(2, 9, r), s1 = a + b, s = s1 + c;
-        return { lv: 'k2', sec: '算术', src: 'gen:连加', ans: 'num', a: String(s),
-          q: `${a} 加 ${b} 加 ${c} 等于多少？`, qy: `${a} 加 ${b} 加 ${c} 等于几多？`,
-          qe: `What is ${a} + ${b} + ${c}?`,
-          hint: `先算 ${a} 加 ${b}。`, hinty: `先算 ${a} 加 ${b}。`, hinte: `Start with ${a} + ${b}.`,
+        return { lv: 'k2', sec: '算术', src: 'gen:连加', ans: 'num', a: String(s), show: `${a} + ${b} + ${c}`,
+          q: `${a} 加 ${b} 加 ${c} 等于多少？`, qy: `${a} 加 ${b} 加 ${c} 等于几多？`, qe: `What is ${a} + ${b} + ${c}?`,
+          hint: `先算 ${a} 加 ${b}。`, hinty: `先计 ${a} 加 ${b}。`, hinte: `Start with ${a} + ${b}.`,
           exp: `${a} + ${b} = ${s1}，再 ${s1} + ${c} = ${s}。`, expe: `${a} + ${b} = ${s1}, then ${s1} + ${c} = ${s}.`,
-          howto: `连加从左往右一步一步算，每步写下中间结果；不要跳步心算。`,
-          howtoe: `Work left to right and write each step down; do not skip steps.` };
+          howto: '连加从左往右一步一步算，每步写下中间结果。', howtoe: 'Work left to right and write each step down.' };
       } },
     { id: 'k2-sub2', lv: 'k2', sec: '算术', make(r) {
         const a = RND(12, 20, r), b = RND(2, 8, r), room = a - b;
         const c = RND(2, Math.max(2, Math.min(9, room - 1)), r), s1 = a - b, s = s1 - c;
-        return { lv: 'k2', sec: '算术', src: 'gen:连减', ans: 'num', a: String(s),
-          q: `${a} 减 ${b} 再减 ${c} 等于多少？`, qy: `${a} 减 ${b} 再减 ${c} 等于几多？`,
-          qe: `What is ${a} − ${b} − ${c}?`,
-          hint: `先算 ${a} 减 ${b}。`, hinty: `先算 ${a} 减 ${b}。`, hinte: `Start with ${a} − ${b}.`,
+        return { lv: 'k2', sec: '算术', src: 'gen:连减', ans: 'num', a: String(s), show: `${a} − ${b} − ${c}`,
+          q: `${a} 减 ${b} 再减 ${c} 等于多少？`, qy: `${a} 减 ${b} 再减 ${c} 等于几多？`, qe: `What is ${a} − ${b} − ${c}?`,
+          hint: `先算 ${a} 减 ${b}。`, hinty: `先计 ${a} 减 ${b}。`, hinte: `Start with ${a} − ${b}.`,
           exp: `${a} − ${b} = ${s1}，再 ${s1} − ${c} = ${s}。`, expe: `${a} − ${b} = ${s1}, then ${s1} − ${c} = ${s}.`,
-          howto: `连减先算第一步，把得到的数再减第二个；可以用加法验算。`,
-          howtoe: `Subtract step by step and check your answer by adding back.` };
+          howto: '连减先算第一步，把得到的数再减第二个；可以用加法验算。', howtoe: 'Subtract step by step and check by adding back.' };
       } },
     { id: 'k2-seq', lv: 'k2', sec: '逻辑', make(r) {
-        const st = RND(1, 9, r), d = RND(2, 9, r), a = st + 5 * d;
-        return { lv: 'k2', sec: '逻辑', src: 'gen:规律', ans: 'num', a: String(a),
-          q: `按规律：${SEQ(5, i => st + i * d, '、')}，下一个是多少？`,
-          qy: `跟规律：${SEQ(5, i => st + i * d, '、')}，下一个系几多？`,
-          qe: `Pattern: ${SEQ(5, i => st + i * d, ', ')}. What comes next?`,
-          hint: `看看每次加了多少。`, hinty: `睇下每次加咗幾多。`, hinte: 'How much is added each time?',
-          exp: `每次都加 ${d}，${st + 4 * d} 加 ${d} 等于 ${a}。`, expe: `Each term adds ${d}: ${st + 4 * d} + ${d} = ${a}.`,
-          howto: `规律题先算相邻两个数差多少，差固定就用这个差往下推。`,
-          howtoe: `Work out the gap between neighbouring numbers; if it is constant, keep adding it.` };
+        const d = RND(2, 6, r), down = r() < 0.4, st = down ? RND(4 * d + 1, 4 * d + 12, r) : RND(1, 9, r);
+        const term = i => down ? st - i * d : st + i * d, a = term(4);
+        return { lv: 'k2', sec: '逻辑', src: 'gen:规律', ans: 'num', a: String(a), show: SEQ(4, term, ', ') + ', __',
+          q: `按规律：${SEQ(4, term, '、')}，下一个是多少？`, qy: `跟规律：${SEQ(4, term, '、')}，下一个系几多？`,
+          qe: `Pattern: ${SEQ(4, term, ', ')}. What comes next?`,
+          hint: down ? '看看每次少了多少。' : '看看每次加了多少。', hinty: down ? '睇下每次少咗几多。' : '睇下每次加咗几多。', hinte: down ? 'How much smaller each time?' : 'How much is added each time?',
+          exp: `每次${down ? '减' : '加'} ${d}，${term(3)} ${down ? '−' : '+'} ${d} = ${a}。`, expe: `Each step ${down ? 'subtracts' : 'adds'} ${d}: ${term(3)} ${down ? '−' : '+'} ${d} = ${a}.`,
+          howto: '规律题先算相邻两个数差多少，差固定就用这个差往下推。', howtoe: 'Find the gap between neighbours; if it is constant, carry it on.' };
       } },
     { id: 'k2-times', lv: 'k2', sec: '算术', make(r) {
-        const m = RND(2, 5, r), n = RND(2, 6, r), a = m * n;
-        return { lv: 'k2', sec: '算术', src: 'gen:几个几', ans: 'num', a: String(a),
-          q: `${m} 个 ${n} 加起来是多少？`, qy: `${m} 个 ${n} 加起来系几多？`,
-          qe: `What is ${n} added ${m} times?`,
+        const m = RND(2, 5, r), n = RND(2, 9, r), a = m * n;
+        return { lv: 'k2', sec: '算术', src: 'gen:几个几', ans: 'num', a: String(a), show: Array(m).fill(n).join(' + '),
+          q: `${m} 个 ${n} 加起来是多少？`, qy: `${m} 个 ${n} 加埋系几多？`, qe: `What is ${n} added ${m} times?`,
           hint: `一个一个加：${n}、${n + n}……`, hinty: `一个一个加：${n}、${n + n}……`, hinte: `Add them one at a time: ${n}, ${n + n}, ...`,
-          exp: `${Array(m).fill(n).join(' + ')} = ${a}，也就是 ${n} × ${m}。`, expe: `${Array(m).fill(n).join(' + ')} = ${a}, that is ${n} × ${m}.`,
-          howto: `先一个一个加，再看一共加了几次；下次看到「几个几」直接想乘法。`,
-          howtoe: `Add one at a time first, then count how many times you added; next time use multiplication straight away.` };
+          exp: `${Array(m).fill(n).join(' + ')} = ${a}。`, expe: `${Array(m).fill(n).join(' + ')} = ${a}.`,
+          howto: '同一个数连加，跳着数，数清加了几次。', howtoe: 'Skip-count and keep track of how many times.' };
       } },
-    /* 平均分/几个几的变体：分给人或分进盒子，数据全变 */
     { id: 'k2-share2', lv: 'k2', sec: '组合', make(r) {
         const m = RND(2, 5, r), k = RND(2, 8, r), total = m * k;
-        const who = ['小朋友', '盒子', '袋子', '盘子'][RND(0, 3, r)];
+        const who = pickOne(['小朋友', '盒子', '袋子', '盘子'], r);
         const whEn = { '小朋友': 'children', '盒子': 'boxes', '袋子': 'bags', '盘子': 'plates' }[who];
+        const it = pickOne([['苹果', '苹果', 'apples'], ['糖', '糖', 'sweets'], ['饼干', '饼', 'biscuits']], r);
         return { lv: 'k2', sec: '组合', src: 'gen:平均分', ans: 'num', a: String(k),
-          q: `${total} 个苹果平均放进 ${m} 个${who}，每个${who}放多少个？`, qy: `${total} 个苹果平均放入 ${m} 个${who}，每个${who}放幾多个？`,
-          qe: `${total} apples are shared equally into ${m} ${whEn}. How many in each?`,
-          hint: `${m} 乘多少会等于 ${total}？`, hinty: `${m} 乘幾多会等于 ${total}？`, hinte: `What times ${m} makes ${total}?`,
-          exp: `${total} 除以 ${m} 等于 ${k}，每个${who}放 ${k} 个。`, expe: `${total} divided by ${m} is ${k}, so ${k} in each.`,
-          howto: `平均分就是除法：总数除以份数；验算用乘法 ${k} × ${m} 应该回到 ${total}。`,
-          howtoe: `Equal sharing is division: total divided by the number of groups. Check with ${k} × ${m} = ${total}.` };
+          q: `${total} 个${it[0]}平均分给 ${m} 个${who}，每个${who}几个？`, qy: `${total} 个${it[1]}平均分畀 ${m} 个${who}，每个${who}几多个？`,
+          qe: `${total} ${it[2]} are shared equally among ${m} ${whEn}. How many does each get?`,
+          hint: `${m} 个几相加会等于 ${total}？`, hinty: `${m} 个几加埋会等于 ${total}？`, hinte: `${m} lots of what make ${total}?`,
+          exp: `${Array(m).fill(k).join(' + ')} = ${total}，每个 ${k} 个。`, expe: `${Array(m).fill(k).join(' + ')} = ${total}, so ${k} each.`,
+          howto: '平均分可以一轮一轮发，或者想几个几相加等于总数。', howtoe: 'Hand out one round at a time, or think which repeated add makes the total.' };
       } },
     { id: 'k2-blank', lv: 'k2', sec: '算术', make(r) {
-        const sum = RND(20, 50, r), a = RND(10, sum - 5, r), ans = sum - a;
-        return { lv: 'k2', sec: '算术', src: 'gen:填空', ans: 'num', a: String(ans),
-          q: `${a} 加多少等于 ${sum}？`, qy: `${a} 加幾多等于 ${sum}？`,
-          qe: `${a} + ___ = ${sum}. What fills the blank?`,
-          hint: `用 ${sum} 减 ${a}。`, hinty: `用 ${sum} 减 ${a}。`, hinte: `Do ${sum} − ${a}.`,
+        const sum = RND(12, 40, r), a = RND(5, sum - 2, r), ans = sum - a;
+        return { lv: 'k2', sec: '算术', src: 'gen:填空', ans: 'num', a: String(ans), show: `${a} + __ = ${sum}`,
+          q: `${a} 加多少等于 ${sum}？`, qy: `${a} 加几多等于 ${sum}？`, qe: `${a} + ___ = ${sum}. What fills the blank?`,
+          hint: `从 ${a} 往上数到 ${sum}。`, hinty: `由 ${a} 向上数到 ${sum}。`, hinte: `Count up from ${a} to ${sum}.`,
           exp: `${sum} − ${a} = ${ans}。`, expe: `${sum} − ${a} = ${ans}.`,
-          howto: `求加数用减法：和减已知的那个数；算完把 ${ans} 加回 ${a} 验一下。`,
-          howtoe: `Find the missing addend by subtraction: total minus the known part. Check by adding ${ans} + ${a}.` };
+          howto: '求加数用减法：和减已知的数；算完加回去验一下。', howtoe: 'Missing addend: total minus the known part, then add back to check.' };
       } },
     { id: 'k2-more', lv: 'k2', sec: '数论', make(r) {
         const y = RND(2, 20, r), x = RND(y + 1, y + 15, r), ans = x - y;
+        const nm = pickOne([['小明', '小红', 'Ming', 'Ling'], ['积及', '艾美', 'Jacob', 'Amy'], ['彼得', '玛莉', 'Peter', 'Mary']], r);
         return { lv: 'k2', sec: '数论', src: 'gen:相差', ans: 'num', a: String(ans),
-          q: `小明有 ${x} 个苹果，小红有 ${y} 个。小明比小红多多少个？`, qy: `小明有 ${x} 个苹果，小红有 ${y} 个。小明比小红多幾多个？`,
-          qe: `Ming has ${x} apples and Ling has ${y}. How many more does Ming have?`,
-          hint: `比多少用减法。`, hinty: `比幾多用减法。`, hinte: 'Compare with subtraction.',
+          q: `${nm[0]}有 ${x} 粒糖，${nm[1]}有 ${y} 粒。${nm[0]}比${nm[1]}多多少粒？`, qy: `${nm[0]}有 ${x} 粒糖，${nm[1]}有 ${y} 粒。${nm[0]}多${nm[1]}几多粒？`,
+          qe: `${nm[2]} has ${x} sweets and ${nm[3]} has ${y}. How many more does ${nm[2]} have?`,
+          hint: '比多少用减法。', hinty: '比几多用减法。', hinte: 'Compare with subtraction.',
           exp: `${x} − ${y} = ${ans}。`, expe: `${x} − ${y} = ${ans}.`,
-          howto: `「比…多多少」就是大数减小数，不是把两个数加起来。`,
-          howtoe: `How many more means the bigger minus the smaller, not adding them.` };
+          howto: '「多多少」就是大数减小数，不是把两个数加起来。', howtoe: 'How many more means bigger minus smaller.' };
       } },
-    { id: 'k2-biggest', lv: 'k2', sec: '数论', make(r) {
-        const nums = shuffled([RND(1, 20, r), RND(21, 40, r), RND(41, 60, r)], r).map(String);
-        const big = nums.slice().sort((x, y) => Number(y) - Number(x))[0];
-        const opts = withCorrect(big, nums.filter(v => v !== big), r);
-        return { lv: 'k2', sec: '数论', src: 'gen:比大小', ans: 'choice', opts, a: big,
-          q: `哪一个小？`, qy: `边一个最细？`, qe: `Which number is the smallest?`,
-          hint: `先看十位，十位一样再看个位。`, hinty: `先睇十位，十位一样再睇个位。`, hinte: 'Check the tens digit first.',
-          exp: `${opts.slice().sort((x, y) => Number(x) - Number(y))[0]} 最小。`, expe: `${opts.slice().sort((x, y) => Number(x) - Number(y))[0]} is the smallest.`,
-          howto: `比大小先比位数，位数一样从高位往下比，不用把它们加起来。`,
-          howtoe: `Compare digit by digit from the left; you never need to add the numbers.` };
+    { id: 'k2-compare', lv: 'k2', sec: '数论', make(r) {
+        const nums = shuffled([RND(1, 20, r), RND(21, 40, r), RND(41, 60, r), RND(61, 99, r)], r).slice(0, 3).map(String);
+        const big = r() < 0.5, sorted = nums.slice().sort((x, y) => Number(x) - Number(y)), a = big ? sorted[2] : sorted[0];
+        return { lv: 'k2', sec: '数论', src: 'gen:比大小', ans: 'choice', opts: nums, a,
+          q: `${nums.join('、')}，哪一个最${big ? '大' : '小'}？`, qy: `${nums.join('、')}，边一个最${big ? '大' : '细'}？`,
+          qe: `Which is the ${big ? 'biggest' : 'smallest'}: ${nums.join(', ')}?`,
+          hint: '先看十位，十位一样再看个位。', hinty: '先睇十位，十位一样再睇个位。', hinte: 'Check the tens digit first.',
+          exp: `从小到大是 ${sorted.join('、')}，最${big ? '大' : '小'}的是 ${a}。`, expe: `In order: ${sorted.join(', ')}. The ${big ? 'biggest' : 'smallest'} is ${a}.`,
+          howto: '比大小先比位数，位数一样从高位往下比。', howtoe: 'Compare digit by digit from the left.' };
       } },
-    /* 新的 K2 模板：图形规律 / 单双数 / 一半 / 时间顺序 */
     { id: 'k2-shapes', lv: 'k2', sec: '逻辑', make(r) {
-        const set = shuffled(['红圆', '蓝三角', '黄方', '绿星'], r);
-        const en = { '红圆': 'red circle', '蓝三角': 'blue triangle', '黄方': 'yellow square', '绿星': 'green star' };
-        const a = set[3];
-        return { lv: 'k2', sec: '逻辑', src: 'gen:图形规律', ans: 'choice',
-          opts: shuffled([a, set[0], set[1]].slice(), r), a,
-          q: `按规律：${set[0]}、${set[1]}、${set[0]}、${set[1]}，下一个是什么？`, qy: `跟规律：${set[0]}、${set[1]}、${set[0]}、${set[1]}，下一个系咩？`,
-          qe: `Pattern: ${en[set[0]]}, ${en[set[1]]}, ${en[set[0]]}, ${en[set[1]]}. What comes next?`,
-          hint: `看看前面两个是怎么排的。`, hinty: `睇下前面两个系点排嘅。`, hinte: 'Look at how the first two repeat.',
-          exp: `规律是两个一循环，所以下一个回到第一个 ${set[0]}。`, expe: `The pattern repeats every two, so next is the first one: ${en[set[0]]}.`,
-          howto: `找规律先找循环长度，再往后数一格。`, howtoe: `Find the repeating block first, then count one step forward.` };
+        const SH = [['圆', '○', 'circle'], ['方', '□', 'square'], ['三角', '△', 'triangle'], ['星', '☆', 'star']];
+        const pool = shuffled(SH.slice(), r), kind = RND(0, 2, r);
+        const block = kind === 0 ? [pool[0], pool[1]] : kind === 1 ? [pool[0], pool[1], pool[2]] : [pool[0], pool[0], pool[1]];
+        const len = block.length * 3, seq = Array.from({ length: len }, (_, i) => block[i % block.length]);
+        const at = RND(block.length, len - 1, r), a = seq[at];
+        const show = seq.map((s, i) => i === at ? '__' : s[1]).join(' ');
+        const zh = seq.map((s, i) => i === at ? '空格' : s[0]).join('、'), en = seq.map((s, i) => i === at ? 'blank' : s[2]).join(', ');
+        const used = shuffled(Array.from(new Set(block.concat([pool[2]]))), r);
+        return { lv: 'k2', sec: '逻辑', src: 'gen:图形规律', ans: 'choice', show,
+          opts: used.map(s => s[0]), optse: used.map(s => s[2]), a: a[0],
+          q: `按规律：${zh}。空格是什么？`, qy: `跟规律：${zh}。空格系咩？`, qe: `Pattern: ${en}. What is the blank?`,
+          hint: `${block.length} 个一组重复。`, hinty: `${block.length} 个一组重复。`, hinte: `It repeats in groups of ${block.length}.`,
+          exp: `一组是 ${block.map(s => s[0]).join('、')}，空格是第 ${at + 1} 个，所以是${a[0]}。`, expe: `The block is ${block.map(s => s[2]).join(', ')}; place ${at + 1} is a ${a[2]}.`,
+          howto: '图形规律先找重复的一组，再看空格在组里第几个。', howtoe: 'Find the repeating block, then see where the blank falls.' };
       } },
     { id: 'k2-parity', lv: 'k2', sec: '数论', make(r) {
         const n = RND(11, 99, r), odd = n % 2 === 1;
-        return { lv: 'k2', sec: '数论', src: 'gen:单双数', ans: 'choice', opts: ['单数', '双数'], a: odd ? '单数' : '双数',
-          optse: ['odd', 'even'],
-          q: `${n} 是单数还是双数？`, qy: `${n} 系单数定双数？`,
-          qe: `Is ${n} odd or even?`,
-          hint: `看个位：1、3、5、7、9 是单数。`, hinty: `睇个位：1、3、5、7、9 系单数。`, hinte: 'Look at the units digit: 1, 3, 5, 7, 9 mean odd.',
+        return { lv: 'k2', sec: '数论', src: 'gen:单双数', ans: 'choice', opts: ['单数', '双数'], optse: ['odd', 'even'], a: odd ? '单数' : '双数',
+          q: `${n} 是单数还是双数？`, qy: `${n} 系单数定双数？`, qe: `Is ${n} odd or even?`,
+          hint: '看个位：1、3、5、7、9 是单数。', hinty: '睇个位：1、3、5、7、9 系单数。', hinte: 'Look at the units digit: 1, 3, 5, 7, 9 mean odd.',
           exp: `${n} 的个位是 ${n % 10}，所以是${odd ? '单数' : '双数'}。`, expe: `The units digit of ${n} is ${n % 10}, so it is ${odd ? 'odd' : 'even'}.`,
-          howto: `判断单双只看个位，不用算别的。`, howtoe: `Odd or even is decided by the units digit alone.` };
+          howto: '判断单双只看个位。', howtoe: 'Odd or even is decided by the units digit alone.' };
       } },
     { id: 'k2-half', lv: 'k2', sec: '算术', make(r) {
-        const k = RND(2, 9, r), total = k * 2;
+        const k = RND(2, 15, r), total = k * 2, it = pickOne([['颗星', '粒星', 'stars'], ['个苹果', '个苹果', 'apples'], ['粒糖', '粒糖', 'sweets'], ['支笔', '支笔', 'pencils']], r);
         return { lv: 'k2', sec: '算术', src: 'gen:一半', ans: 'num', a: String(k),
-          q: `${total} 的一半是多少？`, qy: `${total} 嘅一半系幾多？`,
-          qe: `What is half of ${total}?`,
-          hint: `想：几多乘 2 等于 ${total}？`, hinty: `谂：幾多乘 2 等于 ${total}？`, hinte: `What times 2 makes ${total}?`,
-          exp: `${total} ÷ 2 = ${k}。`, expe: `${total} ÷ 2 = ${k}.`,
-          howto: `一半就是平均分两份，可以用乘法反推。`, howtoe: `Half means splitting into two equal parts; you can check with multiplication.` };
+          q: `把 ${total} ${it[0]}分成一样多的两份，每份多少？`, qy: `将 ${total} ${it[1]}分成一样多嘅两份，每份几多？`, qe: `Split ${total} ${it[2]} into two equal groups. How many in each?`,
+          hint: `想：几加几等于 ${total}，两个数一样？`, hinty: `谂下：几加几等于 ${total}，两个数一样？`, hinte: `Which number added to itself makes ${total}?`,
+          exp: `${k} + ${k} = ${total}，每份 ${k}。`, expe: `${k} + ${k} = ${total}, so ${k} each.`,
+          howto: '一半就是平均分两份：哪个数加自己等于总数。', howtoe: 'Half means two equal parts: which number doubled makes the total?' };
+      } },
+    { id: 'k2-signs', lv: 'k2', sec: '数论', make(r) { return signsGen('k2', 3, 1, 9, r); } },
+    { id: 'k2-grid', lv: 'k2', sec: '几何', make(r) {
+        const rows = RND(1, 2, r), cols = RND(2, rows === 1 ? 5 : 3, r), a = squaresIn(rows, cols);
+        return { lv: 'k2', sec: '几何', src: 'gen:数正方形', ans: 'num', a: String(a), svg: gridSvg(rows, cols),
+          q: `看图：${rows} 行 ${cols} 列的方格，一共有多少个正方形？大的小的都要数。`, qy: `睇图：${rows} 行 ${cols} 列嘅方格，一共有几多个正方形？大嘅细嘅都要数。`,
+          qe: `Look at the ${rows} by ${cols} grid. How many squares are there, big and small?`,
+          hint: rows === 1 ? '一行的话，只有小格子是正方形。' : '先数小格，再找 2 乘 2 的大正方形。', hinty: rows === 1 ? '一行嘅话，淨系细格系正方形。' : '先数细格，再搵 2 乘 2 嘅大正方形。',
+          hinte: rows === 1 ? 'In a single row only the small cells are squares.' : 'Count the small cells, then the 2 by 2 squares.',
+          exp: rows === 1 ? `只有 ${cols} 个小正方形。` : `小正方形 ${rows * cols} 个，2 乘 2 的 ${a - rows * cols} 个，一共 ${a} 个。`,
+          expe: rows === 1 ? `Only the ${cols} small squares.` : `${rows * cols} small and ${a - rows * cols} two-by-two: ${a}.`,
+          howto: '数正方形按大小分开数，再加起来；长条拼起来不是正方形。', howtoe: 'Count by size; a long strip is not a square.' };
+      } },
+    { id: 'k2-fan', lv: 'k2', sec: '几何', make(r) {
+        const k = RND(1, 2, r), a = (k + 1) * (k + 2) / 2;
+        return { lv: 'k2', sec: '几何', src: 'gen:数三角形', ans: 'num', a: String(a), svg: fanSvg(k),
+          q: `看图：大三角形里从顶点画了 ${k} 条线到底边。一共有多少个三角形？大的小的都要数。`, qy: `睇图：大三角形入面由顶点画咗 ${k} 条线落底边。一共有几多个三角形？大嘅细嘅都要数。`,
+          qe: `Look at the picture: ${k} line(s) go from the top corner to the bottom. How many triangles are there, big and small?`,
+          hint: '先数最小的，再数两个拼起来的，最后整个大的。', hinty: '先数最细嘅，再数两个拼埋嘅，最后成个大嘅。', hinte: 'Count the smallest, then pairs, then the whole one.',
+          exp: `底边被分成 ${k + 1} 段，每选两个点就是一个三角形：一共 ${a} 个。`, expe: `The base has ${k + 2} points; every two of them make a triangle: ${a}.`,
+          howto: '从顶点出发的线：数底边上任选两段相连的组合。', howtoe: 'Lines from the top: count every run of neighbouring pieces on the base.' };
+      } },
+    { id: 'k2-family', lv: 'k2', sec: '逻辑', make(r) {
+        const b = RND(0, 4, r), s = RND(1, 4, r), a = b + s + 1;
+        const nm = pickOne([['积及', 'Jacob'], ['彼得', 'Peter'], ['约翰', 'John']], r);
+        return { lv: 'k2', sec: '逻辑', src: 'gen:家里几个孩子', ans: 'num', a: String(a),
+          q: `${nm[0]}有 ${b} 个兄弟和 ${s} 个姐妹。${nm[0]}家一共有多少个孩子？`, qy: `${nm[0]}有 ${b} 个兄弟同 ${s} 个姊妹。${nm[0]}屋企一共有几多个细路？`,
+          qe: `${nm[1]} has ${b} brother(s) and ${s} sister(s). How many children are in the family?`,
+          hint: `别忘了算${nm[0]}自己。`, hinty: `唔好漏咗${nm[0]}自己。`, hinte: `Remember to count ${nm[1]} too.`,
+          exp: `${b} 加 ${s} 再加${nm[0]}自己，等于 ${a}。`, expe: `${b} + ${s} + 1 = ${a}.`,
+          howto: '数一家的孩子，要把题目里的人自己也算上。', howtoe: 'Include the person in the question.' };
+      } },
+    { id: 'k2-coins', lv: 'k2', sec: '组合', make(r) {
+        const ones = RND(1, 5, r), fives = RND(0, 3, r), tens = RND(0, 2, r), a = ones + 5 * fives + 10 * tens;
+        if (!fives && !tens) return null;
+        const parts = [`${ones} 个 1 元`].concat(fives ? [`${fives} 个 5 元`] : []).concat(tens ? [`${tens} 个 10 元`] : []);
+        const pe = [`${ones} $1 coin(s)`].concat(fives ? [`${fives} $5 coin(s)`] : []).concat(tens ? [`${tens} $10 coin(s)`] : []);
+        return { lv: 'k2', sec: '组合', src: 'gen:数钱', ans: 'num', a: String(a),
+          q: `彼得有 ${parts.join('、')}，一共有多少元？`, qy: `彼得有 ${parts.join('、').replace(/元/g, '蚊')}，一共有几多蚊？`,
+          qe: `Peter has ${pe.join(', ')}. How much money is that?`,
+          hint: '同一种硬币先合起来。', hinty: '同一种硬币先合埋。', hinte: 'Add up each kind of coin first.',
+          exp: `${ones}${fives ? ` + ${5 * fives}` : ''}${tens ? ` + ${10 * tens}` : ''} = ${a} 元。`, expe: `${ones}${fives ? ` + ${5 * fives}` : ''}${tens ? ` + ${10 * tens}` : ''} = $${a}.`,
+          howto: '数钱：同一种硬币先合起来，再把几种加在一起。', howtoe: 'Group the same coins first, then add the groups.' };
       } },
 
+    { id: 'k2-polygon', lv: 'k2', sec: '几何', make(r) {
+        const n = RND(3, 9, r), sides = r() < 0.5, rot = RND(0, 3, r) * Math.PI / (2 * n);
+        const R = 80, c = 90, pts = Array.from({ length: n }, (_, i) => {
+          const t = -Math.PI / 2 + rot + i * 2 * Math.PI / n; return `${(c + R * Math.cos(t)).toFixed(1)},${(c + R * Math.sin(t)).toFixed(1)}`; });
+        const svg = `<svg viewBox="0 0 180 180" width="300" height="300"><polygon points="${pts.join(' ')}" fill="#eef3f8" stroke="#222" stroke-width="3"/></svg>`;
+        return { lv: 'k2', sec: '几何', src: 'gen:数边数角', ans: 'num', a: String(n), svg,
+          q: `看图：这个图形有多少${sides ? '条边' : '只角'}？`, qy: `睇图：呢个图形有几多${sides ? '条边' : '只角'}？`,
+          qe: `Look at the shape. How many ${sides ? 'sides' : 'corners'} does it have?`,
+          hint: '先在一处做记号，用手指沿着走一圈。', hinty: '先喺一处做记号，用手指沿住行一圈。', hinte: 'Mark a starting point and trace round once.',
+          exp: `这个图形有 ${n} 条边、${n} 只角。`, expe: `It has ${n} sides and ${n} corners.`,
+          howto: '多边形的边数和角数一样多，数一样可以验另一样。', howtoe: 'A polygon has as many corners as sides, so one checks the other.' };
+      } },
     /* ---------- P1 / 小一 ---------- */
     { id: 'p1-give', lv: 'p1', sec: '数论', make(r) {
-        const b = RND(2, 12, r), d = RND(1, 8, r), a = b + 2 * d;
+        const b = RND(0, 15, r), d = RND(1, 9, r), a = b + 2 * d;
+        const it = pickOne([['个苹果', 'apples'], ['个梨', 'pears'], ['张贴纸', 'stickers'], ['粒波子', 'marbles']], r);
         return { lv: 'p1', sec: '数论', src: 'gen:给到一样多', ans: 'num', a: String(d),
-          q: `艾美有 ${a} 个苹果，约翰有 ${b} 个。要让两人一样多，艾美要给约翰多少个？`, qy: `艾美有 ${a} 个苹果，约翰有 ${b} 个。要让两个人一样多，艾美要畀约翰幾多个？`,
-          qe: `Amy has ${a} apples and John has ${b}. How many must Amy give John so they are equal?`,
-          hint: `一共 ${a + b} 个，一样多每人几个？`, hinty: `一共 ${a + b} 个，一样多每人幾多个？`, hinte: `There are ${a + b} in total. How many each if equal?`,
-          exp: `一共 ${a + b} 个，一样多每人 ${(a + b) / 2} 个；约翰已有 ${b} 个，所以给 ${d} 个。`, expe: `${a + b} in total means ${(a + b) / 2} each. John has ${b}, so Amy gives ${d}.`,
-          howto: `求「给多少才一样多」：先算两人一共多少，再除以人数得每人多少，然后用已有数减一下；不是把差除以二就完事，要验算。`,
-          howtoe: `For make-it-equal: total divided by the number of people, minus what the other one already has. Always check by giving and recounting.` };
+          q: `艾美有 ${a} ${it[0]}，约翰有 ${b} ${it[0]}。要让两人一样多，艾美要给约翰多少？`, qy: `艾美有 ${a} ${it[0]}，约翰有 ${b} ${it[0]}。要两个人一样多，艾美要畀约翰几多？`,
+          qe: `Amy has ${a} ${it[1]} and John has ${b}. How many must Amy give John so they are equal?`,
+          hint: `一共 ${a + b}，一样多每人几个？`, hinty: `一共 ${a + b}，一样多每人几个？`, hinte: `There are ${a + b} in total. How many each if equal?`,
+          exp: `一共 ${a + b}，每人应得 ${(a + b) / 2}；约翰有 ${b}，所以给 ${d}。`, expe: `${a + b} in total means ${(a + b) / 2} each. John has ${b}, so Amy gives ${d}.`,
+          howto: '给到一样多：先算总数、每人应得多少，再看少的那个差几个。', howtoe: 'Total, then each share, then what the smaller one is missing.' };
       } },
     { id: 'p1-balloons', lv: 'p1', sec: '数论', make(r) {
-        const total = RND(10, 20, r), ans = total - 6;
+        const kids = RND(3, 4, r), low = kids === 3 ? 3 : 6, total = RND(low + 4, low + 16, r), ans = total - low;
+        const lows = kids === 3 ? '1、2' : '1、2、3';
         return { lv: 'p1', sec: '数论', src: 'gen:最多最少', ans: 'num', a: String(ans),
-          q: `四个小孩一共有 ${total} 个气球，每人数量都不同，而且每人至少 1 个。气球最多的那个有多少个？`, qy: `四个细路一共有 ${total} 个气球，每人数量都唔同，而且每人至少有 1 个。气球最多嘅嗰个有幾多个？`,
-          qe: `Four children have ${total} balloons in total, all different amounts, at least one each. How many does the child with the most have?`,
-          hint: `先给三个人尽量少：1、2、3。`, hinty: `先畀三个人尽量少：1、2、3。`, hinte: 'Give the other three as few as possible: 1, 2, 3.',
-          exp: `另外三人最少是 1 + 2 + 3 = 6，剩下 ${total} − 6 = ${ans}。`, expe: `The other three take at least 1 + 2 + 3 = 6, so the fourth has ${total} − 6 = ${ans}.`,
-          howto: `「最多那个最多多少」先让其他人尽量少：每人不同就取 1、2、3，剩下的全给最多的那个。`,
-          howtoe: `To maximise one child's share, give the others as little as possible while keeping them different: 1, 2, 3.` };
+          q: `${kids} 个小孩一共有 ${total} 个气球，每人数量都不同，每人至少 1 个。气球最多的那个最多能有多少个？`, qy: `${kids} 个细路一共有 ${total} 个气球，每人数量都唔同，每人最少 1 个。气球最多嗰个最多可以有几多个？`,
+          qe: `${kids} children have ${total} balloons, all different numbers, at least one each. At most how many can the child with the most have?`,
+          hint: `先给其他人尽量少：${lows}。`, hinty: `先畀其他人尽量少：${lows}。`, hinte: `Give the others as few as possible: ${lows.replace(/、/g, ', ')}.`,
+          exp: `其他人最少一共 ${low}，剩下 ${total} − ${low} = ${ans}。`, expe: `The others take at least ${low}, leaving ${total} − ${low} = ${ans}.`,
+          howto: '求某人最多：让其他人尽量少，但每人要不同。', howtoe: 'Give the others as little as possible while keeping them different.' };
       } },
     { id: 'p1-odd', lv: 'p1', sec: '组合', make(r) {
-        const ds = shuffled([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], r).slice(0, 4);
-        const o = ds.filter(v => v % 2 === 1).length;
-        const tens = 3 - (ds.indexOf(0) >= 0 ? 1 : 0);   // 十位不能是 0
-        const ans = o * tens;
-        return { lv: 'p1', sec: '组合', src: 'gen:奇数个数', ans: 'num', a: String(ans),
-          q: `从 ${ds.join('、')} 里选 2 个不重复的数字组成两位数，能组成多少个奇数？`, qy: `由 ${ds.join('、')} 里面拣 2 个唔重复嘅数字组成两位数，可以组成幾多个奇数？`,
-          qe: `From ${ds.join(', ')} pick 2 digits without repeating to make two-digit numbers. How many are odd?`,
-          hint: `先数个位可以是哪几个奇数。`, hinty: `先数个位可以系邊几个奇数。`, hinte: 'Count the odd digits first: those can be the units digit.',
-          exp: o ? `个位有 ${o} 个奇数可选；十位剩下 ${tens} 个可选（不能是 0）→ ${o} × ${tens} = ${ans}。` : `四个数字都是偶数，个位凑不出奇数，所以是 0 个。`,
-          expe: o ? `${o} odd digit(s) for the unit place, ${tens} digit(s) left for the tens place (0 cannot lead): ${o} × ${tens} = ${ans}.` : 'All four digits are even, so no odd number can be made: 0.',
-          howto: `分位置想：个位决定奇偶，十位不能是 0；两位可选数相乘就是答案。`,
-          howtoe: `Think by place value: the units digit decides odd or even, the tens digit cannot be zero.` };
+        const ds = shuffled([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], r).slice(0, 4).sort((x, y) => x - y);
+        const odd = r() < 0.6;
+        let ans = 0;
+        for (const t of ds) for (const u of ds) if (t !== u && t !== 0 && (u % 2 === 1) === odd) ans++;
+        return { lv: 'p1', sec: '组合', src: 'gen:单双数个数', ans: 'num', a: String(ans),
+          q: `从 ${ds.join('、')} 里选 2 个不同的数字组成两位数，能组成多少个${odd ? '单数' : '双数'}？`, qy: `由 ${ds.join('、')} 入面拣 2 个唔同嘅数字组成两位数，可以组成几多个${odd ? '单数' : '双数'}？`,
+          qe: `Pick 2 different digits from ${ds.join(', ')} to make two-digit numbers. How many are ${odd ? 'odd' : 'even'}?`,
+          hint: `先看个位能放哪些${odd ? '单' : '双'}数字，十位不能是 0。`, hinty: `先睇个位可以放边啲${odd ? '单' : '双'}数字，十位唔可以系 0。`, hinte: `Which ${odd ? 'odd' : 'even'} digits can go last? The first digit cannot be 0.`,
+          exp: `按个位逐个数，十位要和个位不同、不能是 0，一共 ${ans} 个。`, expe: `Go through each possible units digit; the tens digit must differ and not be 0. Total ${ans}.`,
+          howto: '分位置想：个位决定单双，十位不能是 0、不能重复；按个位分情况数再相加。', howtoe: 'The units digit decides odd/even; the tens digit cannot be 0 or repeat. Count case by case.' };
       } },
     { id: 'p1-pairsum', lv: 'p1', sec: '算术', make(r) {
-        const n = RND(8, 15, r), ans = n * (n + 1) / 2;
-        return { lv: 'p1', sec: '算术', src: 'gen:连加配对', ans: 'num', a: String(ans),
-          q: `1 加 2 一直加到 ${n}，等于多少？`, qy: `1 加 2 一直加到 ${n}，等于几多？`,
-          qe: `What is 1 + 2 + 3 + ... + ${n}?`,
-          hint: `1 加 ${n}、2 加 ${n - 1}……这样配对。`, hinty: `1 加 ${n}、2 加 ${n - 1}……咁样配对。`, hinte: `Pair them: 1 + ${n}, 2 + ${n - 1}, ...`,
-          exp: `配对后每对都是 ${n + 1}，一共 ${ans}。`, expe: `Each pair adds to ${n + 1}, and the total is ${ans}.`,
-          howto: `数个数要分位置：个位决定奇偶，十位不能是 0；两个位置的可选数相乘就是总数。`,
-          howtoe: `Count by place: the units digit decides odd or even, and the tens digit cannot be zero; multiply the choices.` };
+        const s = RND(1, 6, r), n = RND(s + 6, s + 12, r), cnt = n - s + 1, ans = (s + n) * cnt / 2;
+        return { lv: 'p1', sec: '算术', src: 'gen:连加配对', ans: 'num', a: String(ans), show: `${s} + ${s + 1} + ${s + 2} + … + ${n}`,
+          q: `${s} 加 ${s + 1} 一直加到 ${n}，等于多少？`, qy: `${s} 加 ${s + 1} 一路加到 ${n}，等于几多？`, qe: `What is ${s} + ${s + 1} + ... + ${n}?`,
+          hint: `${s} 配 ${n}、${s + 1} 配 ${n - 1}……每对一样大。`, hinty: `${s} 配 ${n}、${s + 1} 配 ${n - 1}……每对一样大。`, hinte: `Pair ${s} with ${n}, ${s + 1} with ${n - 1}... each pair is the same.`,
+          exp: `一共 ${cnt} 个数，每对和是 ${s + n}${cnt % 2 ? `，中间剩一个 ${(s + n) / 2}` : ''}，总和 ${ans}。`, expe: `${cnt} numbers, each pair makes ${s + n}${cnt % 2 ? `, with ${(s + n) / 2} left in the middle` : ''}: ${ans}.`,
+          howto: '连续数相加：头尾配对，每对和一样，再数有几对。', howtoe: 'Pair the ends; every pair has the same sum; count the pairs.' };
       } },
-    { id: 'p1-smallest', lv: 'p1', sec: '组合', make(r) {
-        const ds = shuffled([1, 2, 3, 4, 5, 6, 7, 8, 9], r).slice(0, 4);
-        const ans = ds.slice().sort((x, y) => x - y).join('');
-        return { lv: 'p1', sec: '组合', src: 'gen:最细四位数', ans: 'num', a: ans,
-          q: `用 ${ds.join('、')} 各用一次，组成最小的四位数是多少？`, qy: `用 ${ds.join('、')} 每个用一次，组成最细嘅四位数系几多？`,
-          qe: `Use ${ds.join(', ')} once each to make the smallest 4-digit number.`,
-          hint: `最小的数字放千位。`, hinty: `最细嘅数字放千位。`, hinte: 'Put the smallest digit first.',
-          exp: `数字从小到大排：${ans}。`, expe: `Order the digits from smallest to largest: ${ans}.`,
-          howto: `一长串连加先找配对：第一个配最后一个、第二个配倒数第二个，每对和一样，再数有多少对。`,
-          howtoe: `For long sums, pair the ends: first with last, second with second last; each pair has the same total, then count the pairs.` };
+    { id: 'p1-digits', lv: 'p1', sec: '组合', make(r) {
+        const ds = shuffled([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], r).slice(0, 4), big = r() < 0.5;
+        const sorted = ds.slice().sort((x, y) => big ? y - x : x - y);
+        if (!big && sorted[0] === 0) { const i = sorted.findIndex(v => v > 0); sorted.unshift(sorted.splice(i, 1)[0]); }
+        const ans = sorted.join('');
+        return { lv: 'p1', sec: '组合', src: big ? 'gen:最大四位数' : 'gen:最小四位数', ans: 'num', a: ans,
+          q: `用 ${ds.join('、')} 各用一次，组成最${big ? '大' : '小'}的四位数是多少？`, qy: `用 ${ds.join('、')} 每个用一次，组成最${big ? '大' : '细'}嘅四位数系几多？`,
+          qe: `Use ${ds.join(', ')} once each to make the ${big ? 'largest' : 'smallest'} 4-digit number.`,
+          hint: big ? '最大的数字放千位。' : '最小的数字放千位，但 0 不能放最前。', hinty: big ? '最大嘅数字放千位。' : '最细嘅数字放千位，但 0 唔可以放最前。', hinte: big ? 'Put the largest digit first.' : 'Put the smallest digit first, but never 0.',
+          exp: `按${big ? '从大到小' : '从小到大'}排${!big && ds.indexOf(0) >= 0 ? '，0 放第二位' : ''}：${ans}。`, expe: `Order the digits ${big ? 'largest to smallest' : 'smallest to largest'}${!big && ds.indexOf(0) >= 0 ? ', with 0 in second place' : ''}: ${ans}.`,
+          howto: '组最大数从大到小排，组最小数从小到大排，0 不能放最高位。', howtoe: 'Largest: big to small. Smallest: small to big, with 0 never first.' };
       } },
     { id: 'p1-seqmul', lv: 'p1', sec: '逻辑', make(r) {
-        const st = RND(1, 3, r), k = RND(2, 3, r), a = st * Math.pow(k, 4);
-        return { lv: 'p1', sec: '逻辑', src: 'gen:倍数规律', ans: 'num', a: String(a),
-          q: `按规律：${SEQ(4, i => st * Math.pow(k, i), '、')}，下一个是多少？`, qy: `跟规律：${SEQ(4, i => st * Math.pow(k, i), '、')}，下一个系几多？`,
-          qe: `Pattern: ${SEQ(4, i => st * Math.pow(k, i), ', ')}. What comes next?`,
-          hint: `看看每个数是前一个的几倍。`, hinty: `睇下每个数系前一个嘅幾倍。`, hinte: 'How many times bigger is each term?',
-          exp: `每次都乘 ${k}，${st * Math.pow(k, 3)} 乘 ${k} 等于 ${a}。`, expe: `Each term is multiplied by ${k}: ${st * Math.pow(k, 3)} × ${k} = ${a}.`,
-          howto: `组最小数就把数字从小到大排，注意 0 不能放最高位。`,
-          howtoe: `For the smallest number, order the digits from small to large; zero can never be the leading digit.` };
+        const k = RND(2, 3, r), terms = k === 2 ? 4 : 3, st = k === 2 ? RND(1, 9, r) : RND(1, 3, r);
+        const t = i => st * Math.pow(k, i), a = t(terms);
+        return { lv: 'p1', sec: '逻辑', src: 'gen:倍数规律', ans: 'num', a: String(a), show: SEQ(terms, t, ', ') + ', __',
+          q: `按规律：${SEQ(terms, t, '、')}，下一个是多少？`, qy: `跟规律：${SEQ(terms, t, '、')}，下一个系几多？`, qe: `Pattern: ${SEQ(terms, t, ', ')}. What comes next?`,
+          hint: '看看每个数是前一个的几倍。', hinty: '睇下每个数系前一个嘅几倍。', hinte: 'How many times bigger is each term?',
+          exp: `每次都乘 ${k}，${t(terms - 1)} 乘 ${k} 等于 ${a}。`, expe: `Each term is multiplied by ${k}: ${t(terms - 1)} × ${k} = ${a}.`,
+          howto: '数列的差越来越大时，试试看是不是每次乘同一个数。', howtoe: 'If the gaps keep growing, check whether each term is multiplied by the same number.' };
       } },
     { id: 'p1-route', lv: 'p1', sec: '组合', make(r) {
-        const m = RND(2, 5, r), n = RND(2, 4, r), a = m * n;
+        const legs = r() < 0.6 ? 2 : 3, ns = Array.from({ length: legs }, () => RND(2, legs === 2 ? 6 : 3, r)), a = ns.reduce((x, y) => x * y, 1);
+        const pl = ['学校', '车站', '公园', '图书馆'].slice(0, legs + 1), ple = ['school', 'the station', 'the park', 'the library'].slice(0, legs + 1);
+        const segs = ns.map((n, i) => `从${pl[i]}到${pl[i + 1]}有 ${n} 条路`).join('，');
+        const segsy = ns.map((n, i) => `由${pl[i]}去${pl[i + 1]}有 ${n} 条路`).join('，');
+        const segse = ns.map((n, i) => `${n} ways from ${ple[i]} to ${ple[i + 1]}`).join(', ');
         return { lv: 'p1', sec: '组合', src: 'gen:走法', ans: 'num', a: String(a),
-          q: `从学校到车站有 ${m} 条路，从车站到图书馆有 ${n} 条路。经车站从学校到图书馆有多少种走法？`, qy: `由学校去车站有 ${m} 条路，由车站去图书馆有 ${n} 条路。经车站由学校去图书馆有幾多种走法？`,
-          qe: `There are ${m} ways from school to the station and ${n} from the station to the library. How many ways from school to the library via the station?`,
-          hint: `每一段都配一次。`, hinty: `每一段都配一次。`, hinte: 'Every first-leg choice pairs with every second-leg choice.',
-          exp: `${m} × ${n} = ${a} 种。`, expe: `${m} × ${n} = ${a} ways.`,
-          howto: `规律题先看相邻两个数的差或倍数，找到规则再往下算一步。`,
-          howtoe: `For patterns, look at the difference or the ratio between neighbouring terms, then apply it once.` };
+          q: `${segs}。从${pl[0]}一路走到${pl[legs]}，有几种走法？`, qy: `${segsy}。由${pl[0]}一路行到${pl[legs]}，有几多种行法？`,
+          qe: `There are ${segse}. How many ways from ${ple[0]} all the way to ${ple[legs]}?`,
+          hint: '每一段的每条路，都可以接下一段的任何一条。', hinty: '每一段嘅每条路，都可以接下一段任何一条。', hinte: 'Every road on one leg can join any road on the next.',
+          exp: `${ns.join(' × ')} = ${a} 种。`, expe: `${ns.join(' × ')} = ${a} ways.`,
+          howto: '分几步走，每一步的方法数相乘。', howtoe: 'Multiply the number of choices for each step.' };
       } },
     { id: 'p1-mult5', lv: 'p1', sec: '数论', make(r) {
-        const good = String(5 * RND(3, 19, r));
-        const others = [];
+        const good = String(5 * RND(3, 19, r)), others = [];
         while (others.length < 3) { const v = RND(11, 99, r); if (v % 5 && String(v) !== good && others.indexOf(String(v)) < 0) others.push(String(v)); }
         const opts = withCorrect(good, others, r);
         return { lv: 'p1', sec: '数论', src: 'gen:5 的倍数', ans: 'choice', opts, a: good,
-          q: `下面哪一个是 5 的倍数？`, qy: `下面边一个系 5 的倍数？`, qe: `Which of these is a multiple of 5?`,
-          hint: `5 的倍数个位一定是 0 或 5。`, hinty: `5 嘅倍数个位一定系 0 或者 5。`, hinte: 'A multiple of 5 always ends in 0 or 5.',
+          q: `${opts.join('、')}，哪一个是 5 的倍数？`, qy: `${opts.join('、')}，边一个系 5 嘅倍数？`, qe: `Which is a multiple of 5: ${opts.join(', ')}?`,
+          hint: '5 的倍数个位一定是 0 或 5。', hinty: '5 嘅倍数个位一定系 0 或者 5。', hinte: 'A multiple of 5 always ends in 0 or 5.',
           exp: `${good} 的个位是 ${good.slice(-1)}，所以是 5 的倍数。`, expe: `${good} ends in ${good.slice(-1)}, so it is a multiple of 5.`,
-          howto: `倍数先看个位：5 的倍数个位只能是 0 或 5，其他位不用算。`,
-          howtoe: `Multiples of 5 always end in 0 or 5, so check the units digit only.` };
+          howto: '5 的倍数只看个位：个位是 0 或 5。', howtoe: 'Multiples of 5 end in 0 or 5; check the units digit only.' };
+      } },
+    { id: 'p1-signs', lv: 'p1', sec: '数论', make(r) { return signsGen('p1', 4, 1, 9, r); } },
+    { id: 'p1-grid', lv: 'p1', sec: '几何', make(r) {
+        const rows = RND(2, 3, r), cols = RND(rows, 4, r), a = squaresIn(rows, cols);
+        return { lv: 'p1', sec: '几何', src: 'gen:数正方形', ans: 'num', a: String(a), svg: gridSvg(rows, cols),
+          q: `看图：${rows} 行 ${cols} 列的方格，一共有多少个正方形？大的小的都要数。`, qy: `睇图：${rows} 行 ${cols} 列嘅方格，一共有几多个正方形？大嘅细嘅都要数。`,
+          qe: `Look at the ${rows} by ${cols} grid. How many squares are there, big and small?`,
+          hint: '1 格的、2 乘 2 的、3 乘 3 的分开数。', hinty: '1 格嘅、2 乘 2 嘅、3 乘 3 嘅分开数。', hinte: 'Count 1 by 1, 2 by 2 and 3 by 3 separately.',
+          exp: `按大小数：${Array.from({ length: Math.min(rows, cols) }, (_, k) => `${k + 1} 乘 ${k + 1} 的 ${(rows - k) * (cols - k)} 个`).join('，')}，一共 ${a} 个。`,
+          expe: `By size: ${Array.from({ length: Math.min(rows, cols) }, (_, k) => `${(rows - k) * (cols - k)} of ${k + 1}x${k + 1}`).join(', ')}. Total ${a}.`,
+          howto: '方格数正方形：每种大小数一次再相加；大小为 k 的个数是（行数−k+1）乘（列数−k+1）。', howtoe: 'For each size k, there are (rows−k+1) × (cols−k+1) squares; add them up.' };
+      } },
+    { id: 'p1-fan', lv: 'p1', sec: '几何', make(r) {
+        const k = RND(2, 4, r), a = (k + 1) * (k + 2) / 2;
+        return { lv: 'p1', sec: '几何', src: 'gen:数三角形', ans: 'num', a: String(a), svg: fanSvg(k),
+          q: `看图：大三角形里从顶点画了 ${k} 条线到底边。一共有多少个三角形？大的小的都要数。`, qy: `睇图：大三角形入面由顶点画咗 ${k} 条线落底边。一共有几多个三角形？大嘅细嘅都要数。`,
+          qe: `Look at the picture: ${k} lines go from the top corner to the bottom. How many triangles are there, big and small?`,
+          hint: `底边被分成 ${k + 1} 段：数 1 段的、2 段连起来的……`, hinty: `底边分咗 ${k + 1} 段：数 1 段嘅、2 段连埋嘅……`, hinte: `The base is cut into ${k + 1} pieces: count runs of 1, 2, ... pieces.`,
+          exp: `${SEQ(k + 1, i => k + 1 - i, ' + ')} = ${a}。`, expe: `${SEQ(k + 1, i => k + 1 - i, ' + ')} = ${a}.`,
+          howto: '从一点画出的线：底边分成 n 段，三角形个数是 n 加 n−1 一直加到 1。', howtoe: 'With n pieces on the base, the count is n + (n−1) + ... + 1.' };
+      } },
+    { id: 'p1-segments', lv: 'p1', sec: '几何', make(r) {
+        const k = RND(3, 6, r), a = k * (k - 1) / 2, W = 60 * (k - 1) + 20;
+        const dots = Array.from({ length: k }, (_, i) => `<circle cx="${10 + 60 * i}" cy="20" r="6" fill="#222"/>`).join('');
+        const svg = `<svg viewBox="0 0 ${W} 40" width="${W * 1.6}" height="64"><path d="M10 20H${W - 10}" stroke="#222" stroke-width="3"/>${dots}</svg>`;
+        return { lv: 'p1', sec: '几何', src: 'gen:数线段', ans: 'num', a: String(a), svg,
+          q: `看图：一条直线上有 ${k} 个点，一共有多少条线段？（任意两个点之间就是一条）`, qy: `睇图：一条直线上有 ${k} 粒点，一共有几多条线段？（任何两粒点之间就系一条）`,
+          qe: `Look at the picture: ${k} points on a line. How many segments are there between any two points?`,
+          hint: '从最左边的点出发，能连到几个点？再从第二个点出发……', hinty: '由最左边嗰粒点出发，可以连去几多粒？再由第二粒出发……', hinte: 'From the first point, how many can you reach? Then from the second...',
+          exp: `${SEQ(k - 1, i => k - 1 - i, ' + ')} = ${a} 条。`, expe: `${SEQ(k - 1, i => k - 1 - i, ' + ')} = ${a}.`,
+          howto: '数线段：从左边的点一个个出发，只往右连，不重复。', howtoe: 'Start from each point in turn and only join to the right.' };
+      } },
+    { id: 'p1-strip', lv: 'p1', sec: '几何', make(r) {
+        const n = RND(2, 6, r), a = n * (n + 1) / 2;
+        return { lv: 'p1', sec: '几何', src: 'gen:数长方形', ans: 'num', a: String(a), svg: gridSvg(1, n),
+          q: `看图：一排 ${n} 个格子，一共有多少个长方形？（正方形也算长方形，几格连起来的也算）`, qy: `睇图：一排 ${n} 个格，一共有几多个长方形？（正方形都算，几格连埋嘅都算）`,
+          qe: `Look at the row of ${n} cells. How many rectangles are there, counting joined cells and squares too?`,
+          hint: '1 格的有几个？2 格连起来的有几个？', hinty: '1 格嘅有几多个？2 格连埋嘅有几多个？', hinte: 'How many of 1 cell? Of 2 joined cells?',
+          exp: `${SEQ(n, i => n - i, ' + ')} = ${a} 个。`, expe: `${SEQ(n, i => n - i, ' + ')} = ${a}.`,
+          howto: '一排格子数长方形：按长度分，1 格、2 格……每种数一次再相加。', howtoe: 'Count by length: 1 cell, 2 cells, ... then add.' };
+      } },
+    { id: 'p1-age', lv: 'p1', sec: '逻辑', make(r) {
+        const ago = RND(2, 6, r), then = RND(5, 14, r), later = RND(2, 6, r), now = then + ago, a = now + later;
+        const nm = pickOne([['艾美', 'Amy'], ['玛莉', 'Mary'], ['彼得', 'Peter']], r);
+        return { lv: 'p1', sec: '逻辑', src: 'gen:年龄', ans: 'num', a: String(a),
+          q: `${ago} 年前${nm[0]} ${then} 岁，${later} 年后${nm[0]}几岁？`, qy: `${ago} 年前${nm[0]} ${then} 岁，${later} 年后${nm[0]}几多岁？`,
+          qe: `${ago} years ago, ${nm[1]} was ${then}. How old will ${nm[1]} be in ${later} years?`,
+          hint: `先算${nm[0]}现在几岁。`, hinty: `先计${nm[0]}而家几岁。`, hinte: `Work out how old ${nm[1]} is now.`,
+          exp: `现在 ${then} + ${ago} = ${now} 岁，${later} 年后 ${now} + ${later} = ${a} 岁。`, expe: `Now ${then} + ${ago} = ${now}; in ${later} years ${a}.`,
+          howto: '年龄题先换算到「现在」，再往前或往后算。', howtoe: 'Get to "now" first, then move forward or back.' };
+      } },
+    { id: 'p1-split', lv: 'p1', sec: '组合', make(r) {
+        const n = RND(6, 17, r);
+        let a = 0; const ways = [];
+        for (let x = 1; x <= 9; x++) { const y = n - x; if (y >= x && y <= 9) { a++; ways.push(`${x}+${y}`); } }
+        return { lv: 'p1', sec: '组合', src: 'gen:分拆', ans: 'num', a: String(a),
+          q: `把 ${n} 分成两个一位数相加（不用 0），有多少种分法？调换顺序算同一种。`, qy: `将 ${n} 分成两个一位数相加（唔用 0），有几多种分法？调转次序当同一种。`,
+          qe: `Write ${n} as the sum of two 1-digit numbers (no 0). How many ways? Swapping the order counts as the same.`,
+          hint: '从小的那个数开始，一个一个列。', hinty: '由细嗰个数开始，一个一个列。', hinte: 'List them, starting from the smaller number.',
+          exp: `${ways.join('、')}，一共 ${a} 种。`, expe: `${ways.join(', ')}: ${a} ways.`,
+          howto: '分拆要有顺序地列：小的数从小到大，直到一半；两个数都要是一位数。', howtoe: 'List in order up to halfway; both numbers must be single digits.' };
       } },
   ];
 
   /* 分档（页面上的按钮顺序） */
-  /* 只留幼儿园(K2)与小一(P1)两档：TIMO 题面、数据、讲法都按这两个年级设计 */
   const LEVELS = [
-    { id: 'k2', name: '幼稚园 K2', note: '幼儿园组：数字现场生成，考听懂题就会做',
-      name_en: 'Kindergarten (K2)', note_en: 'TIMO Kindergarten level: numbers are generated fresh each round' },
-    { id: 'p1', name: '小一 P1', note: '一年级：数字现场生成，答案当场算',
-      name_en: 'Primary 1 (P1)', note_en: 'TIMO Primary 1 level: numbers are generated fresh each round' },
+    { id: 'k2', name: '幼稚园 K2', note: '幼儿园组：原卷题 + 现场生成题，每轮换数据',
+      name_en: 'Kindergarten (K2)', note_en: 'TIMO Kindergarten: real past-paper questions plus fresh generated ones' },
+    { id: 'p1', name: '小一 P1', note: '一年级：原卷题 + 现场生成题，每轮换数据',
+      name_en: 'Primary 1 (P1)', note_en: 'TIMO Primary 1: real past-paper questions plus fresh generated ones' },
   ];
 
-  /* 按档位出题（反背题 + 题型要匀，owner 2026-11-20「题目太单一、全是要数字的」）：
-     ① 原卷 100 题全覆盖（4 卷 × 25 题），是主库；生成题只在原卷题做得重复时补位
-     ② 一轮尽量覆盖不同题型（逻辑/算术/数论/几何/组合），并让选项题占一点比例
-     ③ 避开最近 200 道出过的题面 */
+  /* 一道生成题：模板 make() 偶尔返回 null（条件不满足），重试几次 */
+  function makeFrom(g, r, avoid) {
+    for (let i = 0; i < 8; i++) {
+      const q = g.make(r);
+      if (q && !avoid(q)) { q._tpl = g.id; return q; }
+    }
+    return null;
+  }
+
+  /* 按档位出题（反背题 + 题型要匀）：
+     ① 原卷题每轮最多 ORIG_PER_ROUND 道，10 天内出过的不出，按题型轮转
+     ② 其余用生成题：每次挑本轮用得最少的题型，题面避开最近 SEEN_MAX 道
+     ③ 实在凑不够才回用原卷题（最久没出的优先）
+     ④ 同一题型不超过一轮的一半 */
   function pick(lv, n, rng) {
     const r = rng || Math.random;
     const count = Math.max(1, n || 8);
-    const seen = loadSeen();
+    const seen = loadSeen(), orig = loadOrig();
     const gens = GEN.filter(g => g.lv === lv);
-    const out = [];
-    const secUsed = {};
-    // ① 原卷题：按题型轮转挑，同一轮尽量不落在同一个 sec 上
-    const fresh = shuffled(BANK.filter(q => q.lv === lv && seen.indexOf(fp(q)) < 0).slice(), r);
+    const out = [], secUsed = {};
+    const inOut = q => out.some(o => fp(o) === fp(q));
+    const use = q => { out.push(q); secUsed[q.sec] = (secUsed[q.sec] || 0) + 1; };
+    // ①
+    const fresh = shuffled(BANK.filter(q => q.lv === lv && origFresh(orig, q)), r);
     const bySec = {};
     for (const q of fresh) (bySec[q.sec] = bySec[q.sec] || []).push(q);
-    const secs = Object.keys(bySec);
-    let round = 0;
-    while (out.length < count && round < 8 && secs.length) {
-      for (const s of secs) {
-        if (out.length >= count) break;
-        const pool = bySec[s];
-        const q = pool && pool.shift();
-        if (q && !out.some(o => fp(o) === fp(q))) { out.push(shuffleOpts(q, r)); secUsed[s] = (secUsed[s] || 0) + 1; }
-      }
-      round++;
+    const secs = shuffled(Object.keys(bySec), r);
+    const origCap = Math.min(ORIG_PER_ROUND, count);
+    for (let i = 0; out.length < origCap && i < secs.length * 3; i++) {
+      const q = (bySec[secs[i % secs.length]] || []).shift();
+      if (q && !inOut(q)) use(shuffleOpts(q, r));
     }
-    // ② 原卷题不够（一轮 8 题、一天十几轮）：用生成题补，也按没覆盖过的 sec 优先
-    let guard = 0;
-    while (out.length < count && gens.length && guard++ < 600) {
-      const cands = gens.filter(g => secUsed[g.sec] < 2);
-      const g = (cands.length ? cands : gens)[Math.floor(r() * (cands.length || gens.length))];
-      const q = g.make(r);
-      if (!q || seen.indexOf(fp(q)) >= 0 || out.some(o => fp(o) === fp(q))) continue;
-      q._tpl = g.id;
-      out.push(q);
-      secUsed[q.sec] = (secUsed[q.sec] || 0) + 1;
+    // ②
+    const dead = {};   // 这一轮出不了新题的模板（数据组合都见过了），别卡在同一题型上
+    for (let guard = 0; out.length < count && guard < 200; guard++) {
+      const live = gens.filter(g => !dead[g.id]);
+      if (!live.length) break;
+      const least = Math.min.apply(null, live.map(g => secUsed[g.sec] || 0));
+      const cands = live.filter(g => (secUsed[g.sec] || 0) === least);
+      const g = cands[Math.floor(r() * cands.length)];
+      const q = makeFrom(g, r, x => seen.indexOf(fp(x)) >= 0 || inOut(x));
+      if (q) use(q); else dead[g.id] = 1;
     }
-    // ③ 见过原卷题一直比生成题优先（原卷是孩子在考试里真会碰到的题型）
+    // ③
     if (out.length < count) {
-      for (const q of shuffled(BANK.filter(q => q.lv === lv && !out.some(o => fp(o) === fp(q))).slice(), r)) {
-        if (out.length >= count) break;
-        out.push(shuffleOpts(q, r));
-      }
+      const old = BANK.filter(q => q.lv === lv && !inOut(q)).sort((x, y) => (orig[fp(x)] || 0) - (orig[fp(y)] || 0));
+      for (const q of old) { if (out.length >= count) break; use(shuffleOpts(q, r)); }
     }
-    // ④ 题型太集中时换题：一轮里同一 sec 不超 count 的一半（owner 2026-11-20「太单一」）
+    // ④
     const cap = Math.max(2, Math.ceil(count / 2));
     for (const s of Object.keys(secUsed)) {
-      let mine = out.filter(q => q.sec === s);
+      const mine = out.filter(q => q.sec === s);
       while (mine.length > cap) {
-        const extra = mine.pop();
-        const at = out.indexOf(extra);
-        const alt = shuffled(BANK.filter(q => q.lv === lv && q.sec !== s && !out.some(o => fp(o) === fp(q))), r)[0];
-        if (alt && at >= 0) out[at] = shuffleOpts(alt, r); else break;
+        const extra = mine.pop(), at = out.indexOf(extra);
+        const g = shuffled(gens.filter(x => x.sec !== s), r)[0];
+        const alt = g && makeFrom(g, r, x => inOut(x));
+        if (alt && at >= 0) out[at] = alt; else break;
       }
     }
-    noteSeen(out.map(fp));
+    noteSeen(out.filter(q => q._tpl).map(fp));
+    noteOrig(out.filter(q => !q._tpl).map(fp));
     return shuffled(out, r);
   }
-  /* 原卷选择题：选项顺序每次打乱（opts/optse 一起），不能靠「上次是第二个」记位置 */
+  /* 选择题：选项顺序每次打乱（opts/optse 一起），不能靠「上次是第二个」记位置 */
   function shuffleOpts(q, rng) {
-    if (!q || !Array.isArray(q.opts) || q.opts.length < 2) return q;
+    if (!q || !Array.isArray(q.opts) || q.opts.length < 2) return Object.assign({}, q);
     const idx = shuffled(q.opts.map((_, i) => i), rng);
     const c = Object.assign({}, q, { opts: idx.map(i => q.opts[i]) });
     if (Array.isArray(q.optse) && q.optse.length === q.opts.length) c.optse = idx.map(i => q.optse[i]);
     return c;
   }
-  /* 复练：错题/跳过的题按同型模板重新生成一道新数据的题，不是原题重来 */
+  /* 复练：错题/跳过的题换一道新题——生成题按同模板换数据；原卷题换同档同题型没出过的原卷题，
+     没有就用同题型的生成题。原题刚讲过答案，再做一次只是背 */
   function variant(q, rng) {
     const r = rng || Math.random;
-    const g = q && q._tpl && GEN.filter(x => x.id === q._tpl)[0];
-    if (!g) {
-      // 原卷题没有模板：原题刚讲过答案，再做就是背。换同档同类（sec）的另一道没见过的原卷题，
-      // 没有就换同档生成题
-      if (!q) return null;
-      const seen = loadSeen();
-      const same = shuffled(BANK.filter(b => b.lv === q.lv && b.sec === q.sec && fp(b) !== fp(q) && seen.indexOf(fp(b)) < 0), r);
-      if (same.length) { noteSeen([fp(same[0])]); return shuffleOpts(same[0], r); }
-      const gens = GEN.filter(x => x.lv === q.lv);
-      for (let i = 0; i < 12 && gens.length; i++) {
-        const gg = gens[Math.floor(r() * gens.length)], nq = gg.make(r);
-        if (nq && seen.indexOf(fp(nq)) < 0) { nq._tpl = gg.id; return nq; }
-      }
-      return null;
+    if (!q) return null;
+    const g = q._tpl && GEN.filter(x => x.id === q._tpl)[0];
+    if (g) return makeFrom(g, r, x => fp(x) === fp(q));
+    const orig = loadOrig();
+    const same = shuffled(BANK.filter(b => b.lv === q.lv && b.sec === q.sec && fp(b) !== fp(q) && origFresh(orig, b)), r)[0];
+    if (same) { noteOrig([fp(same)]); return shuffleOpts(same, r); }
+    const gens = GEN.filter(x => x.lv === q.lv && x.sec === q.sec);
+    const pool = gens.length ? gens : GEN.filter(x => x.lv === q.lv);
+    const seen = loadSeen();
+    for (let i = 0; i < 6 && pool.length; i++) {
+      const nq = makeFrom(pool[Math.floor(r() * pool.length)], r, x => seen.indexOf(fp(x)) >= 0);
+      if (nq) return nq;
     }
-    for (let i = 0; i < 12; i++) {
-      const nq = g.make(r);
-      if (nq && fp(nq) !== fp(q)) { nq._tpl = g.id; return nq; }
-    }
-    const nq = g.make(r);
-    if (nq) nq._tpl = g.id;
-    return nq;
+    return null;
   }
 
-  const api = { BANK, GEN, LEVELS, pick, variant, fp };
+  const api = { BANK, GEN, LEVELS, pick, variant, fp, signs };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof window !== 'undefined') window.TIMO = api;
 })();

@@ -844,12 +844,12 @@ body.ptt-off .hint::after { content: none; }
 .flash .pad button { height: 82px; font-size: 32px; font-weight: 600; }
 .flash .st-go { grid-column: 1; justify-self: start; }
 /* 奥数练习（TIMO K2/P1，2026-11-19） */
-.timo { flex: 1; display: grid; grid-template-columns: 1fr 360px; grid-template-rows: auto auto auto 1fr; column-gap: 30px; align-items: center; }
+.timo { flex: 1; display: grid; grid-template-columns: 1fr 360px; grid-template-rows: auto auto auto auto 1fr; column-gap: 30px; align-items: center; }
 .timo-q { grid-column: 1; font-size: 40px; font-weight: 700; line-height: 1.35; }
 .timo-a { grid-column: 1; min-height: 90px; font-size: 32px; line-height: 1.5; color: var(--accent); }
 .timo-a.good { color: #48d18a; } .timo-a.bad { color: #ff8b8b; font-size: 26px; }
 .timo-meta { grid-column: 1; font-size: 18px; color: var(--ink3); }
-.timo #tqPad { grid-column: 2; grid-row: 1 / span 4; }
+.timo #tqPad { grid-column: 2; grid-row: 1 / span 5; }
 .timo .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .timo .pad button { height: 82px; font-size: 32px; font-weight: 600; }
 .timo .timo-opts { display: grid; gap: 12px; }
@@ -860,7 +860,7 @@ body.ptt-off .hint::after { content: none; }
 .timo .timo-tip { margin-top: 10px; font-size: 20px; color: var(--ink2); }
 .timo .st-go { grid-column: 1; justify-self: start; }
 /* 草稿板：右栏从数字键盘换成画布，手指/鼠标写竖式，换题自动清（owner 2026-11-19） */
-.timo .timo-sk { grid-column: 2; grid-row: 1 / span 4; display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 320px; }
+.timo .timo-sk { grid-column: 2; grid-row: 1 / span 5; display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 320px; }
 .timo .timo-sk[hidden] { display: none; }
 .timo #tqPad[hidden] { display: none; }
 .timo .timo-sk canvas { width: 100%; height: 100%; min-height: 300px; border: 2px dashed #3a4a5c; border-radius: 18px;
@@ -1008,3 +1008,19 @@ body.ptt-off .hint::after { content: none; }
 .star-milestone b { font-size: 150px; color: #ffe27a; text-shadow: 0 6px 30px #000c; }
 .star-milestone span { margin-top: 10px; font-size: 48px; font-weight: 700; color: #fff; text-shadow: 0 4px 16px #000c; }
 @keyframes msIn { 0% { opacity: 0; transform: scale(.6); } 12% { opacity: 1; transform: scale(1.08); } 20% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ===== TIMO 题型显示（2026-11-20）：原卷裁图 / 生成图 / 大字数列算式；选项按内容排 ===== */
+.timo .timo-fig { grid-column: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin: 6px 0 4px; }
+.timo .timo-fig[hidden] { display: none; }
+.timo .timo-fig img, .timo .timo-fig .timo-svg { background: #fff; border-radius: 16px; padding: 12px 16px; }
+.timo .timo-fig img { max-width: 100%; max-height: 300px; object-fit: contain; }
+.timo .timo-fig img.wide { width: min(100%, 760px); height: auto; }
+.timo .timo-fig img.tall { height: 260px; width: auto; }
+.timo .timo-fig .timo-svg svg { display: block; max-height: 280px; max-width: 100%; height: auto; }
+.timo .timo-show { font-size: 54px; font-weight: 700; letter-spacing: 2px; color: #ffe08a; font-variant-numeric: tabular-nums; word-break: break-word; }
+.timo .timo-show.long { font-size: 38px; letter-spacing: 1px; }
+.timo .timo-fig.pic .timo-show { font-size: 36px; }
+.timo-q.withfig { font-size: 30px !important; line-height: 1.3 !important; }
+.timo .timo-opts.grid { grid-template-columns: repeat(3, 1fr); }
+.timo .timo-opts.grid button { height: 96px; font-size: 40px; }
+.timo .timo-opts.long button { height: 76px; font-size: 26px !important; text-align: left; padding: 0 18px; white-space: nowrap; }

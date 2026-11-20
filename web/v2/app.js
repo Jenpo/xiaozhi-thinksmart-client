@@ -3672,6 +3672,7 @@ function timoView(body, opts) {
       `<button class="st-pill${l.id === level ? ' on' : ''}" data-lv="${l.id}">${esc((en && l.name_en) || l.name)}</button>`).join('')}
       <span class="st-note">${esc(note)}</span></div>
     <div class="timo"><div class="timo-q" id="tqQ">${esc(t.ready)}</div>
+      <div class="timo-fig" id="tqFig" hidden></div>
       <div class="timo-a" id="tqA"></div>
       <div class="flash-voice" id="tqV"></div>
       <div class="timo-meta" id="tqMeta">${esc(t.meta)}</div>
@@ -3733,43 +3734,95 @@ const timoAnsLabel = q => { const i = (q.opts || []).findIndex(o => timoNorm(o) 
 function timoOptsSpeech(q) {
   if (q.ans !== 'choice' || !q.opts) return '';
   const labels = q.opts.map((o, i) => timoOptLabel(q, i));
+  const letters = labels.map((_, i) => String.fromCharCode(65 + i));
+  if (labels.some(l => String(l).length > 8))   // 整条算式念四遍太长：让孩子看屏幕，说字母或「加减加」
+    return ST.lang === 'en' ? ` Look at the screen and say ${letters.slice(0, -1).join(', ')} or ${letters[letters.length - 1]}.`
+      : ST.lang === 'yue' ? ` 睇屏幕上面几条算式，讲 ${letters.join('、')} 边个，或者讲加减。` : ` 看屏幕上的算式，说 ${letters.join('、')} 哪一个，或者直接说加减。`;
+  if (q.fig && labels.every(l => /^[A-E]$/.test(l)))
+    return ST.lang === 'en' ? ` Look at the picture: ${letters.join(', ')}?` : ' 看图选：' + letters.join('、');
   return ST.lang === 'en' ? ' Is it ' + labels.join(', or ') + '?' : ' 选：' + labels.join('，');
+}
+/* 题型不同，屏幕上给的东西不同（owner 2026-11-20「不同题型的输出交互优化」）：
+   原卷图形题显示原卷裁图；数列/算式/图形序列大字显示；生成的几何题现画 SVG。题面文字仍在上面 */
+function timoFig(q) {
+  const box = stEl('tqFig'), qel = stEl('tqQ');
+  if (!box) return;
+  const parts = [];
+  // 原卷裁图有扁的（天秤、五个图形一排）也有方的：扁图铺满宽度，方图定高，都不变形
+  if (q && q.fig) parts.push(`<img src="/static/v2/${esc(q.fig)}" alt="" onload="this.className = this.naturalWidth > 2.4 * this.naturalHeight ? 'wide' : 'tall'">`);
+  if (q && q.svg) parts.push(`<div class="timo-svg">${q.svg}</div>`);
+  if (q && q.show) parts.push(`<div class="timo-show${q.show.length > 26 ? ' long' : ''}">${esc(q.show)}</div>`);
+  box.innerHTML = parts.join('');
+  box.hidden = !parts.length;
+  box.className = 'timo-fig' + (q && (q.fig || q.svg) ? ' pic' : '');
+  if (qel) qel.classList.toggle('withfig', !!parts.length);
+}
+/* 选项排法：两个横排；短选项（字母/图形名/数字）多个就排成格子；整条算式（填加减号）一条一行、字小一点 */
+/* 选项按钮文字：「A. 圆」；选项本身就是字母（看图选 A–E）时只写字母，不写成「A. A」 */
+function timoOptText(q, i) {
+  const L = String.fromCharCode(65 + i), lab = String(timoOptLabel(q, i));
+  return lab === L ? L : `${L}. ${esc(lab)}`;
+}
+function timoOptsLayout(q) {
+  const labels = q.opts.map((o, i) => timoOptLabel(q, i));
+  if (labels.some(l => String(l).length > 8)) return 'long';
+  if (q.opts.length <= 2) return 'two';
+  if (q.opts.length >= 4 && labels.every(l => String(l).length <= 3)) return 'grid';
+  return '';
 }
 function tqVoice(t, cls) { const el = stEl('tqV'); if (el) { el.textContent = t || ''; el.className = 'flash-voice' + (cls ? ' ' + cls : ''); } }
 /* 选择题口头作答：字母 A-D、选项原文、或数字等于某个选项 */
 /* 数字答案口头兜底：两位数孩子常说成「十二」「一十二」，parseNum 未必拿到；
    这里再从原文里揪出「一到两位数字」并和答案比对，避免听对了却判成没听懂 */
 function timoMatchNumber(q, text) {
-  const want = timoNorm(q.a);
-  const t = String(text || '');
-  if (timoNorm(t).indexOf(want) >= 0) return q.a;
-  const digs = (t.match(/[0-9]+/g) || []).map(d => String(Number(d)));
-  if (digs.indexOf(want) >= 0) return q.a;
-  // 中文数字整段转换：小孩常说「十二」「二十三」而不是 12、23
-  const D = { '零':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9 };
-  const cn2num = s => s.replace(/[零一二两三四五六七八九十廿]+/g, w => {
-    // 「十二」「十六」是 12、16，不是 102、106：十开头时十位是 1
-    if (w === '十') return '10';
-    if (w[0] === '十') return String(10 + (D[w[1]] || 0));
-    if (w.indexOf('十') >= 0) {
-      const [a, b] = w.split('十');
-      const hi = a ? (D[a] || 0) : 1, lo = b ? (D[b] || 0) : 0;
-      return String(hi * 10 + lo);
-    }
-    return Array.from(w).map(ch => D[ch] ).join('');
-  });
-  const cn = cn2num(t);
-  const nums = (cn.match(/[0-9]+/g) || []).map(d => String(Number(d)));
-  return nums.indexOf(want) >= 0 ? q.a : null;
+  // 11-20 复核：旧版用「原文里含有答案数字」判对——答案 2 听到「12」、答案 6 听到「不是六」都算对，
+  // 一口气报一串数也能蒙中。现在只认整数、只认最后说出的那个数（孩子改口时以最后一个为准）
+  const want = String(Number(timoNorm(q.a)));
+  const D = { '零':0,'〇':0,'一':1,'幺':1,'二':2,'两':2,'兩':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9 };
+  const cn2num = w => {
+    // 「十二」→12、「二十三」→23、「一百」→100；一串单字（「一三」）按位拼
+    if (/百/.test(w)) { const [h, rest] = w.split('百'); const hv = h ? (D[h] ?? 1) : 1; return hv * 100 + (rest ? Number(cn2num(rest.replace(/^零/, ''))) || 0 : 0); }
+    if (w === '十') return 10;
+    if (w.indexOf('十') >= 0) { const [a, b] = w.split('十'); return (a ? (D[a] ?? 0) : 1) * 10 + (b ? (D[b] ?? 0) : 0); }
+    return Number(Array.from(w).map(ch => D[ch]).join(''));
+  };
+  const EN = ['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];
+  const TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+  const t = String(text || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/廿/g, '二十')
+    .replace(/\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[\s-]+(one|two|three|four|five|six|seven|eight|nine))?\b/gi,
+      (m, a, b) => String(TENS[a.toLowerCase()] + (b ? EN.indexOf(b.toLowerCase()) : 0)))
+    .replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b/gi, w => String(EN.indexOf(w.toLowerCase())));
+  if (/不是|唔系|不对|唔啱|\bnot\b/i.test(t) && !/(?<![不唔])(?:是|系)\s*[0-9零一二两三四五六七八九十百]+\s*[。.!！]?$/.test(t)) return null;   // 「不是六」不算回答
+  const nums = (t.match(/[0-9]+|[零〇一幺二两兩三四五六七八九十百]+/g) || [])
+    .map(w => /^[0-9]+$/.test(w) ? Number(w) : cn2num(w)).filter(v => Number.isFinite(v));
+  if (!nums.length) return null;
+  if (new Set(nums).size >= 3) return null;      // 一口气报三个以上的数 = 没给出答案，重听
+  const last = String(nums[nums.length - 1]);
+  return last === want ? q.a : last;              // 错的数照样回给判题（算答错），不再退回 parseNum 去捡别的数
 }
 function timoMatchChoice(q, text) {
-  const t = timoNorm(text);
-  const letter = (String(text || '').trim().match(/^[a-dA-D][.。!！]?$/) || [''])[0][0];
-  if (letter) return q.opts[letter.toUpperCase().charCodeAt(0) - 65] || null;
-  const hit = q.opts.find(o => timoNorm(o) && t.includes(timoNorm(o)));
-  if (hit) return hit;
-  const ie = (q.optse || []).findIndex(o => timoNorm(o) && t.includes(timoNorm(o)));
-  if (ie >= 0) return q.opts[ie];
+  const raw = String(text || '').trim(), t = timoNorm(raw);
+  const n = q.opts.length;
+  // 字母：只说一个字母（A–E，按选项个数）
+  const lm = raw.match(/^([a-eA-E])\s*[.。!！]?$/);
+  if (lm) return q.opts[lm[1].toUpperCase().charCodeAt(0) - 65] || null;
+  // 填加减号：说「加减加」或整条算式都行——按说出的加/减顺序拼回算式
+  if (q.opts.every(o => /[+−]/.test(o))) {
+    const ops = (raw.match(/加|减|減|\+|-|−|plus|minus/gi) || []).map(w => /加|\+|plus/i.test(w) ? '+' : '−');
+    const gaps = (q.opts[0].match(/[+−]/g) || []).length;
+    if (ops.length === gaps) {
+      const hit = q.opts.find(o => (o.match(/[+−]/g) || []).join('') === ops.join(''));
+      if (hit) return hit;
+    }
+  }
+  // 说选项原文：只认恰好命中一个选项的；一口气把几个选项都说了（「圆还是方」）不算，不让报全部蒙对
+  const hits = q.opts.filter(o => timoNorm(o) && t.includes(timoNorm(o)));
+  const hitsE = (q.optse || []).map((o, i) => timoNorm(o) && t.includes(timoNorm(o)) ? q.opts[i] : null).filter(Boolean);
+  const all = Array.from(new Set(hits.concat(hitsE)));
+  // 「三角」里也含「角」等子串：多个命中时，留下最长那个能覆盖其他的
+  const best = all.filter(o => !all.some(p => p !== o && timoNorm(p).includes(timoNorm(o))));
+  if (best.length === 1) return best[0];
+  if (best.length > 1) return null;
   const v = parseNum(text);
   return v === null ? null : (q.opts.find(o => timoNorm(o) === String(v)) || null);
 }
@@ -3864,7 +3917,7 @@ async function timoAfterGuide(q) {
   tqVoice((timoUI() ? 'Heard: ' : '听到：') + (r.text || ''));
   if (/(明白|懂了|知道|识了|ok|got it|i see|understand|yes)/.test(low)) return;
   if (/(再讲|再讲一次|again|repeat|唔明|不明白|听不懂)/.test(low)) return timoSpeakGuide(q);
-  const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (timoMatchNumber(q, r.text) || (() => { const v = parseNum(r.text); return v === null ? null : String(v); })());
+  const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : timoMatchNumber(q, r.text);
   if (ans != null && timoNorm(ans) === timoNorm(q.a)) { tqVoice(timoUI() ? 'Yes! You got it now.' : '对了！这次你自己算出来了'); sfx('good'); }
 }
 /* 错题/跳过的题：按同型模板换一组数据放回队尾，必须再做一次（原题重来只会背答案） */
@@ -3910,7 +3963,7 @@ async function timoAsk(readQuestion, prefix) {
     if (cmd === 'skip') return timoSkipAsk();
     if (/讲解|讲讲|解释|一步一步|explain|teach|step by step/.test(low)) return timoExplain();
     if (cmd === 'dunno' || /提示|hint|help|clue/.test(low)) return timoHint();
-    const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : (timoMatchNumber(q, r.text) || (() => { const v = parseNum(r.text); return v === null ? null : String(v); })());
+    const ans = q.ans === 'choice' ? timoMatchChoice(q, r.text) : timoMatchNumber(q, r.text);
     if (ans !== null && ans !== undefined) {
       const i = q.ans === 'choice' ? q.opts.findIndex(o => timoNorm(o) === timoNorm(ans)) : -1;
       return timoAnswer(ans, i >= 0 ? timoOptLabel(q, i) : ans);
@@ -3963,6 +4016,7 @@ function timoNext() {
   const n = stEl('tqQ'), a = stEl('tqA'), pad = stEl('tqPad');
   // owner 2026-11-19「出题的时候，题目在屏幕也要有」：题面整句显示，不只念；题号和题型放到下面一行
   n.textContent = timoText(q);
+  timoFig(q);
   a.className = 'timo-a'; a.textContent = '';
   stEl('tqNext').hidden = true;
   const no = Math.min(TIMO.n + 1, TIMO.total);
@@ -3972,7 +4026,7 @@ function timoNext() {
     : `第 ${no} / ${TIMO.total} 题（${q.sec}）${rev}${q._ch ? ' · ⭐挑战题' : ''} · 说答案或点 · ⭐ ${QV.roundStars}`;
   // 选择题：2 个选项横向大按钮、3 个以上纵向；数字题：键盘 + 一句「说答案也可以」
   pad.innerHTML = q.ans === 'choice'
-    ? `<div class="timo-opts${q.opts.length <= 2 ? ' two' : ''}">${q.opts.map((o, i) => `<button data-o="${i}">${String.fromCharCode(65 + i)}. ${esc(timoOptLabel(q, i))}</button>`).join('')}</div>`
+    ? `<div class="timo-opts ${timoOptsLayout(q)}">${q.opts.map((o, i) => `<button data-o="${i}">${timoOptText(q, i)}</button>`).join('')}</div>`
     : `<div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>
        <div class="timo-tip">${timoUI() ? '🎤 You can also just say the answer' : '🎤 也可以直接说答案，不用按键'}</div>`;
   if (q.ans === 'choice') {
@@ -4126,6 +4180,7 @@ function timoEnd() {
     : `${t.done}：一次答对 ${TIMO.firstRight} / ${TIMO.total}${TIMO.retried ? `，复练 ${TIMO.retried} 题` : ''}，用了 ${sec} ${t.used}`;
   stEl('tqA').className = 'timo-a';
   stEl('tqA').textContent = TIMO.firstRight === TIMO.total ? t.allRight : t.inBook;
+  timoFig(null);
   stEl('tqPad').innerHTML = '';
   tqVoice('');
   stEl('tqSay').hidden = true; stEl('tqHint').hidden = true; stEl('tqNext').hidden = true;
@@ -4289,7 +4344,7 @@ document.querySelectorAll('.st-lang').forEach(b => b.addEventListener('click', (
   if (ST.mode === 'timo' && TIMO.q) {
     const q = TIMO.q;
     stEl('tqQ').textContent = timoText(q);
-    document.querySelectorAll('#tqPad [data-o]').forEach(o => { const i = Number(o.dataset.o); o.textContent = `${String.fromCharCode(65 + i)}. ${timoOptLabel(q, i)}`; });
+    document.querySelectorAll('#tqPad [data-o]').forEach(o => { const i = Number(o.dataset.o); o.innerHTML = timoOptText(q, i); });
     if (!TIMO.locked) { listenCancel(); timoAsk(true); }   // 换了语言就用新语言再念一遍（和「再听一次」同一条路）
   } else if (ST.mode === 'flash' && ST.flash) flashMeta();
 }));
