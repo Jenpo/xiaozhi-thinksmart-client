@@ -254,6 +254,7 @@ class Client:
         self.reply_samples = 0        # reply audio received since "tts start" (to tell what was heard)
         self.reply_packets = 0
         self.muted_packets = 0
+        self.echo_until = 0.0          # 回答正常播完前（还在缓冲里）不把麦克风上传：会把自己的话送去识别
         self.recognised = 0           # count of "stt" messages
         self.threads = {}             # model entry -> messages (the hub's saved ones, then this connection's)
         self.history_loaded = False
@@ -392,7 +393,9 @@ class Client:
     async def _sender(self):
         while True:
             packet = await self._send_q.get()
-            if self.uploading or self.stream_tail():
+            # 回答还在喇叭里播（tts stop 后缓冲没放完）：麦克风收到的是自己的声音，不送。
+            # 2026-11-20 09:30「湿度偏高…今天会下小雨」、09:49 都是 stop 时还有 4 s+ 在缓冲、麦克风却一直在传
+            if (self.uploading or self.stream_tail()) and time.monotonic() >= getattr(self, 'echo_until', 0.0):
                 await self.hub.send_audio(packet)
 
     # ---- state ----
@@ -656,6 +659,7 @@ class Client:
                 self.set_state('idle')
                 return False
         self.uploading = True
+        self.echo_until = 0.0          # 开始新的一次听（唤醒 / 播完后再开）：不再挡
         self.listen_mode = mode
         self.vad_ended = False
         self.vad_tail_until = 0.0
@@ -719,6 +723,7 @@ class Client:
         if reason:
             msg['reason'] = reason
         self.audio.player.trim(0)
+        self.echo_until = 0.0          # 打断了：没东西在播，马上能听
         self.mute_audio = True
         self.listen_after_reply = False
         if phase == 'recognising':
@@ -962,6 +967,9 @@ class Client:
                     log.warning('the turn ended without a reply')
                     self.events.publish('toast', {'kind': 'error', 'text': '网络还没连上，稍后再试' if not has_default_route()
                                                   else '没收到回答，可能是网络或模型服务连不上，稍后再试'})
+                tail = self.audio.player.buffered()
+                if tail > 0.02:            # 正常结束但还没播完（被打断的上面已 trim 成 0）
+                    self.echo_until = time.monotonic() + tail + 0.3
                 self.last_reply = (self.bot_msg or {}).get('text') or ''
                 self.bot_msg = self.question = None
                 self.hold_open = False
@@ -969,7 +977,8 @@ class Client:
                     asyncio.create_task(self._listen_after_reply())
                 elif self.uploading:
                     self.heard = True
-                    self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
+                    # 追问窗口从真正播完算起（播的时候不收音）
+                    self.deadline = time.monotonic() + tail + self.cfg['follow_up_seconds']
                     self.set_state('listening')
                 else:
                     self.set_state('idle')
