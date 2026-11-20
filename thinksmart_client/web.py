@@ -78,7 +78,7 @@ def make_app(client: Client):
         asyncio.create_task(client.say(body.get('text', '')))
         return web.json_response({'ok': True})
 
-    forecast = weather.Weather((getattr(client, 'cfg', None) or {}).get('weather_city', '广州'))
+    forecast = weather.Weather((getattr(client, 'cfg', None) or {}).get('weather_city', '香港'))
 
     async def weather_now(_request):
         # the home screen line; empty when the network or the service is down (never an error page)

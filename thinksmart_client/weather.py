@@ -1,7 +1,7 @@
 """The next 7 days of weather for the home screen (Open-Meteo: no key, same source as the hub's
 get_weather since 2026-11-11).
 
-The city is config 'weather_city' (the hub's get_weather default is 广州 too). Coordinates are looked up
+The city is config 'weather_city' (Hong Kong since owner 2026-11-20; the hub's get_weather default is 香港 too). Coordinates are looked up
 once; the forecast is cached for 30 minutes and a failure keeps the last good one, so the page never
 waits on the network and an outage only leaves the line blank.
 
@@ -94,8 +94,13 @@ def summarize(city, data):
 
 
 class Weather:
+    # Hong Kong keeps its own zone; 广州 and every other mainland city use Asia/Shanghai. The timezone decides
+    # which day 'today' is in the daily block, so it must match the city (2026-11-20 owner switched to Hong Kong).
+    TZ = {'香港': 'Asia/Hong_Kong', 'Hong Kong': 'Asia/Hong_Kong'}
+
     def __init__(self, city):
         self.city = (city or '').strip()
+        self.timezone = self.TZ.get(self.city, 'Asia/Shanghai')
         self.coords = None
         self.value = None
         self.at = 0.0
@@ -129,7 +134,7 @@ class Weather:
                     if not self.coords:
                         self.coords = await self._geocode(s)
                     lat, lon = self.coords
-                    params = {'latitude': lat, 'longitude': lon, 'timezone': 'Asia/Shanghai',
+                    params = {'latitude': lat, 'longitude': lon, 'timezone': self.timezone,
                               'forecast_days': FORECAST_DAYS,
                               'current': 'temperature_2m,weather_code',
                               'daily': 'weather_code,temperature_2m_max,temperature_2m_min,'

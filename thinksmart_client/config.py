@@ -51,7 +51,7 @@ DEFAULTS = {
     'screen_off': {'enabled': True, 'minutes': 5},
     'alarm_volume': 70,   # countdowns, alarms and reminders ring at this, whatever the device volume (alarms.py)
     'alarm_tone': 'coffee',   # alarms.TONES
-    'weather_city': '广州',   # home screen weather (weather.py); same default as the hub's get_weather
+    'weather_city': '香港',   # home screen weather (weather.py); same default as the hub's get_weather (owner 2026-11-20: Hong Kong)
 }
 
 

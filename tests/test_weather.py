@@ -2,7 +2,7 @@
 raises nor wipes the last good forecast."""
 import pytest
 
-from thinksmart_client import weather
+from thinksmart_client import config, weather
 
 SAMPLE = {
     'current': {'temperature_2m': 21.4, 'weather_code': 3},
@@ -60,6 +60,18 @@ async def test_failure_keeps_the_last_forecast_and_does_not_retry_at_once(monkey
     assert await w.get() == {'city': '广州', 'days': [1]}
     assert await w.get() == {'city': '广州', 'days': [1]}
     assert len(calls) == 1                                         # second call is inside RETRY
+
+
+def test_hong_kong_uses_its_own_timezone():
+    # 2026-11-20 owner switched the home-screen weather to Hong Kong: the daily block must be Hong Kong days,
+    # not Asia/Shanghai ones (otherwise "今天" can be the wrong day late in the evening).
+    assert weather.Weather('香港').timezone == 'Asia/Hong_Kong'
+    assert weather.Weather('广州').timezone == 'Asia/Shanghai'
+    assert weather.Weather('').timezone == 'Asia/Shanghai'
+
+
+def test_default_weather_city_is_hong_kong():
+    assert config.DEFAULTS['weather_city'] == '香港'
 
 
 @pytest.mark.asyncio
