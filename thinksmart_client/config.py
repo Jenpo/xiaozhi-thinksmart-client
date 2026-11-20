@@ -43,7 +43,9 @@ DEFAULTS = {
     # no reply audio this long after the question was recognised: say a short local "嗯，我看看"
     # (web/sounds/think-*.wav, the hub's Edge TTS voice) so the wait isn't silent. Tool turns
     # (music, TV, HA) take 6-12 s; plain answers usually start in 2-3.5 s. 0: off
-    'think_cue_seconds': 2.5,
+    # 2.5 → 0.8 (2026-11-20): 首包 >2.5 s 的有 48%（91/190 轮），孩子开口后约 4.3 s 才听到第一声，
+    # 期间就开始重问。垫话在回复到达时会自行放弃（_think_cue），所以提前只影响「本来就要等」的轮次。
+    'think_cue_seconds': 0.8,
     'port': 8090,
     'sleep': {'enabled': True, 'start': '22:30', 'end': '09:00'},   # sleep.py（2026-11-16 owner：22:30-09:00 静音）
     'brightness': 100,    # the screen's 0-100, set on the page or by voice (no automatic brightness: the user asked)

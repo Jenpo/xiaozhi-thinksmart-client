@@ -81,7 +81,12 @@ LONG_END_WAIT = 0.9
 # sometimes reports a tap 6-15 times in the same second (2026-11-14 09:16:26 / 12:31:54): each copy
 # aborted the turn before it, and a ghost tap on the neighbouring card replaced the real question.
 SAY_DEBOUNCE = 1.5
-THINK_CUE_AFTER = 2.5    # config think_cue_seconds: no reply this long after the question -> "嗯，我看看"
+# 2.5 → 0.8 (2026-11-20 日志实证): 首包 >2.5 s 走垫话的有 48%（91/190 轮），孩子等不到回应就重问；
+# 垫话已经有「回复一到就不放」的闸（_think_cue 里查 bot_msg / reply_packets），提前不会盖住快回复。
+# 用法：config think_cue_seconds: no reply this long after the question -> "嗯，我看看"
+THINK_CUE_AFTER = 0.8
+# 点歌后这么久之内的开播算「真点歌」；更早于这个窗口、又发生在本机说话时的开播是会话自恢复
+MUSIC_SONG_WINDOW = 60.0
 NORMAL_STOP_TAIL = 0.6  # a normal "tts stop" leaves less than this queued; more means aborted
 PUNCT = set('，。！？；：、,.!?;:…')
 REPORT_POLL = 10         # seconds between asking the hub for pending reports (local HTTP)
@@ -251,6 +256,7 @@ class Client:
         self.mute_audio = False       # after an abort, drop the old reply's frames
         self.listen_after_reply = False   # the mic was closed for this reply: reopen it when played
         self.hub_music = None             # what the hub streams (a voice request): {state, title, index, ...}
+        self.last_song_tool = 0.0         # monotonic: the hub last reported a song_request/play_music call
         self.reply_samples = 0        # reply audio received since "tts start" (to tell what was heard)
         self.reply_packets = 0
         self.muted_packets = 0
@@ -842,6 +848,9 @@ class Client:
             if text.startswith('% '):
                 # not speech: the hub's note that the model calls a tool (for the screens of ESP32 boards)
                 log.info('the model calls %s', text[2:])
+                if text[2:].split('(')[0].strip() in ('song_request', 'play_music'):
+                    # 点歌是「允许放歌」的唯一凭据（_on_music 用它区分真点歌和会话自恢复）
+                    self.last_song_tool = time.monotonic()
                 if self.uploading and self.state in ('listening', 'thinking'):
                     # the tool runs before the model's first sentence. Holding the mic open keeps the
                     # hub from closing the connection as idle while a slow tool runs, and anything the
@@ -1013,6 +1022,16 @@ class Client:
                 log.info('the hub plays %s/%s: %s', msg.get('index'), msg.get('total'), msg.get('title'))
                 if music_api.local_status().get('playing') or music_api.local_status().get('paused'):
                     music_api.local_stop()
+                # 没有点歌却在本机说话时开播 = hub 把上一条歌单接着放/从第 1 首重放。
+                # 2026-11-20 日志：40 次开播里 21 次查不到任何 song_request，全部落在 state: speaking 上
+                # （16:19–16:26 数学问答期间「1/20: 06」反复重放），孩子每次得喊两遍小麦才能停。
+                # 这里只暂停不销毁会话：真在听歌时问一句，暂停后说「继续放」就能接上。
+                if (self.state == 'speaking'
+                        and time.monotonic() - getattr(self, 'last_song_tool', 0.0) > MUSIC_SONG_WINDOW):
+                    log.info('the hub started %r without a song request: pausing it', msg.get('title'))
+                    self.events.publish('music', self.music_status())
+                    asyncio.create_task(self.music_control('pause'))
+                    return
         else:
             self.hub_music = None
             if state == 'idle' and self.state == 'connecting':
