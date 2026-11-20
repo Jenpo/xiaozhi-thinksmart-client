@@ -679,21 +679,52 @@
       out.push(q);
     }
     const fresh = shuffled(BANK.filter(q => q.lv === lv && seen.indexOf(fp(q)) < 0).slice(), r);
-    for (const q of fresh) { if (out.length >= count) break; out.push(q); }
-    if (out.length < count) {   // 见过的原卷题补位（数字题基本已被生成题覆盖）
-      for (const q of shuffled(BANK.filter(q => q.lv === lv && out.indexOf(q) < 0).slice(), r)) {
+    for (const q of fresh) { if (out.length >= count) break; out.push(shuffleOpts(q, r)); }
+    // 原卷题做完了先用生成题（模板可重复、数字换新）补，不拿见过的原卷题——一天十几轮，原卷题两天就轮完，
+    // 再出就是背答案（2026-11-20 K2 一天 13 轮，多数 8/8）
+    guard = 0;
+    while (out.length < count && gens.length && guard++ < 600) {
+      const g = gens[Math.floor(r() * gens.length)];
+      const q = g.make(r);
+      if (!q || seen.indexOf(fp(q)) >= 0 || out.some(o => fp(o) === fp(q))) continue;
+      q._tpl = g.id;
+      out.push(q);
+    }
+    if (out.length < count) {   // 实在不够才用见过的原卷题
+      for (const q of shuffled(BANK.filter(q => q.lv === lv && !out.some(o => fp(o) === fp(q))).slice(), r)) {
         if (out.length >= count) break;
-        out.push(q);
+        out.push(shuffleOpts(q, r));
       }
     }
     noteSeen(out.map(fp));
     return shuffled(out, r);
   }
+  /* 原卷选择题：选项顺序每次打乱（opts/optse 一起），不能靠「上次是第二个」记位置 */
+  function shuffleOpts(q, rng) {
+    if (!q || !Array.isArray(q.opts) || q.opts.length < 2) return q;
+    const idx = shuffled(q.opts.map((_, i) => i), rng);
+    const c = Object.assign({}, q, { opts: idx.map(i => q.opts[i]) });
+    if (Array.isArray(q.optse) && q.optse.length === q.opts.length) c.optse = idx.map(i => q.optse[i]);
+    return c;
+  }
   /* 复练：错题/跳过的题按同型模板重新生成一道新数据的题，不是原题重来 */
   function variant(q, rng) {
-    const g = q && q._tpl && GEN.filter(x => x.id === q._tpl)[0];
-    if (!g) return null;
     const r = rng || Math.random;
+    const g = q && q._tpl && GEN.filter(x => x.id === q._tpl)[0];
+    if (!g) {
+      // 原卷题没有模板：原题刚讲过答案，再做就是背。换同档同类（sec）的另一道没见过的原卷题，
+      // 没有就换同档生成题
+      if (!q) return null;
+      const seen = loadSeen();
+      const same = shuffled(BANK.filter(b => b.lv === q.lv && b.sec === q.sec && fp(b) !== fp(q) && seen.indexOf(fp(b)) < 0), r);
+      if (same.length) { noteSeen([fp(same[0])]); return shuffleOpts(same[0], r); }
+      const gens = GEN.filter(x => x.lv === q.lv);
+      for (let i = 0; i < 12 && gens.length; i++) {
+        const gg = gens[Math.floor(r() * gens.length)], nq = gg.make(r);
+        if (nq && seen.indexOf(fp(nq)) < 0) { nq._tpl = gg.id; return nq; }
+      }
+      return null;
+    }
     for (let i = 0; i < 12; i++) {
       const nq = g.make(r);
       if (nq && fp(nq) !== fp(q)) { nq._tpl = g.id; return nq; }
