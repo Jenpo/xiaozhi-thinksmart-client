@@ -9,7 +9,7 @@
 # Usage: nohup tools/kiosk_perfwatch.sh <until-epoch> >/dev/null 2>&1 &
 UNTIL=${1:?until epoch}
 OUT=${OUT:-$HOME/perfwatch}
-HOT=${HOT:-40}
+HOT=${HOT:-30}
 MAXCAP=${MAXCAP:-8}
 SPY=$HOME/.local/bin/py-spy
 HZ=$(getconf CLK_TCK)
