@@ -107,6 +107,33 @@ class Screen:
             log.warning('screen hint not written: %s', e)
 
 
+# The blanker dims to BLANK_BRIGHTNESS (10, "physically dark", never 0) instead of turning the panel off;
+# the proximity daemon uses the same test. Lit levels are >= 1400 (MANUAL_MIN), so the line is clear.
+BACKLIGHT_PATH = Path('/sys/class/backlight/backlight/brightness')
+BLANK_LEVEL = 10
+
+
+def screen_lit():
+    """False while the blanker has the screen dark. Unknown (no backlight, e.g. tests): lit."""
+    try:
+        return int(BACKLIGHT_PATH.read_text()) > BLANK_LEVEL
+    except (OSError, ValueError):
+        return True
+
+
+async def watch_screen(publish, interval=0.5):
+    """publish('screen', {'on': bool}) when the screen goes dark or lights up. The page pauses its
+    animations while dark: the kiosk renders on the CPU (Skia CPU), and the orb's endless CSS
+    animations kept ~1.3-2.7 of 8 cores busy for hours with nobody looking (2026-11-17)."""
+    lit = screen_lit()
+    while True:
+        await asyncio.sleep(interval)
+        now = screen_lit()
+        if now != lit:
+            lit = now
+            publish('screen', {'on': lit})
+
+
 def input_device(name):
     """/dev/input/eventN of the input device called `name` (from /proc/bus/input/devices)."""
     try:

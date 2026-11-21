@@ -59,18 +59,22 @@ def make_client():
     c.uploading = False
     c.deadline = None
     c.listen_since = 0.0
+    c.listen_mode = 'realtime'
+    c.ptt_held = False
     c.awaiting_text = False
     c.recognising = False
     c.hub_pending = False
     c.vad_ended = False
     c.aborted_at = c.abort_pending = c.question = None
     c.heard = False
+    c.hold_open = False
     c.mute_audio = False
     c.listen_after_reply = False
     c.powering_off = False
     c.reply_samples = c.reply_packets = c.muted_packets = 0
     c.recognised = 0
     c.threads, c.entry, c.models = {}, None, {'current': None, 'options': []}
+    c.devices = {'homes': [], 'devices': [], 'error': None}
     c.bot_msg = None
     c.decoder = None
     c._seq = 0
@@ -199,6 +203,8 @@ async def test_newer_question_while_reopening_keeps_the_mic_closed():
 
 def test_linear_canceller_removes_echo_and_keeps_the_voice():
     from thinksmart_client.speex_aec import LinearAec
+    if getattr(LinearAec, 'STUBBED', False):
+        pytest.skip('libspeexdsp not installed here (tests/conftest.py stand-in)')
     rng = np.random.default_rng(1)
     rate, n = 16000, 16000 * 12
     far = rng.normal(0, 0.1, n).astype(np.float32)
@@ -328,3 +334,32 @@ async def test_push_to_talk_with_nothing_recognised_ends_at_once():
     assert c.state == 'thinking' and c.status()['recognising']
     await c._on_json({'type': 'vad', 'state': 'empty'})
     assert c.state == 'idle' and shown == ['没听清，可以再说一次「小麦小麦」']
+
+
+@pytest.mark.asyncio
+async def test_first_mic_tap_during_a_reply_waits_second_tap_cuts_it_off():
+    # 2026-11-20：孩子在长回答上一秒连点 3–4 下麦克风，第一下只出 toast，看起来像按了没反应
+    c = make_client()
+    await ask(c)
+    for _ in range(30):
+        c._on_audio(PACKET)
+    play(c, 1.0)
+    await c.wake('button')
+    assert not any(m['type'] == 'abort' for m in c.hub.sent)
+    assert c.listen_after_reply and c.state == 'speaking'
+    await c.wake('button')
+    abort = next(m for m in c.hub.sent if m['type'] == 'abort')
+    assert abort['reason'] == 'wake_word_detected'
+    assert c.uploading and c.state == 'listening'
+
+
+@pytest.mark.asyncio
+async def test_mic_taps_far_apart_during_a_reply_both_wait():
+    c = make_client()
+    await ask(c)
+    for _ in range(30):
+        c._on_audio(PACKET)
+    await c.wake('button')
+    c.reply_tap_at -= app.REPLY_SECOND_TAP + 0.1
+    await c.wake('button')
+    assert not any(m['type'] == 'abort' for m in c.hub.sent)

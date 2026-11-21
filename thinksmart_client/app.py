@@ -42,7 +42,7 @@ from pathlib import Path
 import aiohttp
 import numpy as np
 
-from . import alarms, bt, config, mcp, sleep, update, wake_verify
+from . import alarms, bt, config, mcp, music_api, sleep, update, wake_verify
 from .audio import OUT_RATE, Audio, load_wav
 from .device import DIM_LEVEL, Keys, Screen, normalize_screen_off
 from .hub import Hub
@@ -64,9 +64,33 @@ HALT_AFTER = 3           # seconds to read "正在关机 … 等 10 秒再拔" b
 UPDATE_BUSY = ('preparing', 'downloading', 'installing', 'testing', 'rolling_back')
 # installing for a page request, or finishing an interrupted one at boot (self-test, rollback)
 UPDATE_UNITS = ('thinksmart-update-run.service', 'thinksmart-update-boot.service')
+REPLY_SECOND_TAP = 3.0  # seconds: a second mic tap this soon after the first during a reply cuts it off
+LONG_REPLY_TAP = 15       # seconds: a reply playing longer than this (a story) is still cut off by a mic tap
+TOUCH_QUIET = 20          # 屏幕刚被点过这么多秒内：没说话也不提醒（不自我介绍、不报没听清）
+QUESTION_EXTRA = 10       # seconds added to the follow-up window when the reply ends with a question
 MAX_LISTEN = 60          # seconds: one wake never keeps the mic open longer (a TV could otherwise)
+# seconds to keep uploading after the hub's VAD said the user stopped. Its "vad end" is an estimate:
+# cutting the stream the moment it arrives drops the last syllables (the ASR then gets "你几岁， 你几岁"
+# for one question). The hub ignores what comes after its own end, so this costs nothing.
+VAD_TAIL = 1.0
 RECOGNITION_WAIT = 15    # seconds to wait for the hub's text after the user stops (long sentences)
-NORMAL_STOP_TAIL = 0.6   # a normal "tts stop" leaves less than this queued; more means aborted
+# seconds of speech before the follow-up window may close the mic at once (it used to wait 2.5 s after
+# every sound, so a one-word question took that much longer to reach the hub)
+QUICK_END = 1.2
+SHORT_END_WAIT = 1.6   # a short question: the hub's silence threshold is 900 ms now (one breath)
+# seconds of silence the hub needs to see the end of a longer sentence before it recognises
+LONG_END_WAIT = 0.9
+# Text questions (suggestion cards) closer together than this are one tap. The kiosk's touch screen
+# sometimes reports a tap 6-15 times in the same second (2026-11-14 09:16:26 / 12:31:54): each copy
+# aborted the turn before it, and a ghost tap on the neighbouring card replaced the real question.
+SAY_DEBOUNCE = 1.5
+# 2.5 → 0.8 (2026-11-20 日志实证): 首包 >2.5 s 走垫话的有 48%（91/190 轮），孩子等不到回应就重问；
+# 垫话已经有「回复一到就不放」的闸（_think_cue 里查 bot_msg / reply_packets），提前不会盖住快回复。
+# 用法：config think_cue_seconds: no reply this long after the question -> "嗯，我看看"
+THINK_CUE_AFTER = 0.8
+# 点歌后这么久之内的开播算「真点歌」；更早于这个窗口、又发生在本机说话时的开播是会话自恢复
+MUSIC_SONG_WINDOW = 60.0
+NORMAL_STOP_TAIL = 0.6  # a normal "tts stop" leaves less than this queued; more means aborted
 PUNCT = set('，。！？；：、,.!?;:…')
 REPORT_POLL = 10         # seconds between asking the hub for pending reports (local HTTP)
 HISTORY_LIMIT = 50       # messages per model shown from the hub's saved conversations
@@ -75,6 +99,19 @@ MODEL_RETRY = 3          # until the hub answers (it takes over a minute to star
 ALARM_VOLUME = 70        # the alarms' own volume until the user sets one
 TTS_TIMEOUT = 30         # seconds for the hub to synthesise a reminder's words
 PREVIEW_SECONDS = 8      # the settings' 试听 plays at most this much of a tone
+# [2026-11-15] 只唤醒不说话：主动自我介绍（owner「只唤醒，但没有指令」时要有引导）
+INTRO_FULL_EVERY = 6 * 3600     # 这么久没做过完整介绍，就讲完整版；否则只讲一句轮换的小提示
+INTRO_FULL = ('你好，我是小麦。你可以叫我放歌、看作业、做口算和听写，问天气，开关电视和灯，'
+              '也可以讲故事。粤语、普通话、英文都听得懂。现在想做什么？')
+INTRO_TIPS = ('我在。想听歌，可以说：放点轻音乐。',
+              '我在。拿作业到镜头前，说：看作业。',
+              '我在。想做算术题，可以说：出几道算术题。',
+              '我在。拿个东西到镜头前，问我：这是什么。',
+              '我在。看电视可以说：电视再看三十分钟就关。',
+              '我在。想听故事，说：讲个睡前故事。',
+              '我在。可以说：明天天气怎么样。')
+INTRO_CARD = ['放点轻音乐 / 放首周杰伦', '睇作业 / 看看作业', '出几道算术题 / 考考我除法', '帮我听写：太阳、朋友',
+              '这是什么（拿东西到镜头前）', '明天天气怎么样', '电视再看三十分钟就关', '讲个睡前故事']
 CLIP_GAP = 0.8           # seconds of silence after each spoken reminder in a ring
 BACKGROUND_DUCKED = 0.2  # a phone's music (Bluetooth speaker) under a conversation
 
@@ -102,6 +139,37 @@ def describe(option):
     logo, company = VENDORS.get(vendor, ('', option.get('label', '')))
     return {'kind': option['kind'], 'vendor': option['vendor'], 'label': option['label'],
             'entry': option['entry'], 'model': option.get('model', ''), 'logo': logo, 'company': company}
+
+
+def normalize_devices(data):
+    """The hub's /kiosk/devices answer, shaped for the page.
+
+    Each device: {entity_id, name, room, domain, kind, state, on, readonly, unit, value}.
+    `kind` decides the card's control: switch / light / media / sensor / other.
+    Power sockets and relays are readonly on purpose (owner 2026-11-05: never switch real mains
+    from an assistant), so the page shows their state and no button.
+    """
+    if not isinstance(data, dict):
+        return {'homes': [], 'devices': [], 'error': '返回格式不对'}
+    out = []
+    for d in data.get('devices') or []:
+        entity_id = d.get('entity_id') or ''
+        domain = entity_id.split('.')[0] if '.' in entity_id else ''
+        kind = d.get('kind') or domain
+        state = d.get('state')
+        out.append({
+            'entity_id': entity_id,
+            'name': d.get('name') or d.get('friendly_name') or entity_id,
+            'room': d.get('room') or '',
+            'domain': domain,
+            'kind': kind,
+            'state': state,
+            'on': state in ('on', 'playing', 'idle', 'paused', 'heat', 'cool', 'open'),
+            'readonly': bool(d.get('readonly')) or domain == 'sensor' or domain == 'binary_sensor',
+            'unit': d.get('unit') or '',
+            'value': d.get('value'),
+        })
+    return {'homes': data.get('homes') or [], 'devices': out, 'error': data.get('error')}
 
 
 def marimba(notes, gap=0.1, peak=0.2):
@@ -188,16 +256,21 @@ class Client:
         self.question = None          # the user's message of this turn, until its reply starts
         self.heard = False            # anything recognised since this wake (so a listening window that
                                       # times out after it is a follow-up: it ends quietly)
+        self.hold_open = False        # a tool call is running: don't let the idle timer close the mic
         self.mute_audio = False       # after an abort, drop the old reply's frames
         self.listen_after_reply = False   # the mic was closed for this reply: reopen it when played
+        self.hub_music = None             # what the hub streams (a voice request): {state, title, index, ...}
+        self.last_song_tool = 0.0         # monotonic: the hub last reported a song_request/play_music call
         self.reply_samples = 0        # reply audio received since "tts start" (to tell what was heard)
         self.reply_packets = 0
         self.muted_packets = 0
+        self.echo_until = 0.0          # 回答正常播完前（还在缓冲里）不把麦克风上传：会把自己的话送去识别
         self.recognised = 0           # count of "stt" messages
         self.threads = {}             # model entry -> messages (the hub's saved ones, then this connection's)
         self.history_loaded = False
         self.entry = None             # the model this connection talks to
         self.models = {'current': None, 'options': []}
+        self.devices = {'homes': [], 'devices': [], 'error': None}   # Home Assistant view (settings card)
         self.bot_msg = None
         self.decoder = None
         self._seq = 0
@@ -219,8 +292,18 @@ class Client:
             # the one-character "在" comes in as the second note rings, over its tail: played after
             # the whole chime it came ~0.4 s later
             self.sounds['wake'] = overlay(self.sounds['wake'], load_wav(sounds / 'zai.wav'), ZAI_AT)
+        # fillers for a slow reply (_think_cue), taken in turn so the same words don't repeat
+        self.think_cues = [load_wav(p) for p in sorted(sounds.glob('think-*.wav'))]
+        self.think_cue_n = 0
+        self.think_task = None
         self.speech_end = 0.0         # monotonic: last time the user was heard talking
+        self.turn_at = 0.0            # monotonic: when this turn's question was recognised
+        self.turn_asr = 0.0           # seconds from the end of talking to the recognition
+        self.turn_first = 0.0         # seconds from the recognition to the first reply audio
+        self.speech_start = 0.0       # monotonic: when the talking of this turn began (QUICK_END)
+        self.vad_tail_until = 0.0     # monotonic: keep uploading until then after the hub's "vad end"
         self.tools_listed = asyncio.Event()   # the hub asked for our device tools on this connection
+        self.last_say = 0.0           # monotonic: last text question accepted (see SAY_DEBOUNCE)
         self.connecting = asyncio.Lock()      # one connection: a second wake while connecting waits for it
         self.screen = Screen()
         try:
@@ -270,6 +353,7 @@ class Client:
         self._apply_sleep()
         asyncio.create_task(self._sender())
         asyncio.create_task(self._ticker())
+        asyncio.create_task(self._soundbar_watch())
         asyncio.create_task(self._model_poller())
         asyncio.create_task(self._report_poller())
         asyncio.create_task(self._alarm_loop())
@@ -283,6 +367,9 @@ class Client:
         # the CPU it would take is better left to the hub's speech recognition. wake_block: what the
         # wake word hears (during a reply, echo-cancelled without suppressing the voice; audio.py)
         # (after the hub's VAD said the user stopped, the wake word interrupts the recognition)
+        fam = getattr(self, 'family', None)   # 朗读检查在录音时，原样留一份（family.py）
+        if fam is not None and (fam.rec is not None or fam.lis is not None):   # 语音答题在听也要
+            fam.on_block(block)
         hit = None if self.uploading and not self.vad_ended else self.kws.feed(wake_block)
         backlog = self.backlog
         if hit:
@@ -297,8 +384,15 @@ class Client:
         elif backlog is not None and not self.uploading:
             backlog.append(block)
             del backlog[:-200]   # 4 s, what the send queue takes at once
-        elif self.uploading:
+        elif self.uploading or self.stream_tail():
             self.backlog = None
+            # the backlog may hold the 4 s that accumulated while the wake word was checked: encoding
+            # all of it here would stall the mic worker. Only the newest 1.5 s goes first; the rest
+            # is spread over the next blocks (what came before is still sent, in order)
+            keep = int(1.5 * 16000 / len(block)) or 1
+            if backlog and len(backlog) > keep:
+                self.backlog = backlog[:-keep]
+                backlog = backlog[-keep:]
             for b in (backlog or []) + [block]:
                 packet = self.encoder.encode(np.clip(b * 32768, -32768, 32767).astype(np.int16))
                 self.loop.call_soon_threadsafe(self._queue_packet, packet)
@@ -307,10 +401,17 @@ class Client:
         if not self._send_q.full():
             self._send_q.put_nowait(packet)
 
+    def stream_tail(self):
+        """Uploading is off (the page says "thinking") but the tail of what was said is still going
+        out: the hub's "vad end" / the PTT release is an estimate, VAD_TAIL covers the last syllables."""
+        return not self.uploading and time.monotonic() < self.vad_tail_until
+
     async def _sender(self):
         while True:
             packet = await self._send_q.get()
-            if self.uploading:
+            # 回答还在喇叭里播（tts stop 后缓冲没放完）：麦克风收到的是自己的声音，不送。
+            # 2026-11-20 09:30「湿度偏高…今天会下小雨」、09:49 都是 stop 时还有 4 s+ 在缓冲、麦克风却一直在传
+            if (self.uploading or self.stream_tail()) and time.monotonic() >= getattr(self, 'echo_until', 0.0):
                 await self.hub.send_audio(packet)
 
     # ---- state ----
@@ -356,12 +457,63 @@ class Client:
                 'hub': self.hub_seen > 0 and time.monotonic() - self.hub_seen < 30}
 
     def snapshot(self):
-        return {'status': self.status(), 'models': self.models, 'alarms': self.alarm_view(), 'bluetooth': self.bt.view(),
+        # hub: 网关是否答过（health 的同一判据）。页面用它区分「后台没连上」和「后台在、这次还没开始对话」
+        status = dict(self.status(), hub=self.health()['hub'])
+        return {'status': status, 'models': self.models, 'alarms': self.alarm_view(), 'bluetooth': self.bt.view(),
+                'devices': self.devices,
                 'thread': {'entry': self.view_entry(), 'messages': self.threads.get(self.view_entry(), [])}}
 
     def view_entry(self):
         cur = self.models.get('current')
         return self.entry or (cur['entry'] if cur else None)
+
+    def _stop_intro(self):
+        t = getattr(self, 'intro_task', None)
+        if t and not t.done():
+            t.cancel()
+            self.audio.player.trim(0)
+        self.intro_task = None
+
+    async def _introduce(self):
+        """唤醒了却没说话：讲一段介绍（隔 6 小时一次完整版，其余一句轮换提示），屏幕出示例卡片，
+        讲完再听一轮（再不说话就安静回到待机，不会循环）。夜间模式只出卡片不出声（也防电视声误唤醒）。
+        声音走客户端自己的播放器（有回声消除参考），不走页面，不然再听那一轮会把自己的话听进去。"""
+        now = time.time()
+        full = now - getattr(self, 'intro_full_at', 0) > INTRO_FULL_EVERY
+        self.events.publish('card', {'title': '可以这样叫我', 'kind': 'list', 'items': INTRO_CARD, 'language': 'zh'})
+        if self.sleeping:
+            log.info('woken with nothing said (night): card only')
+            return
+        if full:
+            text, self.intro_full_at = INTRO_FULL, now
+        else:
+            self.intro_tip = (getattr(self, 'intro_tip', -1) + 1) % len(INTRO_TIPS)
+            text = INTRO_TIPS[self.intro_tip]
+        log.info('woken with nothing said: %s intro', 'full' if full else 'short')
+        cache = self.__dict__.setdefault('intro_clips', {})
+        if text not in cache:
+            wav = await self._speech(text)
+            if not wav:
+                return
+            cache[text] = wav
+        parts = self._clip_sound(cache[text])
+        if not parts:
+            return
+        sound = np.concatenate(parts)
+        self.set_state('speaking')
+        self.audio.player.push(sound)
+        try:
+            await asyncio.sleep(len(sound) / OUT_RATE)
+        finally:
+            # 不能用 in_turn()：它把 speaking 本身也算成「对话进行中」，介绍完会一直卡在 speaking（2026-11-16 实测）。
+            # 介绍期间有人唤醒会先 cancel 这里（_stop_intro），状态由 wake 接管
+            if self.state == 'speaking' and not self.uploading:
+                self.set_state('idle')
+        # 再听一轮：直接说指令就行，不用再叫名字
+        if self.state == 'idle' and await self.ensure_connected() and await self.start_listening('realtime'):
+            self.heard = False
+            self.after_intro = True
+            self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
 
     def play(self, name):
         sound = self.sounds.get(name)
@@ -423,12 +575,21 @@ class Client:
         self.play('wake')
         self.events.publish('woke', {'source': source})
 
+    def _tap_interrupts(self):
+        """说话时点麦克风还是照旧打断的两种情况：本机在放歌（不然要等整张歌单放完），或者已经说了很久（讲故事）。"""
+        hm = getattr(self, 'hub_music', None)
+        if hm and hm.get('state') == 'start' and hm.get('out') != 'soundbar':
+            return True
+        return self.state == 'speaking' and self.reply_samples / OUT_RATE > LONG_REPLY_TAP
+
     def in_turn(self):
         """The hub is recognising, thinking or speaking: the wake word interrupts it."""
         return (self.state in ('thinking', 'speaking') or self.vad_ended) and self.hub.connected
 
     async def wake(self, source='button', chimed=False):
         self.screen.poke()
+        self._stop_intro()
+        self.events.publish('card', {'close': True})
         if self.ring:
             await self.stop_alarm()   # the wake word stops a ring (no snooze: "再睡 10 分钟" is said next)
         if self.preview:
@@ -436,31 +597,142 @@ class Client:
         if self.mic_off_toast():
             return
         if self.in_turn():
+            now = time.monotonic()
+            second_tap = now - getattr(self, 'reply_tap_at', 0.0) < REPLY_SECOND_TAP
+            if source == 'button' and not self._tap_interrupts() and not second_tap:
+                # 孩子以为要先按麦克风才能回答，一按就把小麦问到一半的话掐掉（2026-11-16 20:26:40「你是想说……还是……」
+                # 播了 2.2 s 被按断；20:26:28「给我」刚识别完就被按掉）。说话时点麦克风改成「说完马上听」，要打断用「打断」键
+                self.reply_tap_at = now
+                self.listen_after_reply = True
+                log.info('mic tapped during a reply (%s): listen right after it instead of cutting it off', self.state)
+                self.events.publish('toast', {'kind': 'info', 'text': '说完这句马上听你说；再点一下立刻打断'})
+                return
+            if source == 'button' and second_tap:
+                # 2026-11-20：38 次「说话时点麦」里一秒连点 3–4 下的很多（16:20:59、16:21:27 孩子在 17 s 的长回答上连点），
+                # 第一下只换来一条 toast，看起来就是「按了没反应」。3 s 内第二下 = 真想打断：立刻掐掉开始听。
+                log.info('mic tapped twice during a reply (%s): cutting it off', self.state)
+            self.reply_tap_at = 0.0
             await self.abort('wake_word_detected')
         if not chimed:
             self.chime(source)
         if not await self.ensure_connected():
             return
-        await self.start_listening('realtime')
+        if not await self.start_listening('realtime'):
+            return
         self.heard = False
+        self.wake_fresh = True        # 这次唤醒后还一个字都没听到：超时就自我介绍（stop_uploading）
+        self.quiet_miss = False
         self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
 
+    async def listen_answer(self, seconds=12):
+        """学习面板读完一题就开麦等孩子说答案（2026-11-19）：不响唤醒音、不自我介绍、没说话也不报「没听清」。
+        hub 的 studyFastPath 认出答案后转回页面判题，不走大模型。正在对话/放闹钟/麦克风关着时什么都不做。"""
+        if self.ring or self.in_turn() or self.uploading or not self.keys.mic_on:
+            return False
+        if not await self.ensure_connected():
+            return False
+        if not await self.start_listening('realtime'):
+            return False
+        self.heard = False
+        self.wake_fresh = False
+        self.quiet_miss = True
+        self.deadline = time.monotonic() + max(4, min(30, float(seconds)))
+        return True
+
+    def study_answered(self):
+        """hub 的 studyFastPath 把孩子的口头答案转给了学习面板（/api/ui study_answer），这一轮 hub 不会再回话：
+        别停在「思考中」、别放「想一想」提示音、也别报「没收到回答」。stt 和这条消息谁先到不一定，收两次尾。"""
+        async def settle():
+            for _ in range(3):
+                if getattr(self, 'think_task', None):
+                    self.think_task.cancel()
+                    self.think_task = None
+                if self.question is not None or self.state == 'thinking':
+                    self.question = None
+                    self.listen_after_reply = False
+                    self.hold_open = False
+                    self.deadline = None
+                    if not self.uploading:
+                        self.set_state('idle')
+                await asyncio.sleep(0.35)
+        asyncio.create_task(settle())
+
+    async def listen_quiet_stop(self):
+        """页面要念题/念讲解了：先把还开着的等答案麦克风收掉，免得把喇叭里的讲解当成孩子的回答。"""
+        if self.uploading and self.state == 'listening' and not self.vad_ended and self.listen_mode == 'realtime':
+            self.quiet_miss = True
+            await self.hub.send({'type': 'listen', 'state': 'stop'})
+            await self.stop_uploading(missed=False)
+            return True
+        return False
+
     async def start_listening(self, mode):
-        await self.hub.send({'type': 'listen', 'state': 'start', 'mode': mode})
+        # 通道刚断（hub 侧超时/重启）：发送会静默失败，本地却以为在听，麦克风一直上传、
+        # 页面停在「我在听」直到 MAX_LISTEN。先确认通道，必要时重连一次再发。
+        if not self.hub.connected:
+            if not await self.ensure_connected():
+                return False
+        sent = await self.hub.send({'type': 'listen', 'state': 'start', 'mode': mode})
+        if not sent:
+            log.info('listen start not sent (channel closed): reconnecting once')
+            if not await self.ensure_connected():
+                return False
+            sent = await self.hub.send({'type': 'listen', 'state': 'start', 'mode': mode})
+            if not sent:
+                log.warning('listen start still not sent: back to idle')
+                self.set_state('idle')
+                return False
         self.uploading = True
+        self.echo_until = 0.0          # 开始新的一次听（唤醒 / 播完后再开）：不再挡
         self.listen_mode = mode
         self.vad_ended = False
+        self.vad_tail_until = 0.0
         self.listen_since = time.monotonic()
+        self.speech_start = self.speech_end = 0.0
+        self.hub_heard_speech = False
         self.awaiting_text = False
         self.hub_pending = False
         if self.aborted_at is not None:
             log.info('listening again %.0f ms after the abort', (self.listen_since - self.aborted_at) * 1000)
             self.aborted_at = None
         self.set_state('listening')
+        return True
+
+    async def _ptt_stop_upload(self):
+        """The end of a push-to-talk turn: the stream stops VAD_TAIL later, so the last syllables
+        reach the hub. Uploading is switched off first, so the page says "thinking" meanwhile;
+        stream_tail() keeps the packets going out until then."""
+        self.vad_tail_until = time.monotonic() + VAD_TAIL
+        await asyncio.sleep(VAD_TAIL)
+        if self.hub.connected and not self.uploading:
+            await self.hub.send({'type': 'listen', 'state': 'stop'})
 
     async def stop_uploading(self, missed=False):
+        fresh, self.wake_fresh = getattr(self, 'wake_fresh', False), False
+        after_intro, self.after_intro = getattr(self, 'after_intro', False), False
+        if getattr(self, 'quiet_miss', False):
+            self.quiet_miss = False
+            missed = False                               # 学习面板等答案：没说也不报「没听清」
+            fresh = False
+        if time.time() - getattr(self, 'touch_at', 0) < TOUCH_QUIET:
+            # owner 2026-11-19「小朋友在点，就不要后台小麦提醒没说话了」：刚点过屏幕，不自我介绍、不响「没听清」
+            missed = False
+            fresh = False
+        # 唤醒后没说话：hub 的 VAD 一句都没断出来（家里有电视/走动声，本机音量门会误判成有人说话，
+        # 2026-11-16 实测第二次唤醒就因此没介绍）；hub 不发 VAD 事件时退回本机音量判断
+        if self.hub.features.get('vad_end'):
+            silent = not getattr(self, 'hub_heard_speech', False)
+        else:
+            silent = self.speech_end <= self.listen_since
+        if missed and after_intro and silent:
+            missed = False                               # 介绍完还是没人说：安静回待机，不报「没听清」
         self.uploading = False
         self.deadline = None
+        self.vad_tail_until = 0.0
+        if missed and fresh and silent:
+            self.set_state('idle')
+            self.intro_task = asyncio.create_task(self._introduce())
+            return
         if missed:
             self.play('miss')
             self.events.publish('toast', {'kind': 'info', 'text': '没听清，可以再说一次「小麦小麦」'})
@@ -475,12 +747,14 @@ class Client:
         if reason:
             msg['reason'] = reason
         self.audio.player.trim(0)
+        self.echo_until = 0.0          # 打断了：没东西在播，马上能听
         self.mute_audio = True
         self.listen_after_reply = False
         if phase == 'recognising':
             # what was just said is dropped (the hub drops it too): stop sending the rest of it
             self.uploading = False
         self.vad_ended = self.recognising = self.awaiting_text = self.hub_pending = False
+        self.vad_tail_until = 0.0
         self.aborted_at = self.abort_pending = now
         log.info('abort while %s (%s)', phase, reason or 'button')
         await self.hub.send(msg)
@@ -510,6 +784,12 @@ class Client:
         text = (text or '').strip()
         if not text:
             return
+        now = time.monotonic()
+        last = getattr(self, 'last_say', 0.0)
+        if last and now - last < SAY_DEBOUNCE:
+            log.info('text question %.2f s after the last one, taken as the same tap: %s', now - last, text)
+            return
+        self.last_say = now
         if self.in_turn():
             await self.abort()
         if not await self.ensure_connected():
@@ -523,6 +803,9 @@ class Client:
         if not self.hub.connected:
             return   # ended (or dropped) while we waited: nothing will answer, stay idle
         await self.hub.send({'type': 'listen', 'state': 'detect', 'text': text})
+        # 点卡片/打字问的也和语音一样：答完开跟进窗口，接着说就行，不用再喊唤醒词
+        # （2026-11-16 实测：点「讲个冷笑话」答完直接回待机，owner「讲一二句就断掉」）
+        self.listen_after_reply = bool(self.keys.mic_on)
         self.set_state('thinking')
 
     async def ptt_start(self):
@@ -538,15 +821,18 @@ class Client:
             # as a tap (listen with the hub's VAD)
             await self.wake('button')
             return
-        await self.start_listening('manual')
+        if not await self.start_listening('manual'):
+            return
         self.heard = False
         self.deadline = None
 
     async def ptt_stop(self):
         self.ptt_held = False
         if self.uploading:
-            await self.hub.send({'type': 'listen', 'state': 'stop'})
-            self.uploading = False
+            # hold the stream open for VAD_TAIL: "listen stop" is an estimate too, and the last
+            # syllables are what got lost (the hub takes what arrived before the stop)
+            self.uploading = False       # the page says "thinking"; the packets still go out (VAD_TAIL)
+            asyncio.create_task(self._ptt_stop_upload())
             self.awaiting_text = True   # the hub's "nothing recognised" ends it at once
             self.set_state('thinking')
             self.deadline = time.monotonic() + 8   # back to idle if nothing comes back
@@ -580,8 +866,18 @@ class Client:
             if text.startswith('% '):
                 # not speech: the hub's note that the model calls a tool (for the screens of ESP32 boards)
                 log.info('the model calls %s', text[2:])
+                if text[2:].split('(')[0].strip() in ('song_request', 'play_music'):
+                    # 点歌是「允许放歌」的唯一凭据（_on_music 用它区分真点歌和会话自恢复）
+                    self.last_song_tool = time.monotonic()
+                if self.uploading and self.state in ('listening', 'thinking'):
+                    # the tool runs before the model's first sentence. Holding the mic open keeps the
+                    # hub from closing the connection as idle while a slow tool runs, and anything the
+                    # user says meanwhile still reaches it (the hub ignores it once the reply starts).
+                    self.hold_open = True
             elif text:
-                if self.speech_end > self.listen_since:
+                # 2026-11-20：点卡片/打字的问题不经过听，speech_end 还是上一次说话的时间，算出 367 / 564 / 1424 s 这种假延迟
+                # （全天 12 次 >10 s 全是这种）。超过 30 s 的不算识别延迟。
+                if self.speech_end > self.listen_since and time.monotonic() - self.speech_end < 30:
                     log.info('recognised %.1f s after the user stopped talking: %s',
                              time.monotonic() - self.speech_end, text)
                 else:
@@ -594,10 +890,15 @@ class Client:
                 self.heard = True
                 self.awaiting_text = False
                 self.recognising = self.vad_ended = False
+                self.vad_tail_until = 0.0
                 self.hub_pending = False
                 self.deadline = None
                 self.recognised += 1
                 self.reply_samples = 0    # an abort before this turn's audio has heard nothing of it
+                # 每轮一行打点（阶段 0：先把「端到端多慢」变成可查的数字，不改任何行为）
+                self.turn_at = time.monotonic()
+                self.turn_first = 0.0
+                self.turn_asr = (self.turn_at - self.speech_end) if 0.0 < self.speech_end <= self.turn_at else 0.0
                 if late:
                     self.listen_after_reply = True
                 if self.uploading:
@@ -607,15 +908,21 @@ class Client:
                 # on the page right away: asking the hub for its models first took 0.7-2 s
                 m = self.question = self.add_message('user', text)
                 self.set_state('thinking')
+                self.hold_open = False
                 asyncio.create_task(self._refresh_after_question(m))
+                self._arm_think_cue(m)
         elif kind == 'vad':
             # VAD events, a feature asked for in our hello. end: the hub decided the user finished and
             # is recognising; empty: it recognised nothing (a cough, too short, only echo)
             state = msg.get('state')
             if state == 'end':
                 self.hub_pending = True
+                self.hub_heard_speech = True   # 这次听的过程中 hub 断出过一句话（自我介绍据此判断「没说话」）
                 if self.uploading and not self.recognising:
                     self.recognising = self.vad_ended = True
+                    # the hub's estimate of where the sentence ended: keep streaming a moment longer
+                    # so its last syllables arrive (it ignores audio after its own end)
+                    self.vad_tail_until = time.monotonic() + VAD_TAIL
                     self.set_state(self.state)
             elif state == 'empty':
                 self.hub_pending = self.vad_ended = False
@@ -642,13 +949,24 @@ class Client:
                 levels = self.audio.take_echo_levels()
                 if levels:
                     log.info('echo while it played: mic %s dBFS, cancelled %s, for the wake word %s', *levels)
+                # 一行汇总（阶段 0）：asr 延时 / 首包 / 播放时长 / 断流次数 / 是否被打断
+                log.info('turn: asr=%.1f s, first audio=%.1f s, play=%.2f s, dry=%d, interrupted=%s, said=%d chars',
+                         getattr(self, 'turn_asr', 0.0), getattr(self, 'turn_first', 0.0),
+                         self.reply_samples / OUT_RATE, len(player.ran_out),
+                         bool(msg.get('interrupted')), len((self.bot_msg or {}).get('text') or ''))
             if state == 'start':
                 # The hub says "start" as soon as it has the question; the model is still
                 # thinking until the first sentence arrives
+                if getattr(self, 'finished_tail', False) and self.audio.player.buffered() > 0.02:
+                    # 上一条正常收尾但还没播完的尾巴：新回答开始就清掉，不能压在新答案上。
+                    # 垫话（think-*.wav，在思考时推的）不走这条路，不会被切掉。
+                    self.audio.player.trim(0)
+                self.finished_tail = False
                 self.mute_audio = False
                 self.decoder = None
                 self.bot_msg = None
                 self.reply_samples = self.reply_packets = self.muted_packets = 0
+                self.hold_open = False
                 self.audio.player.ran_out.clear()
                 self.audio.player.late.clear()
                 self.deadline = None
@@ -679,9 +997,11 @@ class Client:
                         self.bot_msg['text'] = prev + ('' if prev[-1:] in PUNCT else '，') + text
                         self.publish_message(self.bot_msg)
             elif state == 'stop':
-                # the hub cut the reply off (a newer question); an older hub doesn't say so, but then
-                # more than the usual tail is still queued
-                if msg.get('interrupted', self.audio.player.buffered() > NORMAL_STOP_TAIL):
+                # 只有 hub 明确说「被打断」才裁掉还没播完的部分（abortHandle 会带 interrupted: True）。
+                # 以前兜底判据是「缓冲 > 0.6 s」：流式下 hub 把文本送完就发 stop，往往还有几秒没播
+                # （2026-11-20 全天 139 次 reply stop 里 128 次 >0.6 s），于是正常收尾被当成打断、
+                # trim(0) 把剩下的音频直接丢——孩子听到的就是「话说一半就停了」。
+                if msg.get('interrupted'):
                     self.audio.player.trim(0)
                     if self.bot_msg:
                         self.bot_msg['interrupted'] = True
@@ -692,12 +1012,19 @@ class Client:
                     log.warning('the turn ended without a reply')
                     self.events.publish('toast', {'kind': 'error', 'text': '网络还没连上，稍后再试' if not has_default_route()
                                                   else '没收到回答，可能是网络或模型服务连不上，稍后再试'})
+                tail = self.audio.player.buffered()
+                if tail > 0.02:            # 正常结束但还没播完（被打断的上面已 trim 成 0）
+                    self.echo_until = time.monotonic() + tail + 0.3
+                self.finished_tail = tail > 0.02 and not msg.get('interrupted')
+                self.last_reply = (self.bot_msg or {}).get('text') or ''
                 self.bot_msg = self.question = None
+                self.hold_open = False
                 if self.listen_after_reply:
                     asyncio.create_task(self._listen_after_reply())
                 elif self.uploading:
                     self.heard = True
-                    self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
+                    # 追问窗口从真正播完算起（播的时候不收音）
+                    self.deadline = time.monotonic() + tail + self.cfg['follow_up_seconds']
                     self.set_state('listening')
                 else:
                     self.set_state('idle')
@@ -715,6 +1042,75 @@ class Client:
             self.events.publish('thread', {'entry': self.view_entry(), 'messages': [], 'reset': True})
         elif kind == 'server':
             log.info('server message: %s', msg)
+        elif kind == 'music':
+            self._on_music(msg)
+
+    def _on_music(self, msg):
+        """The hub streams a voice-requested song or playlist: which track (start), cut off (paused, it
+        remembers where), or over (stop/idle). The page's player shows it; the speaker plays one thing at
+        a time, so the page's own player stops when the hub starts one."""
+        state = msg.get('state')
+        if state in ('start', 'paused'):
+            self.hub_music = {k: msg.get(k) for k in ('state', 'title', 'artist', 'album', 'index', 'total',
+                                                      'desc', 'elapsed', 'mode', 'out')}
+            self.hub_music['origin'] = msg.get('source') or 'nas'      # nas / youtube
+            self.hub_music['since'] = time.time() - (msg.get('elapsed') or 0)
+            if state == 'start':
+                log.info('the hub plays %s/%s: %s', msg.get('index'), msg.get('total'), msg.get('title'))
+                if music_api.local_status().get('playing') or music_api.local_status().get('paused'):
+                    music_api.local_stop()
+                # 没有点歌却在本机说话时开播 = hub 把上一条歌单接着放/从第 1 首重放。
+                # 2026-11-20 日志：40 次开播里 21 次查不到任何 song_request，全部落在 state: speaking 上
+                # （16:19–16:26 数学问答期间「1/20: 06」反复重放），孩子每次得喊两遍小麦才能停。
+                # 这里只暂停不销毁会话：真在听歌时问一句，暂停后说「继续放」就能接上。
+                if (self.state == 'speaking'
+                        and time.monotonic() - getattr(self, 'last_song_tool', 0.0) > MUSIC_SONG_WINDOW):
+                    log.info('the hub started %r without a song request: pausing it', msg.get('title'))
+                    self.events.publish('music', self.music_status())
+                    asyncio.create_task(self.music_control('pause'))
+                    return
+        else:
+            self.hub_music = None
+            if state == 'idle' and self.state == 'connecting':
+                self.set_state('idle')     # reconnected to resume, but there was nothing left to play
+        self.events.publish('music', self.music_status())
+
+    def music_status(self):
+        """What the speaker plays: the hub's stream (a voice request) or the page's own player."""
+        hm = getattr(self, 'hub_music', None)
+        output = getattr(self, 'music_output', 'local')
+        # 音箱上放的不靠这条连接（hub 2 分钟没人说话就关连接，音箱照放）：断了也照样显示
+        if hm and (self.hub.connected or hm.get('out') == 'soundbar'):
+            playing = hm.get('state') == 'start'
+            return {'source': 'voice', 'playing': playing, 'paused': not playing, 'out': hm.get('out') or 'local',
+                    'output': output,
+                    'title': hm.get('title'), 'artist': hm.get('artist') or '', 'album': hm.get('album') or '',
+                    'index': hm.get('index'), 'total': hm.get('total'), 'desc': hm.get('desc') or '',
+                    'origin': hm.get('origin') or 'nas',
+                    'elapsed': round(time.time() - hm['since']) if playing else (hm.get('elapsed') or 0),
+                    'path': None, 'volume': None}
+        return dict(music_api.local_status(), out='local', output=output)
+
+    async def music_control(self, action):
+        """The page's buttons on the hub's stream: next / prev / pause / resume / stop."""
+        hm = getattr(self, 'hub_music', None)
+        if hm and hm.get('out') == 'soundbar':
+            # 音箱上放的：hub 的 HTTP 接口直接控制，不用这条连接
+            try:
+                r = await self._hub_http('/kiosk/music/out/control',
+                                         {'device_id': self.cfg.get('device_id'), 'action': action})
+            except Exception as e:
+                log.warning('soundbar control %s failed: %s', action, e)
+                return False
+            asyncio.create_task(self._soundbar_refresh())
+            return bool((r or {}).get('ok'))
+        if not self.hub.connected:
+            # the conversation ended (the hub's idle timeout after a pause): the hub keeps the playlist
+            # per device, so "resume" reconnects; the rest has nothing to act on
+            if action != 'resume' or not await self.ensure_connected():
+                self.hub_music = None
+                return False
+        return await self.hub.send({'type': 'music', 'action': action})
 
     async def _refresh_after_question(self, m):
         """The hub may have switched models for this question (called one by name, or changed in its
@@ -731,12 +1127,42 @@ class Client:
         self.threads.setdefault(self.entry, []).extend(moved)
         self.events.publish('thread', {'entry': self.entry, 'messages': self.threads[self.entry]})
 
+    def _arm_think_cue(self, m):
+        """Question `m` was recognised: if no reply has started THINK_CUE_AFTER later, fill the
+        silence. Tool turns (a song, the TV, Home Assistant) run the model twice and stay silent
+        6-12 s; the relay used to fill that, the direct model endpoint doesn't."""
+        after = self.cfg.get('think_cue_seconds', THINK_CUE_AFTER)
+        if not after or not getattr(self, 'think_cues', None):
+            return
+        if self.think_task:
+            self.think_task.cancel()
+        self.think_task = asyncio.create_task(self._think_cue(m, after))
+
+    async def _think_cue(self, m, after):
+        await asyncio.sleep(after)
+        # still this question, nothing of the reply yet, nothing else playing, not interrupted
+        if (self.question is not m or self.bot_msg is not None or self.state != 'thinking'
+                or self.mute_audio or self.abort_pending is not None or self.reply_packets
+                or self.audio.player.buffered() > 0.05 or not self.hub.connected):
+            return
+        cue = self.think_cues[self.think_cue_n % len(self.think_cues)]
+        self.think_cue_n += 1
+        log.info('no reply %.1f s after the question: a short filler', after)
+        # queued ahead of the reply, which simply follows it; an abort trims it with the rest
+        self.audio.player.push(cue)
+
     async def _listen_after_reply(self):
         """Reopen the mic for a follow-up once the last of the reply has been played (uploading
         earlier would send the hub its tail)."""
-        give_up = time.monotonic() + 3
+        # 等到真正播完再开麦（2026-11-20 09:30：reply stop 时还有 4.3 s 在缓冲，原来最多只等 3 s，
+        # 开麦后把自己念的「湿度偏高…今天会下小雨」又当成问题送给 hub）。封顶防缓冲卡死；
+        # 播完再留 0.3 s 让房间里的尾音散掉
+        playing = self.audio.player.buffered() > 0.02
+        give_up = time.monotonic() + min(30.0, self.audio.player.buffered() + 2.0)
         while self.audio.player.buffered() > 0.02 and time.monotonic() < give_up:
             await asyncio.sleep(0.05)
+        if playing:                    # 打断后缓冲已清空、没在播：不用等尾音，立刻开麦
+            await asyncio.sleep(0.3)
         if not self.listen_after_reply or not self.hub.connected:
             return   # woken, aborted or ended meanwhile: that already decided what comes next
         self.listen_after_reply = False
@@ -752,7 +1178,13 @@ class Client:
             self.set_state('thinking')
             return
         self.heard = True
-        self.deadline = time.monotonic() + self.cfg['follow_up_seconds']
+        wait = self.cfg['follow_up_seconds']
+        if (getattr(self, 'last_reply', '') or '').rstrip()[-1:] in ('?', '？'):
+            # 小麦问了问题（「你想做哪一个？」）：多等一会儿，孩子要想（20:26:50 问完 15 s 关麦，2 s 后又喊唤醒词）
+            wait += QUESTION_EXTRA
+        # 开麦最多等 3 s，长回答还有十几秒没播完（实测 reply stop 时 14.9 s 在缓冲里）：窗口从真正说完算起，
+        # 不然孩子能回答的时间被还在播的部分吃掉
+        self.deadline = time.monotonic() + self.audio.player.buffered() + wait
 
     def _on_audio(self, packet):
         if self.mute_audio:
@@ -763,6 +1195,8 @@ class Client:
             self.decoder = Decoder(OUT_RATE, 1)
         try:
             mono = self.decoder.decode(packet)
+            if self.reply_packets == 0 and getattr(self, 'turn_at', 0.0):
+                self.turn_first = time.monotonic() - self.turn_at
             self.reply_samples += len(mono)
             self.reply_packets += 1
             self.audio.player.push(np.repeat(mono[:, None], 2, axis=1))
@@ -771,6 +1205,9 @@ class Client:
 
     async def _on_closed(self):
         # the conversation is over (the hub's idle timeout, an exit word, the end button)
+        if getattr(self, 'hub_music', None):
+            self.hub_music = None
+            self.events.publish('music', self.music_status())
         self.play('bye')
         self.uploading = False
         self.vad_ended = False
@@ -995,9 +1432,17 @@ class Client:
 
     async def set_volume(self, volume, source='page'):
         """The device volume (page, voice, keys). While a ring or a preview has the speaker, it is what
-        comes back afterwards."""
+        comes back afterwards.
+
+        幂等：已经是这个音量就不再走 wpctl（面板每次滑杆松手都会发，重复设置不该反复改 sink），
+        也不重复广播。返回当前音量。
+        """
+        want = max(0, min(100, int(volume)))
         async with self.volume_lock:
-            volume = await self._apply_volume(volume)
+            unchanged = (self.held_volume is None and self.volume == want)
+            if unchanged:
+                return self.volume
+            volume = await self._apply_volume(want)
         self.events.publish('volume', {'volume': volume, 'source': source})
         return volume
 
@@ -1393,13 +1838,78 @@ class Client:
 
     # ---- models (the hub's local-only /kiosk/llm endpoints) ----
 
-    async def _hub_http(self, path, body=None):
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+    async def _soundbar_refresh(self):
+        """音箱外放（hub soundbar_out）：出声位置和音箱上在放的。连接断了也靠它更新屏幕。"""
+        try:
+            r = await self._hub_http('/kiosk/music/out?device_id=' + urllib.parse.quote(self.cfg.get('device_id') or ''))
+        except Exception:
+            return
+        if not isinstance(r, dict) or not r.get('ok'):
+            return
+        changed = r.get('target') != getattr(self, 'music_output', 'local')
+        self.music_output = r.get('target') or 'local'
+        m = r.get('music')
+        hm = getattr(self, 'hub_music', None)
+        if m:
+            new = {k: m.get(k) for k in ('state', 'title', 'artist', 'album', 'index', 'total', 'desc', 'elapsed',
+                                         'mode', 'out')}
+            new['origin'] = m.get('source') or 'nas'
+            new['since'] = time.time() - (m.get('elapsed') or 0)
+            if not hm or any(hm.get(k) != new.get(k) for k in ('state', 'title', 'index', 'out')):
+                changed = True
+            self.hub_music = new
+        elif hm and hm.get('out') == 'soundbar':
+            self.hub_music = None
+            changed = True
+        if changed:
+            self.events.publish('music', self.music_status())
+
+    async def _soundbar_watch(self):
+        while True:
+            await asyncio.sleep(4)
+            await self._soundbar_refresh()
+
+    async def _hub_http(self, path, body=None, total=15):
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=total)) as s:
             if body is None:
                 async with s.get(self.cfg['hub_http'] + path) as r:
-                    return await r.json(content_type=None)
-            async with s.post(self.cfg['hub_http'] + path, json=body) as r:
-                return await r.json(content_type=None)
+                    data = await r.json(content_type=None)
+            else:
+                async with s.post(self.cfg['hub_http'] + path, json=body) as r:
+                    data = await r.json(content_type=None)
+        # 能答就是活着：health() 的 'hub' 用它，原来只有汇报轮询算，别处都通了也报 hub 断
+        self.hub_seen = time.monotonic()
+        return data
+
+    # ---- home assistant devices (the hub's local-only /kiosk/devices endpoints) ----
+
+    async def refresh_devices(self):
+        """Ask the hub for the HA devices; False when it didn't answer."""
+        try:
+            data = await self._hub_http('/kiosk/devices?' + urllib.parse.urlencode({'device': self.cfg['device_id']}))
+        except Exception:
+            data = {'error': 'hub 没有响应'}
+        devices = normalize_devices(data)
+        if devices != self.devices:
+            self.devices = devices
+            self.events.publish('devices', devices)
+        return not devices.get('error')
+
+    async def set_device(self, entity_id, action, value=None):
+        """Turn a device on/off (or set volume). Never touches power sockets: the hub refuses those."""
+        body = {'device': self.cfg['device_id'], 'entity_id': entity_id, 'action': action}
+        if value is not None:
+            body['value'] = value
+        try:
+            result = await self._hub_http('/kiosk/devices/set', body)
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+        if result.get('devices'):
+            devices = normalize_devices(result)
+            if devices != self.devices:
+                self.devices = devices
+                self.events.publish('devices', devices)
+        return result
 
     async def refresh_models(self):
         """Ask the hub for its models; False when it didn't answer (down, or still starting)."""
@@ -1447,6 +1957,7 @@ class Client:
             up = await self.refresh_models()
             if up and not self.history_loaded:
                 await self.load_history()   # at start, or once the hub is up
+            await self.refresh_devices()    # the HA card: devices changed outside, or the hub just came up
             await asyncio.sleep(MODEL_POLL if up else MODEL_RETRY)
 
     # ---- timers ----
@@ -1463,18 +1974,35 @@ class Client:
                 log.error('audio is dead (%s): exiting to be restarted', stalled)
                 os._exit(1)
             if self.uploading and self.audio.mic_level > SPEECH_RMS:
+                if not self.speech_end or self.speech_end < self.listen_since:
+                    self.speech_start = now   # first sound of this turn
                 self.speech_end = now
                 if self.recognising:   # talking again: the hub listens on
                     self.recognising = False
                     self.set_state(self.state)
-                if self.deadline:   # still talking
-                    self.deadline = min(max(self.deadline, now + 2.5), self.listen_since + MAX_LISTEN)
+                if self.deadline:
+                    # still talking: a long sentence may go past the follow-up window, but the whole
+                    # wake never keeps the mic open past MAX_LISTEN. The clamp used to shrink the
+                    # window to listen_since + MAX_LISTEN (already in the past by then), so a long
+                    # sentence was cut off mid-way as soon as it crossed 60 s.
+                    # The wait after sound is the time the hub needs to see the end of a sentence
+                    # (its VAD) before it recognises. A short "几点" used to wait the full 2.5 s;
+                    # the hub's silence threshold is 0.5 s now, so 1.0 s is enough for it, and the
+                    # tail (VAD_TAIL) keeps the last syllables going anyway.
+                    wait = SHORT_END_WAIT if now - self.speech_start < QUICK_END else LONG_END_WAIT
+                    if self.listen_since + MAX_LISTEN > now:
+                        self.deadline = min(max(self.deadline, now + wait), self.listen_since + MAX_LISTEN)
             if self.uploading and self.listen_mode == 'manual' and now > self.listen_since + MAX_LISTEN:
                 # push-to-talk held (or a release lost) for too long: the hub buffers all of it
                 log.info('push-to-talk open for %d s: stopping it', MAX_LISTEN)
                 await self.ptt_stop()
             if self.deadline and now > self.deadline:
-                if self.state == 'listening' and self.uploading:
+                if self.hold_open and self.heard and self.state in ('listening', 'thinking') and self.uploading:
+                    # the model called a tool (a pause on the TV, the volume) and is waiting for it: no
+                    # reply yet, so the follow-up window would close the mic mid-turn. Keep it open;
+                    # "tts start" or the hub's idle close ends it as usual.
+                    self.deadline = now + SHORT_END_WAIT
+                elif self.state == 'listening' and self.uploading:
                     # a hub that sends VAD events has answered everything it heard unless one is pending.
                     # In a follow-up window (heard) only that counts: an older hub would make any noise
                     # after a reply wait 15 s

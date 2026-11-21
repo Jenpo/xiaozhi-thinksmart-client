@@ -21,7 +21,14 @@
       <span class="pill-text"><b id="pillLabel">选择模型</b><small id="pillModel"></small></span>
       <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
     </button>
+      <div class="clock" id="clock"><span id="time">--:--</span></div>
     <div class="right">
+      <button class="music-pill" id="musicPill" aria-label="音乐">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>
+        <span class="mp-text"><b id="musicTitle">放点音乐</b><small id="musicSub">随机播放</small></span>
+        <span class="mp-eq" id="musicEq" aria-hidden="true"><i></i><i></i><i></i></span>
+      </button>
       <button class="report-pill" id="reportPill" aria-label="收听待汇报">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
         <span id="reportText">有一条待汇报</span>
@@ -42,7 +49,6 @@
         <span>睡眠中</span>
       </div>
       <div class="link" id="link"><i></i><span>待机</span></div>
-      <div class="clock" id="clock"><span id="time">--:--</span></div>
       <button class="gear" id="btnSettings" aria-label="设置"><i class="gear-dot" id="gearDot"></i>
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
@@ -52,6 +58,7 @@
 
   <main class="main">
     <section class="stage">
+      <div class="status-banner" id="statusBanner" role="status" aria-live="polite"></div>
       <div class="orb" id="orb">
         <!-- static pre-rendered glows, one per state; only opacity changes (cross-fade) -->
         <div class="glows" aria-hidden="true">
@@ -91,12 +98,14 @@
         <div class="greet" id="greet">你好</div>
         <div class="big-time" id="bigTime">--:--</div>
         <div class="big-date" id="bigDate"></div>
+        <div class="home-weather" id="homeWeather" hidden></div>
         <div class="next-alarms" id="nextAlarms"></div>
         <div class="missed-home" id="missedBox">
           <div class="mh-head"><b>错过的闹钟和提醒</b><button class="mh-ok" id="missedClear">知道了</button></div>
           <div class="mh-list" id="missedList"></div>
         </div>
         <div class="try">试试这样问我</div>
+        <div class="scene-tabs" id="sceneTabs" role="tablist" aria-label="场景"></div>
         <div class="chips" id="chips"></div>
       </div>
 
@@ -110,6 +119,141 @@
       </div>
     </section>
   </main>
+</div>
+
+<div class="sheet" id="musicSheet">
+  <div class="sheet-bar">
+    <div><h2>音乐</h2><p>选一个出声的地方，随机播 NAS 曲库，或直接说「小麦小麦，放点音乐」</p></div>
+    <button class="close" id="musicClose" aria-label="关闭">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="panel">
+    <div class="music-targets" id="musicTargets">
+      <button class="music-target" data-target="local" id="mtLocal">
+        <i class="dot"></i>
+        <div><b>SmartView 本机</b><span id="mtLocalState">扬声器</span></div>
+      </button>
+      <button class="music-target" data-target="tv" id="mtTv">
+        <i class="dot"></i>
+        <div><b>SONY 电视</b><span id="mtTvState">客厅</span></div>
+      </button>
+      <button class="music-target" data-target="soundbar" id="mtSoundbar">
+        <i class="dot"></i>
+        <div><b>SONY 音响</b><span id="mtSoundbarState">HT-Z9F 外放</span></div>
+      </button>
+    </div>
+    <div class="music-player">
+      <div class="music-now-playing">
+        <b id="musicNowTitle">现在没在放</b>
+        <span id="musicNowSub">点「随机播放」开始</span>
+      </div>
+      <div class="music-progress"><i id="musicBar"></i></div>
+      <div class="music-controls">
+        <button class="pri" id="musicShuffle">随机播放</button>
+        <button id="musicPrev" aria-label="上一首">上一首</button>
+        <button id="musicPauseLocal">暂停</button>
+        <button id="musicNext" aria-label="下一首">下一首</button>
+        <button id="musicStopLocal">停止</button>
+      </div>
+      <div class="music-volume">
+        <span>音量</span>
+        <input type="range" id="musicVolume" min="0" max="100" value="55">
+        <b id="musicVolumeText">55</b>
+      </div>
+    </div>
+    <div class="music-search">
+      <input type="search" id="musicQuery" placeholder="搜歌名 / 歌手 / 专辑" autocomplete="off" enterkeyhint="search">
+      <button id="musicSearchBtn">搜索</button>
+    </div>
+    <div class="music-filters" id="musicFilters">
+      <button class="mq-chip" data-filter="random">随机</button>
+      <button class="mq-chip" data-filter="classical">古典</button>
+      <button class="mq-chip" data-filter="pop">流行</button>
+      <button class="mq-chip" data-filter="ost">原声</button>
+      <button class="mq-chip" data-filter="euro">欧美</button>
+      <button class="mq-chip" data-filter="beyond">BEYOND</button>
+      <button class="mq-chip" data-filter="light">轻音乐</button>
+      <button class="mq-chip" data-filter="test">试音</button>
+    </div>
+    <div class="music-queue" id="musicQueue"></div>
+    <div class="music-kids" id="musicKids">
+      <span>少儿 · 电视上放</span>
+      <button class="kid-btn" data-channel="alphablocks">Alphablocks<small>字母积木</small></button>
+      <button class="kid-btn" data-channel="numberblocks">Numberblocks<small>数字积木</small></button>
+    </div>
+    <p class="opt-note">本机：面板点的歌走 NAS 直读，放完自动接下一首；语音点的歌由网关推流，上面的按钮同样能切歌、暂停。电视走 Chromecast + YouTube。音响：客厅 HT-Z9F 直接外放（不用开电视），能切歌、暂停、调音量；选中后语音点的歌也从音响出声，说「换回本机」切回来。</p>
+  </div>
+</div>
+
+<div class="fam-bar" id="famBar" hidden></div>
+
+<div class="card-box" id="cardBox">
+  <div class="card-in">
+    <div class="card-head"><h3 id="cardTitle"></h3><button class="close" id="cardClose" aria-label="关闭">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <ol class="card-items" id="cardItems"></ol>
+  </div>
+</div>
+
+<div class="sheet st" id="stSheet">
+  <div class="sheet-bar">
+    <div><h2>学习 · 家庭</h2>
+      <div class="st-tabs"><button class="st-tab on" data-mode="flash">口算</button><button class="st-tab" data-mode="dictation">听写</button>
+        <button class="st-tab" data-mode="identify">这是什么</button><button class="st-tab" data-mode="read">朗读</button>
+        <button class="st-tab" data-mode="timo">TIMO 奥数</button>
+        <button class="st-tab" data-mode="routine">清单</button></div></div>
+    <div class="st-bar-r"><div class="hw-langs"><button class="st-lang hw-lang on" data-lang="yue">粤语</button>
+      <button class="st-lang hw-lang" data-lang="en">English</button><button class="st-lang hw-lang" data-lang="zh">普通话</button></div>
+    <button class="close" id="stClose" aria-label="关闭">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button></div>
+  </div>
+  <div class="st-body" id="stBody"></div>
+</div>
+
+<div class="sheet hw" id="hwSheet">
+  <div class="sheet-bar">
+    <div><h2>看作业</h2><p>把作业放到摄像头前面，我帮你看哪几题要再想一想</p></div>
+    <button class="close" id="hwClose" aria-label="关闭">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="hw-body">
+    <div class="hw-left">
+      <div class="hw-photo" id="hwPhoto">
+        <img id="hwImg" alt="作业照片" hidden>
+        <img id="hwLive" class="hw-live" alt="实时画面" hidden>
+        <div class="hw-livetag" id="hwLiveTag" hidden><i></i>实时画面</div>
+        <div class="hw-empty" id="hwEmpty">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 0-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2"/><rect x="3.5" y="9" width="17" height="6" rx="3"/><circle cx="12" cy="12" r="2.2"/></svg>
+          <span>还没拍</span>
+        </div>
+        <div class="hw-busy" id="hwBusy" hidden><i></i><span id="hwBusyText">在拍照…</span></div>
+        <div class="hw-boxes" id="hwBoxes"></div>
+      </div>
+      <div class="hw-actions">
+        <button class="pri" id="hwShoot">拍作业</button>
+        <button id="hwAgain">再拍一张</button>
+        <div class="hw-langs" id="hwLangs">
+          <button class="hw-lang on" data-lang="yue">粤语</button>
+          <button class="hw-lang" data-lang="en">English</button>
+          <button class="hw-lang" data-lang="zh">普通话</button>
+        </div>
+      </div>
+    </div>
+    <div class="hw-right">
+      <div class="hw-head" id="hwHead"></div>
+      <div class="hw-items" id="hwItems">
+        <div class="hw-tip">拍一张作业纸的照片，我会逐题告诉你哪里要再看一次，先给提示、不直接报答案。</div>
+      </div>
+      <div class="hw-foot">
+        <button id="hwBook">错题本</button>
+        <button id="hwSpeak" hidden>听一次</button>
+        <button id="hwStop" hidden>停</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="sheet" id="sheet">
@@ -169,6 +313,12 @@
       <p class="opt-note">设备音量是平时说话的音量，和音量键、语音调的是同一个。闹钟音量只管倒计时、闹钟和提醒：响铃时自动切过去，响完改回来；响铃时按音量键只调这一次。</p>
     </div>
     <div class="alarms-card">
+      <div class="bright-head"><b>智能家居</b><span class="bright-num" id="deviceCount"></span></div>
+      <p class="alarm-warn" id="deviceWarn" hidden></p>
+      <div class="device-list" id="deviceList"></div>
+      <p class="opt-note">插座和电源类设备只显示状态，不能在这里开关（安全限制）。也可以直接说：「小麦小麦，把客厅音响打开」「声音小一点」</p>
+    </div>
+    <div class="alarms-card">
       <div class="bright-head"><b>闹钟和提醒</b><span class="bright-num" id="alarmCount"></span></div>
       <p class="alarm-warn" id="alarmWarn">设备时间还没和网络同步，闹钟暂停，同步后自动恢复</p>
       <div class="alarm-list" id="alarmList"></div>
@@ -198,10 +348,10 @@
       <div class="time"><small>开始</small>
         <div class="stepper"><button data-k="start" data-d="-30" aria-label="提前半小时">−</button><b id="sleepStart">22:00</b><button data-k="start" data-d="30" aria-label="推后半小时">+</button></div></div>
       <div class="time"><small>结束</small>
-        <div class="stepper"><button data-k="end" data-d="-30" aria-label="提前半小时">−</button><b id="sleepEnd">07:00</b><button data-k="end" data-d="30" aria-label="推后半小时">+</button></div></div>
+        <div class="stepper"><button data-k="end" data-d="-30" aria-label="提前半小时">−</button><b id="sleepEnd">09:00</b><button data-k="end" data-d="30" aria-label="推后半小时">+</button></div></div>
     </div>
     <p class="opt-note" id="sleepNote"></p>
-    <p class="opt-note">也可以直接说：「小麦小麦，晚上十点到早上七点别念了」「关掉睡眠模式」</p>
+    <p class="opt-note">也可以直接说：「小麦小麦，晚上十点到早上九点别出声」「关掉睡眠模式」</p>
     <div class="opt">
       <div class="opt-text">
         <b>聊天记录</b>
@@ -299,6 +449,7 @@
   <div class="hud-num" id="hudNum">0</div>
 </div>
 
+<script src="/static/v2/timo_bank.js"></script>
 <script src="/static/v2/app.js"></script>
 </body>
 </html>

@@ -9,7 +9,7 @@
 | 位置 | 作用 |
 | --- | --- |
 | `thinksmart_client/app.py` | 状态机：唤醒 → 聆听 → 回复 → 10 秒追问窗口 → 待机；打断（回复期间麦克风不上传，只有唤醒词或按钮能打断，打断时告诉网关播了多少毫秒；网关识别中、思考中也能打断，那句话作废，网关确认打断之前收到的旧一轮文字和回复都不要）、按住说话、文字提问、按模型分开的对话记录 |
-| `tests/` | 单元测试（不需要设备的声卡和库），运行方法见文件开头 |
+| `tests/` | 单元测试（不需要设备的声卡和库），运行方法见文件开头；`tests/device_regression.py` 是设备端幂等回归（离屏 WebKit 驱动真页面 + 接口 + 网关，~40 s、75 项、静音、测后复原），从 Air/Mac 用 `thinksmart/tools/run_device_regression.sh` 跑，改完先跑它 |
 | `thinksmart_client/audio.py` | 麦克风 16 kHz、扬声器 48 kHz，都走 PipeWire；回声消除只在对话中或刚播过声音时运行 |
 | `thinksmart_client/aec.py` | WebRTC APM 回声消除（改自 py-xiaozhi 的 AecEngine） |
 | `thinksmart_client/kws.py` | sherpa-onnx 唤醒词，单线程、40 ms 一批、安静时跳过（声音停后再解码 1 秒）、模型前加 10 dB 增益 |
@@ -23,14 +23,26 @@
 | `thinksmart_client/bt.py`、`bt_helper.py` | 蓝牙音箱：手机配对后把歌放到设备上。`bt_helper.py` 用系统自带的 python3（dbus、GLib）管 BlueZ：配对代理（免密码，只在设置页点了「添加手机」后的 3 分钟内接受，配过的手机设为信任、以后点一下就重连）、开关、忘记手机、闹钟响时让手机暂停；`bt.py` 在手机推流时用 `pw-record` 录它的音源，混进 `audio.Background`（和回复相加后送喇叭，回声消除知道它，放歌时照样能唤醒）；对话时压到 20%、闹钟响或试听铃声时静音。需要系统层的 `bluetooth/` 配置（手机的声音变成音源而不是直接送喇叭）；没有时手机照样能放，但声音绕过客户端，放歌时很难唤醒，设置页会提示 |
 | `thinksmart_client/opus.py` | 系统 libopus 的 ctypes 封装 |
 | `thinksmart_client/web.py` | 页面、事件流（SSE）、按钮接口 |
+<<<<<<< HEAD
 | `web/` | 界面（设置页里的 WiFi 由展示屏外壳执行：页面通过 WebKit 的 `thinksmart` 消息通道请外壳扫描、连接、忘记网络，和系统镜像欢迎页同一套代码；输入框用外壳注入的系统键盘；外壳太旧时卡片只提示）：正式版是 `v2/`（带表情的光球，首页 `/` 和 `/v2`），第一版 `index.html`、`app.css`、`app.js` 留在 `/v1`；`test/` 是 GPU 排查用的测试页；另有提示音、厂商图标 |
+=======
+| `thinksmart_client/zh_t2s.py` | 搜索用的繁体→简体对照（曲库里出现的 377 个字，和网关 plugins_func/functions/zh_t2s.py 同一份） |
+| `thinksmart_client/music_api.py` | 面板播放器（本机喇叭）：读网关生成的 NAS 曲库索引（18368 首）、搜索/随机、ffplay 播放；有队列（放完自动接下一首，`web.py` 每秒 `tick()`）、真暂停（SIGSTOP/SIGCONT）。2026-11-16 起 ffplay 固定音量 100，本机只有一个音量（面板滑杆 = 设备喇叭音量） |
+| `thinksmart_client/homework.py` | 看作业 / 这是什么 / 抄课文的拍照：内置摄像头（gst libcamerasrc），等曝光稳定再取（1.5–5 s）、超 600 KB 先压、同一时刻只拍一张、镜头盖检测；实时画面 MJPEG（读写限时，看的人走了即放手摄像头）；分析转给网关 `/kiosk/hw/*` |
+| `thinksmart_client/family.py` | 家庭与学习：看电视限时（差 5 分钟提醒、到点关电视）、家庭留言、早晚作息清单（按天清零）、睡前调暗、朗读录音（麦克风旁路，切 ≤9 s 交网关识别）、hub 推屏幕（card/study/say）；状态存 `~/.local/share/thinksmart-client/family.json` |
+| `web/` | 界面：正式版是 `v2/`（带表情的光球，首页 `/` 和 `/v2`），第一版 `index.html`、`app.css`、`app.js` 留在 `/v1`；`test/` 是 GPU 排查用的测试页；另有提示音、厂商图标 |
+>>>>>>> ccb7b08
 | `models/kws-zh/` | 唤醒词模型 |
 | `deploy/thinksmart-client.service` | 系统服务 |
 | `deploy/bootstrap-updater` | 服务启动前以 root 运行：20261101 镜像的设备上更新服务只认客户端，发布包里带了新的（`deploy/updater/`，发布时由系统镜像仓库的 `make-release.py --system` 放进去），比设备上的新就换上；已经是新的就什么都不做 |
 
 ## 接口（只监听本机）
 
+<<<<<<< HEAD
 - `GET /events`：事件流，`snapshot`、`state`、`message`、`thread`、`model`、`level`、`toast`、`volume`（`source`：`key`/`voice`/`page`；`ring` 为 true 是响铃时音量键调的这一次铃声）、`alarms`（列表、错过的、是否对过时、正在响的、闹钟音量和铃声）、`bluetooth`（见 `/api/bluetooth`）
+=======
+- `GET /events`：事件流，`snapshot`、`state`、`message`、`thread`、`model`、`level`、`toast`、`music`（见下面「音乐」）、`volume`（`source`：`key`/`voice`/`page`；`ring` 为 true 是响铃时音量键调的这一次铃声）、`alarms`（列表、错过的、是否对过时、正在响的、闹钟音量和铃声）
+>>>>>>> ccb7b08
 - `POST /api/wake`、`/api/end`、`/api/abort`、`/api/ptt/start`、`/api/ptt/stop`
 - `POST /api/text {"text": "..."}`：文字提问（服务端按识别出的话处理）
 - `POST /api/model {"kind": "...", "vendor": "..."}`：切换模型（转给服务端的 `/kiosk/llm/use`）
@@ -41,6 +53,25 @@
 - `POST /api/alarms/delete {"id": n}`、`/api/alarms/stop`、`/api/alarms/snooze`（正在响或 15 分钟内响过的那条 10 分钟后再响）、`/api/alarms/missed/clear`
 - `POST /api/bluetooth`：`{"enabled": bool}` 蓝牙音箱开关（存用户配置 `bluetooth`，关掉就让蓝牙断电），`{"window": bool}` 打开或关掉 3 分钟的「添加手机」，`{"remove": "地址"}` 忘记一台手机，`{"disconnect": "地址"}` 断开。状态在事件 `bluetooth`（快照里也有）：`available`、`enabled`、`powered`、`window`（剩余秒数）、`name`（手机上看到的名字）、`direct`（手机的声音绕过了客户端：系统层太旧）、`devices`（`address`、`name`、`paired`、`connected`、`streaming`、`title`、`artist`）
 - `POST /api/power-off`：关机（`systemctl halt`，插着电也不会自己重新开机，屏幕变黑后等 10 秒再拔电源；正在更新时不执行）。页面先收到 `power {"state": "off"}` 显示「正在关机」
+- 音乐（本机喇叭同一时刻只放一样：语音点的歌由网关推流，面板点的歌由本机 ffplay 放；一边开始另一边就停）
+  - `GET /api/music/status[?target=tv]`：本机喇叭在放什么，`source` 为 `voice`（语音点的，带 `index`/`total`/`desc`）或 `local`（面板播放器）；`playing`、`paused`、`title`、`artist`、`elapsed`（已放秒数，曲库没有时长）
+  - `POST /api/music/control {"action": "next|prev|pause|resume|stop"}`：语音点的歌转给网关（`{"type": "music", "action": ...}`），面板的歌在本机处理；暂停后连接已断时 `resume` 会重新连上网关
+  - `POST /api/music/play {"target": "local|tv", "title": "...", "queue": [...], "index": n, "volume": 0-100}`：`queue` 是面板当前列表（路径须在 NAS 曲库里），放完一首接下一首；`tv` 交给网关的 `/kiosk/music/play`
+  - `POST /api/music/stop {"target": ...}`、`POST /api/music/volume {"target", "volume"}`（本机：就是设备音量，不重开 ffplay）、`GET /api/music/tracks?q=`、`GET /api/music/random?count=`、`GET /api/music/target_volume?target=`（本机返回设备喇叭真实音量，以前写死 55）
+  - 事件流 `music`：同 `/api/music/status`，网关每开始/打断/放完一首都会推一次
+  - `GET /api/music/random?count=&genre=classical|pop|ost|euro|mainland|light|beyond|test`：按曲库目录筛（不抽整张 CD 镜像）；`GET /api/music/tracks?q=` 多个词（空格隔开）同时命中、繁简不计较、歌名完全一样的排前面、同一首只留一个版本
+  - `GET /api/music/ytm?q=`：网关的 YouTube Music 搜索（面板在曲库结果后面接这一栏）；列表里 `path` 为 `ytm:<videoId>` 的曲目，面板播放器向网关要流地址再放；状态里 `origin` 为 `nas` / `youtube`
+  - `POST /api/music/kids {"channel": "alphablocks|numberblocks"}`：电视上放少儿频道（网关挑最近没看过的一集，自动接下一集）
+  - 网关发来的 `{"type": "music", "state": "start|paused|stop|idle", "title", "artist", "index", "total", "desc", "elapsed"}` 由 `app.py` 收下
+- 看作业 / 学习（`homework.py`）
+  - `POST /api/hw/capture {"language": "yue|en|zh", "countdown": 0-5, "source": "page|voice", "mode": "homework|identify|ocr", "expected": [...]}`：倒数→拍→交网关；`expected` 是听写词表；同时只拍一张（409 busy）、镜头盖关（409 lens_closed）；各阶段推事件 `homework {phase, mode, source}`
+  - `GET /api/hw/live`：实时画面（multipart MJPEG，640x480 约 10 帧/秒，最长 120 s）；页面开流要经 `liveStart/liveStop` 闸门（停后 ≥900 ms 再开，快速停开会让 WebKit 网页进程崩）
+  - `GET /api/hw/latest`、`/api/hw/photo`、`/api/hw/diag`（设备节点、镜头盖、是否在拍）、`/api/hw/book`（错题本 + 7 天小结）、`POST /api/hw/record`（闪卡错题进错题本）、`POST /api/hw/clear`（结果和照片一起删）、`GET /api/hw/tts?lang=&text=`（按语言选声音的朗读 mp3）
+- 家庭（`family.py`）
+  - `GET /api/family`；`POST /api/tv-timer {"minutes", "language"}` / `{"cancel": true}`；`POST /api/notes/add {"text", "language", "from"}`、`/api/notes/done {"id"}`；
+    `POST /api/routine/set {"list": "morning|evening", "items": [...]}`、`/api/routine/tick {"list", "index", "done"}`；`POST /api/bedtime {"minutes"}`；`POST /api/rec/start`、`/api/rec/stop → {"text", "seconds"}`
+  - `POST /api/ui {"event": "card|study|say", "data": {...}}`：给网关插件（family_tools）推屏幕；事件流另有 `family`、`say`、`card`、`study`
+- 只唤醒不说话（hub VAD 一句都没断出）：自我介绍（6 小时一次完整版、其余一句轮换提示）+ 示例卡片，再听一轮；夜间只出卡片。语音经网关 `POST /kiosk/tts`（16 kHz WAV）合成、走本机播放器
 - `POST /api/history/clear {}` 或 `{"memory_only": true}`：清除聊天记录（转给服务端的 `/kiosk/chat/clear`，只清服务端本机存的所有模型的记录和总结记忆，Claude Code、Grok Bot 自己的会话不动；`memory_only` 只清记忆）。聊天页的记录来自服务端存的 `GET /kiosk/chat/history`（每个模型最近 50 条），没连着时载入，断开、重启后还在；说「清除聊天记录」确认后服务端发 `{"type": "chat_history", "state": "cleared"}`，页面清空
 
 ## 第三方

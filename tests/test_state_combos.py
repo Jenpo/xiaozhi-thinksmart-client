@@ -47,6 +47,7 @@ async def test_ptt_released_before_connected_listens_like_a_tap():
 async def test_ptt_held_too_long_is_stopped(monkeypatch):
     from thinksmart_client import app as app_mod
     monkeypatch.setattr(app_mod, 'MAX_LISTEN', 0.2)
+    monkeypatch.setattr(app_mod, 'VAD_TAIL', 0.05)   # the stop goes out this much after the release
     c = make_client()
     await c.ptt_start()
     assert c.uploading and c.listen_mode == 'manual' and c.deadline is None

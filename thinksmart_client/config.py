@@ -37,15 +37,24 @@ DEFAULTS = {
     # whether the wake word is really there, '' trusts the wake word model. Off for now: the hub
     # takes 2-2.5 s here, which delays the answer to "小麦小麦今天天气怎么样" said in one go by ~4 s
     'wake_verify': '',
-    'follow_up_seconds': 10,   # after a reply: keep listening this long for a follow-up
+    # after a reply: keep listening this long for a follow-up. 10 → 15 (2026-11-16): kids pause
+    # longer than that before answering, then had to say the wake word again (20:13:47 closed, woke 2 s later)
+    'follow_up_seconds': 15,
+    # no reply audio this long after the question was recognised: say a short local "嗯，我看看"
+    # (web/sounds/think-*.wav, the hub's Edge TTS voice) so the wait isn't silent. Tool turns
+    # (music, TV, HA) take 6-12 s; plain answers usually start in 2-3.5 s. 0: off
+    # 2.5 → 0.8 (2026-11-20): 首包 >2.5 s 的有 48%（91/190 轮），孩子开口后约 4.3 s 才听到第一声，
+    # 期间就开始重问。垫话在回复到达时会自行放弃（_think_cue），所以提前只影响「本来就要等」的轮次。
+    'think_cue_seconds': 0.8,
     'port': 8090,
-    'sleep': {'enabled': False, 'start': '22:00', 'end': '07:00'},   # sleep.py
+    'sleep': {'enabled': True, 'start': '22:30', 'end': '09:00'},   # sleep.py（2026-11-16 owner：22:30-09:00 静音）
     'brightness': 100,    # the screen's 0-100, set on the page or by voice (no automatic brightness: the user asked)
     # blank this long after the last touch or conversation (device.SCREEN_OFF_MINUTES); off: never
     'screen_off': {'enabled': True, 'minutes': 5},
     'alarm_volume': 70,   # countdowns, alarms and reminders ring at this, whatever the device volume (alarms.py)
     'alarm_tone': 'coffee',   # alarms.TONES
     'bluetooth': True,    # the Bluetooth speaker switch (bt.py): off powers the adapter down
+    'weather_city': '',       # home screen weather (weather.py); set per device in config.json, '' hides the line
 }
 
 
